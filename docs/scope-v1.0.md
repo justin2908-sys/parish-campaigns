@@ -189,3 +189,28 @@ API access is sorted — it does not gate the rest of the build.
 - [x] SumUp timeline: **proceed with Cash/Card-manual now**; automated SumUp
       checkout is a later drop-in once the API access issue is resolved
       (Section 4.4)
+
+---
+
+## 8. New idea raised during prototype review — needs a decision
+
+**Digital tickets, no physical stock.** Raised by Justin against the prototype's
+Sell screen: some campaigns may have no printed ticket book at all — a fully
+digital ticket, shared straight from the seller's phone via its native share
+sheet (Messages/WhatsApp/Mail/etc., whichever the seller picks — there is no
+way to auto-target one specific channel or contact) instead of handed over as
+paper.
+
+This is not just a UI addition. Today's model assumes every campaign has a
+pre-printed, numbered physical ticket block — that assumption underpins
+Non-negotiable #1 (near-zero typing against a known range) and Non-negotiable
+#8 (displayed data must match physical reality). A fully digital campaign
+wouldn't need a pre-printed number range at all; the ticket number could be
+generated at the moment of sale instead. Physical and digital ticketing could
+plausibly coexist per-campaign, but that's a data-model fork, not a button
+added to the existing Sell screen.
+
+*Decision needed from Justin: is digital-only ticketing in scope for this
+build, and if so, does it replace physical ticketing per-campaign or sit
+alongside it? Until decided, the prototype and data model continue to assume
+physical, pre-numbered stock.*
