@@ -77,9 +77,9 @@ for genuine slip-of-the-thumb corrections — with the existing Void-with-reason
 flow remaining the audit-trail mechanism for anything after that window closes
 or for a sale that's already been acted on (e.g. cash already reconciled).
 
-*Decision needed from Justin: confirm this approach, or propose an
-alternative (e.g. a same-session-only "Edit method" action instead of a timed
-Undo).*
+**Decided (2026-09-12): confirmed as proposed.** Timed Undo for the first few
+seconds after logging a sale; Void-with-reason remains the mechanism once that
+window closes or the sale has been touched by reconciliation.
 
 ---
 
@@ -96,6 +96,9 @@ more painful than designing for it now.
   Organization. SuperAdmins are scoped to their Organization, not global,
   from day one — even with only one Organization actually in use.
 
+**Decided (2026-09-12): build the Organization layer now**, before any second
+parish exists, per the reasoning above.
+
 ### 4.2 Generalized Campaign
 
 Replaces the BBQ-specific model. A Campaign now defines:
@@ -109,6 +112,14 @@ Replaces the BBQ-specific model. A Campaign now defines:
 - The word **"Ticket"** stays as the universal term throughout the UI,
   regardless of what's actually being sold (confirmed — no per-campaign
   relabeling of the unit itself)
+
+**Decided (2026-09-12) on tier generality**: the core principle is a ticket may
+carry **variables that affect price** (e.g. Adult vs Child), not a fixed set of
+named categories. So a tier is really "a named variant with its own price" —
+already what section 4.2 describes — and that's confirmed general enough to
+cover BBQ, Christmas dinner, raffle, and future campaigns without further
+special-casing. No structural change needed; this confirms the existing tier
+design rather than extending it.
 
 ### 4.3 Tickets, Payments, Users
 
@@ -127,6 +138,11 @@ Once the API key/scope issue is resolved:
   Adult/Child.
 - Manual logging (Cash, Card-on-reader/link) remains fully supported
   alongside it, permanently (see Learning #4).
+
+**Decided (2026-09-12): build proceeds now on manual-only** (Cash, Card-manual)
+without waiting for the SumUp API auth/scope issue to be resolved. Automated
+SumUp checkout creation (this section) is wired in later as a drop-in once
+API access is sorted — it does not gate the rest of the build.
 
 ---
 
@@ -160,13 +176,16 @@ Once the API key/scope issue is resolved:
 
 ---
 
-## 7. Open questions for Justin
+## 7. Open questions for Justin — resolved 2026-09-12
 
-- [ ] Confirm the Undo-vs-Edit approach for the cash/card mis-tap fix (Section 3)
-- [ ] Confirm Organization layer is wanted now even with one parish, given the
-      future multi-parish intent (Section 4.1)
-- [ ] Any other unit types beyond BBQ/Christmas dinner/raffle worth designing
-      for now, to make sure the tier model is genuinely general-purpose?
-- [ ] Timeline: is SumUp API access expected to be resolved before this build
-      starts, or should the build proceed assuming Cash/Card-manual are the
-      only working paths until further notice?
+- [x] Cash/card mis-tap fix: **timed Undo**, Void-with-reason remains the
+      fallback after the window closes or reconciliation has touched the sale
+      (Section 3)
+- [x] Organization layer: **build it now**, before a second parish exists
+      (Section 4.1)
+- [x] Other unit types: tier model is confirmed general enough as designed —
+      a tier is a named price variable (e.g. Adult/Child), not a fixed
+      category list (Section 4.2)
+- [x] SumUp timeline: **proceed with Cash/Card-manual now**; automated SumUp
+      checkout is a later drop-in once the API access issue is resolved
+      (Section 4.4)
