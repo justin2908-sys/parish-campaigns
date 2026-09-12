@@ -192,7 +192,7 @@ API access is sorted — it does not gate the rest of the build.
 
 ---
 
-## 8. New idea raised during prototype review — needs a decision
+## 8. Physical, digital, or hybrid ticketing — resolved 2026-09-13
 
 **Digital tickets, no physical stock.** Raised by Justin against the prototype's
 Sell screen: some campaigns may have no printed ticket book at all — a fully
@@ -210,7 +210,24 @@ generated at the moment of sale instead. Physical and digital ticketing could
 plausibly coexist per-campaign, but that's a data-model fork, not a button
 added to the existing Sell screen.
 
-*Decision needed from Justin: is digital-only ticketing in scope for this
-build, and if so, does it replace physical ticketing per-campaign or sit
-alongside it? Until decided, the prototype and data model continue to assume
-physical, pre-numbered stock.*
+**Decided (2026-09-13): it's a per-campaign choice, made at the ticket-block
+level, and hybrid is explicitly supported.** A campaign's existing "one or
+more ticket blocks" (§4.2) now each carry a type, Physical or Digital:
+
+- A **physical** block behaves exactly as today — a pre-declared numbered
+  range, near-zero-typing entry, live "doesn't exist" / "already sold"
+  checks.
+- A **digital** block has no pre-declared range — its ticket numbers are
+  assigned automatically at the moment of sale, so there's nothing to type
+  and nothing to check. A digital sale gets a **Share** action that hands off
+  to the seller's own phone's native share sheet (Messages/WhatsApp/Mail/etc.)
+  — there is no way to auto-target one specific channel or contact; the
+  seller picks who to send it to, the same way sharing a photo works.
+- A campaign can have **only physical blocks, only a digital block, or
+  both** (a genuine hybrid — e.g. a printed ticket book alongside an online
+  sales channel for the same campaign).
+
+This reframes Non-negotiable #8 (displayed data must match physical reality)
+for the digital case: the ticket identifier shown to the seller and the one
+sent to the buyer must always match exactly — there's no "physical" to check
+against, so that consistency is the digital equivalent of the same rule.
