@@ -1,0 +1,172 @@
+# Parish Campaigns Platform — Scope Document
+**v1.0** — living document, source of truth for the generalized rebuild
+
+---
+
+## 1. Objective
+
+Generalize the BBQ ticketing system (live, tested, working at St. Vincent De Paul
+Church, Osterley) into a single reusable platform that can run **any** unit-based
+campaign — BBQ tickets, Christmas dinner places, raffle entries, or anything
+else sold in discrete units with a name and a price — while carrying forward
+every UX and reconciliation lesson learned building the BBQ version, not
+rebuilding from scratch.
+
+Built going forward in **Claude Code**, on a proper GitHub repo, so the project
+is never again dependent on a single chat session's memory or an uploaded zip.
+
+---
+
+## 2. Non-negotiable: what we already learned, and must not lose
+
+These are hard-won, tested in a live event, not theoretical. The rebuild must
+preserve every one of these, not "improve" them away:
+
+1. **Near-zero typing for sellers.** Enter counts + one starting number; the
+   rest of the ticket numbers fill in automatically, editable if the physical
+   batch isn't consecutive.
+2. **A unit handed over is handed over.** Once a card sale is initiated, it
+   never silently auto-releases (no timeout-based release). Only a deliberate
+   Admin action (Void) frees it back up. This matches physical reality — the
+   buyer already has the ticket in hand.
+3. **Cash needs a deliberate reconciliation step**, not just a running total —
+   oldest-first lump-sum matching against what a seller actually hands over,
+   correctly distinguishing a genuine shortfall (money doesn't even cover the
+   oldest pending sale) from a genuine surplus (everything's matched, there's
+   extra) — these are NOT the same thing and must never be conflated in the UI.
+4. **SumUp's API will fail sometimes** (auth/scope issues are real and have
+   already happened). The manual "log it yourself" path (cash-register-style:
+   payment taken elsewhere, seller logs ticket + buyer name in the app) is a
+   **first-class, permanent path**, not a temporary fallback — even once SumUp
+   API integration works.
+5. **A single reusable/dynamic SumUp Payment Link QR works fine** and needs no
+   per-sale API call — shown to the buyer, they pay, seller logs it the same
+   way as a reader payment.
+6. **Optional, non-blocking photo evidence** for manually-logged payments —
+   never required, never blocks the next sale.
+7. **Specific, accurate error messages.** "This ticket doesn't exist in this
+   campaign" and "this ticket is already sold" are different problems and must
+   never share one misleading message.
+8. **Displayed data must match physical reality** — no invented letter
+   prefixes or labels that don't appear on what the buyer is actually holding.
+9. **Role must never hide a real transactor.** Anyone who can sell (Seller,
+   Admin, SuperAdmin) must appear in every reconciliation screen — Cash Recon
+   included. This bug already happened once and cost real confusion.
+10. **GDPR-safe retention that respects real accounting needs** — personal
+    identifiers (names) get anonymized after a policy window; financial
+    totals/ticket numbers are retained, since churches need those for
+    accounting/Charity Commission purposes regardless of GDPR minimization.
+11. **Live, session-scoped conveniences**: a seller's last-used campaign is
+    remembered for the length of their login session; sessions auto-expire
+    (2 hours) both server- and client-side.
+12. **Never lose in-progress seller entry.** Switching campaigns, viewing a QR,
+    or any other in-screen action must never blow away a half-completed sale
+    form — panels toggle visibility, they don't rebuild and reset state.
+
+---
+
+## 3. Open UX issue carried into this rebuild — needs a decision
+
+**The cash/card mis-tap problem.** Sellers have hit "Cash" when they meant
+"Card" (and vice versa) in real live use. Current fix is Void + re-enter,
+which works but is heavier than it should be for a simple mis-tap.
+
+**Proposed fix**: a short, no-questions-asked **"Undo"** affordance immediately
+after logging a sale (a few seconds' window, single tap, no reason required)
+for genuine slip-of-the-thumb corrections — with the existing Void-with-reason
+flow remaining the audit-trail mechanism for anything after that window closes
+or for a sale that's already been acted on (e.g. cash already reconciled).
+
+*Decision needed from Justin: confirm this approach, or propose an
+alternative (e.g. a same-session-only "Edit method" action instead of a timed
+Undo).*
+
+---
+
+## 4. Data model — the generalization
+
+### 4.1 New top layer: Organization
+
+Even though only one parish exists today, the data model must assume a second
+one is coming, because retrofitting this later (once real data exists) is far
+more painful than designing for it now.
+
+- **Organization** (e.g. "St. Vincent De Paul Church, Osterley") — the tenant.
+  Every Campaign, User, and downstream record belongs to exactly one
+  Organization. SuperAdmins are scoped to their Organization, not global,
+  from day one — even with only one Organization actually in use.
+
+### 4.2 Generalized Campaign
+
+Replaces the BBQ-specific model. A Campaign now defines:
+- Name, active/inactive/binned state (unchanged from today)
+- **A flexible list of price tiers** — any number, each with its own name and
+  price (e.g. `Adult £12 / Child £5` for BBQ, `Ticket £3` for a single-tier
+  raffle, `Adult £15 / Child £8 / Vegetarian £15` for a Christmas dinner).
+  This replaces the hardcoded two-tier Adult/Child model entirely.
+- One or more **ticket number blocks** (already decided: disjoint blocks
+  supported, e.g. a top-up batch added later under the same campaign)
+- The word **"Ticket"** stays as the universal term throughout the UI,
+  regardless of what's actually being sold (confirmed — no per-campaign
+  relabeling of the unit itself)
+
+### 4.3 Tickets, Payments, Users
+
+Structurally unchanged from the BBQ build — ticket claiming, payment records,
+buyer name, seller attribution, cash recon, void/audit trail all carry over
+as-is. The only change is that a ticket's "tier" is now a foreign key into a
+campaign's own tier list, instead of a hardcoded `A`/`C` enum.
+
+### 4.4 SumUp integration, fully generalized
+
+Once the API key/scope issue is resolved:
+- Automated checkout creation ties a SumUp transaction directly to the
+  specific ticket(s)/tier(s) sold, same reconciliation depth as originally
+  designed for BBQ (transaction code capture, resend-on-failure, Needs
+  Attention queue) — but now working for any campaign's tiers, not just
+  Adult/Child.
+- Manual logging (Cash, Card-on-reader/link) remains fully supported
+  alongside it, permanently (see Learning #4).
+
+---
+
+## 5. Build phases (per our standard method)
+
+1. **Scope** — this document; review and mark up before anything is built
+2. **Prototype-first** — a clickable, design-led prototype of the generalized
+   Sell screen (flexible tiers instead of Adult/Child) and campaign
+   configuration screen, validated before any backend work
+3. **Consolidate** — fold prototype feedback back into this document as the
+   single source of truth
+4. **Build in phases**: data/foundation (Organization + generalized schema) →
+   subsystems (tiers, SumUp integration, recon) → wire validated front-ends →
+   end-to-end dry-run across every user type and edge case → handover
+5. **Migration**: the live BBQ data (Organization = Osterley, BBQ26 as a
+   Campaign with an Adult/Child tier pair) migrates into the new model as the
+   first real Organization/Campaign — nothing about the live event data is
+   lost or re-entered
+
+---
+
+## 6. Claude Code transition
+
+1. Create the GitHub repo (not yet done) and push the current working BBQ
+   codebase as the starting commit — this becomes real, persistent history
+2. Move active development into Claude Code, working directly against that
+   repo — no more zip-file handoffs, no more sandbox-reset risk
+3. Client ownership from day one carries forward unchanged: Justin's own
+   repo, own Supabase project, own Netlify site, own SumUp account — nothing
+   here becomes a dependency on any one tool session
+
+---
+
+## 7. Open questions for Justin
+
+- [ ] Confirm the Undo-vs-Edit approach for the cash/card mis-tap fix (Section 3)
+- [ ] Confirm Organization layer is wanted now even with one parish, given the
+      future multi-parish intent (Section 4.1)
+- [ ] Any other unit types beyond BBQ/Christmas dinner/raffle worth designing
+      for now, to make sure the tier model is genuinely general-purpose?
+- [ ] Timeline: is SumUp API access expected to be resolved before this build
+      starts, or should the build proceed assuming Cash/Card-manual are the
+      only working paths until further notice?
