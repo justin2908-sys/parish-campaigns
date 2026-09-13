@@ -219,15 +219,34 @@ more ticket blocks" (§4.2) now each carry a type, Physical or Digital:
   checks.
 - A **digital** block has no pre-declared range — its ticket numbers are
   assigned automatically at the moment of sale, so there's nothing to type
-  and nothing to check. A digital sale gets a **Share** action that hands off
-  to the seller's own phone's native share sheet (Messages/WhatsApp/Mail/etc.)
-  — there is no way to auto-target one specific channel or contact; the
-  seller picks who to send it to, the same way sharing a photo works.
+  and nothing to check.
 - A campaign can have **only physical blocks, only a digital block, or
   both** (a genuine hybrid — e.g. a printed ticket book alongside an online
-  sales channel for the same campaign).
+  sales channel for the same campaign). There is no separate "hybrid" setting
+  to pick — a campaign is hybrid simply by having more than one block with
+  different types, same as it already supports multiple physical blocks
+  (e.g. a top-up) today.
 
 This reframes Non-negotiable #8 (displayed data must match physical reality)
 for the digital case: the ticket identifier shown to the seller and the one
 sent to the buyer must always match exactly — there's no "physical" to check
 against, so that consistency is the digital equivalent of the same rule.
+
+**Refined 2026-09-13, from prototype review:**
+
+- **A digital block is entirely self-generating.** Creating one takes no
+  manual entry at all beyond choosing "Digital" — no label, no numbers. It
+  names and numbers itself (e.g. "Online", "Online 2" for a second one in the
+  same campaign). This is deliberately different from a physical block, which
+  still requires a start/end range to be entered — that range is what makes
+  the live "doesn't exist" / "already sold" checks possible.
+- **Share applies to any sold ticket, not just digital ones.** Every
+  finalized sale — physical or digital, cash or card — gets a "Share ticket"
+  action, e.g. a seller who forgot to hand over a receipt, or wants to send
+  a digital copy alongside a physical ticket. Rather than only the OS's
+  generic share sheet, it presents an explicit choice of **SMS / WhatsApp /
+  Email**, each opening the seller's own default app for that channel
+  (`sms:`, `wa.me`, `mailto:` handoff — still no way to auto-target one
+  specific contact; the seller picks who). The message includes: campaign
+  name, ticket count and tier breakdown (e.g. "2 x Adult, 1 x Child"), the
+  ticket number(s), the amount, and the date/time of sale.
