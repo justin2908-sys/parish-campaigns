@@ -99,6 +99,26 @@ more painful than designing for it now.
 **Decided (2026-09-12): build the Organization layer now**, before any second
 parish exists, per the reasoning above.
 
+**Decided (2026-09-13): a global Platform Owner role sits above per-Organization
+SuperAdmin.** Clarifying the role hierarchy raised while reviewing the
+prototype:
+
+- **Platform Owner** — global, not scoped to any Organization. Creates new
+  Organizations (onboarding a second parish) and that Organization's first
+  Admin/SuperAdmin. This is Justin's own role as the platform's operator, not
+  a per-parish role.
+- **SuperAdmin** — scoped to one Organization (unchanged from §4.1's original
+  decision). Top of that parish's own hierarchy; creates Admins and Sellers
+  within it.
+- **Admin** and **Seller** — scoped to one Organization, structurally
+  unchanged from the live BBQ build.
+
+This supersedes the live app's current "First-time SuperAdmin Setup" flow
+(self-service, works once, only before any users exist at all) — that model
+doesn't extend to "onboard parish #2" without a Platform Owner explicitly
+creating it, so that bootstrap flow needs redesigning as part of the build,
+not carried over as-is.
+
 ### 4.2 Generalized Campaign
 
 Replaces the BBQ-specific model. A Campaign now defines:
