@@ -41,7 +41,11 @@ preserve every one of these, not "improve" them away:
    API integration works.
 5. **A single reusable/dynamic SumUp Payment Link QR works fine** and needs no
    per-sale API call — shown to the buyer, they pay, seller logs it the same
-   way as a reader payment.
+   way as a reader payment. **Extended 2026-09-13:** the same link can also be
+   sent directly by SMS, WhatsApp, or Email instead of only shown as a QR on
+   the seller's screen — the buyer pays in their own time, and the seller
+   moves straight on to the next sale without waiting. The sale is still
+   logged the same way, once the seller sees the payment come through.
 6. **Optional, non-blocking photo evidence** for manually-logged payments —
    never required, never blocks the next sale.
 7. **Specific, accurate error messages.** "This ticket doesn't exist in this
