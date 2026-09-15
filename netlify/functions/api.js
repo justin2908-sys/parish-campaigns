@@ -188,6 +188,18 @@ async function listUsers(session) {
   return { users: out };
 }
 
+async function getOrgSettings(session) {
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  const { data } = await supabase.from('organizations').select('id, name, payment_link_url').eq('id', session.org_id).single();
+  return { organization: data };
+}
+async function setOrgPaymentLink(session, { payment_link_url }) {
+  requireOrgRole(session, ['superadmin']);
+  const { error } = await supabase.from('organizations').update({ payment_link_url: payment_link_url || null }).eq('id', session.org_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
 // ---------- Campaigns, Tiers, Ticket Blocks ----------
 
 // tiers: [{ name, price }]  blocks: [{ type: 'physical'|'digital', label?, range_start?, range_end? }]
@@ -887,6 +899,8 @@ const actions = {
   list_organizations: (s) => listOrganizations(s),
 
   login: (s, b) => login(b),
+  get_org_settings: (s) => getOrgSettings(s),
+  set_org_payment_link: (s, b) => setOrgPaymentLink(s, b),
   create_user: (s, b) => createUser(s, b),
   set_user_active: (s, b) => setUserActive(s, b),
   reset_password: (s, b) => resetPassword(s, b),
