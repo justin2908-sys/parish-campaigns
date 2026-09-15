@@ -480,20 +480,26 @@ async function recordSale(session, { campaign_id, block_id, tier_counts, ticket_
     }
   }
 
+  // Read back exactly what was claimed/minted — the caller (esp. a digital sale, whose
+  // numbers it couldn't have known in advance) needs the real assigned tickets, both to
+  // display them and to restore an accurate Undo if the payment method was mis-tapped.
+  const { data: soldTicketRows } = await supabase.from('tickets').select('ticket_number, tier_id').eq('payment_id', payment.id).order('ticket_number');
+  const tierNameById = Object.fromEntries(tiers.map(t => [t.id, t.name]));
+  const soldTickets = soldTicketRows.map(t => ({ ticket_number: t.ticket_number, tier_id: t.tier_id, tier_name: tierNameById[t.tier_id] }));
+
   if (method === 'cash') {
     await supabase.from('payments').update({ status: 'pending' }).eq('id', payment.id);
-    return { ok: true, payment_id: payment.id, amount, method: 'cash' };
+    return { ok: true, payment_id: payment.id, amount, method: 'cash', tickets: soldTickets };
   }
   if (method === 'card_manual') {
     // Payment already taken and confirmed on the seller's physical reader — we're just logging it.
     await supabase.from('payments').update({ status: 'paid' }).eq('id', payment.id);
-    return { ok: true, payment_id: payment.id, amount, method: 'card_manual' };
+    return { ok: true, payment_id: payment.id, amount, method: 'card_manual', tickets: soldTickets };
   }
 
   // card: create SumUp hosted checkout
-  const { data: tickets } = await supabase.from('tickets').select('ticket_number').eq('payment_id', payment.id);
   const ref = `PC-${payment.id.slice(0, 8)}`;
-  const ticketList = tickets.map(t => t.ticket_number).join(',');
+  const ticketList = soldTickets.map(t => t.ticket_number).join(',');
   const resp = await fetch('https://api.sumup.com/v0.1/checkouts', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${SUMUP_API_KEY}`, 'Content-Type': 'application/json' },
@@ -510,7 +516,45 @@ async function recordSale(session, { campaign_id, block_id, tier_counts, ticket_
     throw httpError(502, `SumUp checkout creation failed (HTTP ${resp.status}): ${sumupData.message || sumupData.error_message || sumupData.error || JSON.stringify(sumupData) || resp.statusText}`);
   }
   await supabase.from('payments').update({ sumup_checkout_id: sumupData.id, sumup_checkout_ref: ref }).eq('id', payment.id);
-  return { ok: true, payment_id: payment.id, amount, method: 'card', checkout_id: sumupData.id, pay_url: sumupData.hosted_checkout_url };
+  return { ok: true, payment_id: payment.id, amount, method: 'card', checkout_id: sumupData.id, pay_url: sumupData.hosted_checkout_url, tickets: soldTickets };
+}
+
+// Self-service, no-reason-needed correction for a mis-tapped payment method (Cash vs Card) —
+// distinct from voidSale below, which is the admin-only, reason-required audit-trail path for
+// anything after this short window closes or once cash has been reconciled. Enforced
+// server-side (not just a client-side timer) so the window can't be bypassed: only the
+// selling seller, only within UNDO_WINDOW_SECONDS, only before reconciliation touches it.
+const UNDO_WINDOW_SECONDS = 15; // a little more than the 8s countdown the UI shows, for network latency
+async function undoSale(session, { payment_id }) {
+  requireRole(session, ['seller', 'admin', 'superadmin']);
+  const { data: payment } = await supabase.from('payments').select('*').eq('id', payment_id).single();
+  if (!payment) throw httpError(404, 'Payment not found');
+  if (payment.seller_id !== session.uid) throw httpError(403, 'You can only undo a sale you made yourself');
+  if (payment.status === 'void') throw httpError(400, 'Already voided');
+  if (payment.cash_recon_batch_id) throw httpError(400, 'This sale has already been reconciled — ask an Admin to Void it instead.');
+  const ageSeconds = (Date.now() - new Date(payment.created_at).getTime()) / 1000;
+  if (ageSeconds > UNDO_WINDOW_SECONDS) throw httpError(400, 'The Undo window has passed — ask an Admin to Void it instead.');
+
+  const { data: ticketRows } = await supabase.from('tickets').select('id, block_id, ticket_blocks!inner(type)').eq('payment_id', payment_id);
+  const physicalIds = ticketRows.filter(t => t.ticket_blocks.type === 'physical').map(t => t.id);
+  const digitalRows = ticketRows.filter(t => t.ticket_blocks.type === 'digital');
+
+  if (digitalRows.length) {
+    // Roll the block's counter back so the corrected resubmission reuses these same numbers
+    // instead of skipping ahead and leaving a gap — the tickets themselves were correct,
+    // only the payment method was mis-tapped.
+    const byBlock = {};
+    for (const t of digitalRows) byBlock[t.block_id] = (byBlock[t.block_id] || 0) + 1;
+    for (const [blockId, count] of Object.entries(byBlock)) {
+      await supabase.rpc('release_digital_tickets', { p_block_id: blockId, p_count: count });
+    }
+    await supabase.from('tickets').delete().in('id', digitalRows.map(t => t.id));
+  }
+  if (physicalIds.length) {
+    await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null }).in('id', physicalIds);
+  }
+  await supabase.from('payments').delete().eq('id', payment_id);
+  return { ok: true };
 }
 
 // Poll SumUp for a card payment's status; update DB when resolved
@@ -860,6 +904,7 @@ const actions = {
   check_ticket: (s, b) => checkTicket(b),
   record_sale: (s, b) => recordSale(s, b),
   checkout_status: (s, b) => checkoutStatus(s, b),
+  undo_sale: (s, b) => undoSale(s, b),
   void_sale: (s, b) => voidSale(s, b),
   cash_recon: (s, b) => cashRecon(s, b),
   dashboard_state: (s, b) => dashboardState(s, b),
