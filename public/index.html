@@ -3,12 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Parish Campaigns — St. Vincent De Paul Church, Osterley, London</title>
+<title>Parish Campaigns</title>
 <style>
   :root {
     --ink: #1c1c1e; --paper: #fdfcf9; --line: #e4e0d8;
     --accent: #8a3b2b; --accent-dim: #f2e4de;
-    --good: #3a6b4f; --warn: #b5651d; --bad: #a4342a;
+    --good: #3a6b4f; --good-dim: #e2efe6;
+    --warn: #b5651d; --warn-dim: #fbead9;
+    --bad: #a4342a; --bad-dim: #f6dedb;
+    --tier-c: #4b5c7a; --tier-c-dim: #e4e8f0;
   }
   * { box-sizing: border-box; }
   body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--paper); color:var(--ink); }
@@ -20,32 +23,50 @@
   label { display:block; font-size:13px; color:#555; margin: 12px 0 4px; }
   input, select { width:100%; padding:14px; font-size:16px; border:1px solid var(--line); border-radius:10px; }
   button.primary { width:100%; padding:16px; font-size:17px; font-weight:600; background:var(--accent); color:white; border:none; border-radius:12px; margin-top:16px; }
+  button.primary:disabled { background:var(--line); color:#888; }
   button.secondary { width:100%; padding:14px; font-size:15px; background:var(--accent-dim); color:var(--accent); border:none; border-radius:12px; margin-top:8px; }
   button.small { padding:8px 12px; font-size:13px; border-radius:8px; border:1px solid var(--line); background:white; }
-  .row { display:flex; gap:10px; align-items:center; }
+  button.ghost { background:none; border:1px dashed var(--line); color:#777; border-radius:9px; padding:8px 10px; font-size:12.5px; width:100%; }
+  button.link { background:none; border:none; color:#777; font-size:12px; text-decoration:underline; padding:0; }
+  button.link.bad { color:var(--bad); }
+  button.icon-x { background:none; border:none; color:#999; font-size:16px; padding:4px 8px; }
+  .row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+  .row > * { flex:1; min-width:110px; }
   .ticket-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .ticket-row input { flex:1; }
-  .toggle { display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  .toggle button { flex:1; padding:12px; border:none; background:white; font-size:15px; }
-  .toggle button.active[data-t="A"] { background:var(--accent); color:white; }
-  .toggle button.active[data-t="C"] { background:var(--good); color:white; }
+  .toggle { display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-top:6px; }
+  .toggle button { flex:1; padding:11px; border:none; background:white; font-size:14.5px; font-weight:600; color:#777; }
+  .toggle button.active { background:var(--accent); color:white; }
+  .toggle button.active.alt { background:var(--tier-c); }
   .total { font-size:28px; font-weight:700; text-align:center; margin:16px 0; }
   .stat { display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line); }
   .stat:last-child { border:none; }
   .badge { display:inline-block; padding:2px 10px; border-radius:20px; font-size:12px; font-weight:600; }
-  .badge.ok { background:#e2efe6; color:var(--good); }
-  .badge.warn { background:#fbead9; color:var(--warn); }
-  .badge.bad { background:#f6dedb; color:var(--bad); }
+  .badge.ok { background:var(--good-dim); color:var(--good); }
+  .badge.warn { background:var(--warn-dim); color:var(--warn); }
+  .badge.bad { background:var(--bad-dim); color:var(--bad); }
+  .badge.tier0 { background:var(--accent-dim); color:var(--accent); }
+  .badge.tier1 { background:var(--good-dim); color:var(--good); }
+  .badge.tier2 { background:var(--warn-dim); color:var(--warn); }
+  .badge.tier3 { background:var(--tier-c-dim); color:var(--tier-c); }
   .tabs { display:flex; gap:6px; margin-bottom:16px; flex-wrap:wrap; }
   .tabs button { flex:1; padding:10px; border:1px solid var(--line); background:white; border-radius:10px; font-size:13px; }
   .tabs button.active { background:var(--ink); color:white; border-color:var(--ink); }
-  .error { background:#f6dedb; color:var(--bad); padding:12px; border-radius:10px; margin:10px 0; font-size:14px; }
-  .info { background:#e2efe6; color:var(--good); padding:12px; border-radius:10px; margin:10px 0; font-size:14px; }
+  .error { background:var(--bad-dim); color:var(--bad); padding:12px; border-radius:10px; margin:10px 0; font-size:14px; }
+  .info { background:var(--good-dim); color:var(--good); padding:12px; border-radius:10px; margin:10px 0; font-size:14px; }
+  .hint { background:#f4f0e6; color:#666; padding:10px 12px; border-radius:10px; margin:10px 0; font-size:12.5px; }
   .muted { color:#888; font-size:13px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   td, th { padding:8px 4px; border-bottom:1px solid var(--line); text-align:left; }
   .qr-wrap { text-align:center; }
   .qr-wrap img { border:8px solid white; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,0.1); }
+  .share-row { display:flex; gap:6px; }
+  .share-link { flex:1; display:flex; align-items:center; justify-content:center; gap:4px; background:var(--accent-dim); color:var(--accent); border-radius:9px; padding:9px 4px; font-size:12px; font-weight:600; text-decoration:none; }
+  .photo-label { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:8px; padding:9px; border:1px dashed var(--line); border-radius:9px; font-size:12.5px; color:#777; cursor:pointer; }
+  .photo-label.attached { border-style:solid; border-color:var(--good); color:var(--good); }
+  .photo-thumb { width:28px; height:28px; border-radius:6px; object-fit:cover; vertical-align:middle; }
+  .tier-row, .block-row { display:flex; gap:8px; align-items:flex-end; margin-bottom:8px; }
+  .tier-row > div, .block-row > div { flex:1; }
   #app { padding-bottom: 60px; }
 </style>
 </head>
@@ -58,14 +79,14 @@
 
 <script>
 const API = '/api/';
-let state = { session: null, user: null, series: [] };
+let state = { session: null, user: null, campaigns: [], org: null, lastCampaignId: null };
 try {
-  const saved = localStorage.getItem('bbq_session');
-  if (saved) state = JSON.parse(saved);
+  const saved = localStorage.getItem('pc_session');
+  if (saved) state = { ...state, ...JSON.parse(saved) };
 } catch {}
 
-function saveState() { localStorage.setItem('bbq_session', JSON.stringify(state)); }
-function logout() { clearTimeout(autoLogoutTimer); state = { session: null, user: null, series: [] }; saveState(); render(); }
+function saveState() { localStorage.setItem('pc_session', JSON.stringify(state)); }
+function logout() { clearTimeout(autoLogoutTimer); state = { session: null, user: null, campaigns: [], org: null, lastCampaignId: null }; saveState(); render(); }
 
 // The session token isn't encrypted, just signed — safe to read its expiry client-side
 // (we're not trusting it for auth, the server re-verifies the signature on every call).
@@ -75,12 +96,12 @@ function scheduleAutoLogout() {
   if (!state.session) return;
   try {
     let b64 = state.session.split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '='; // atob requires padding; base64url encoding omits it
+    while (b64.length % 4) b64 += '=';
     const payload = JSON.parse(atob(b64));
     const msLeft = payload.exp - Date.now();
     if (msLeft <= 0) { logout(); return; }
     autoLogoutTimer = setTimeout(() => { alert('Session expired after 2 hours — please log in again.'); logout(); }, msLeft);
-  } catch { /* malformed token, let the next API call fail naturally */ }
+  } catch {}
 }
 
 async function call(action, body = {}) {
@@ -95,14 +116,23 @@ async function call(action, body = {}) {
 }
 
 function h(strings, ...vals) { return strings.reduce((a, s, i) => a + s + (vals[i] ?? ''), ''); }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
-// ---------------- LOGIN ----------------
+function render() {
+  if (!state.session) { renderLogin(); return; }
+  document.getElementById('headerRight').innerHTML = `<button onclick="logout()">Log out (${esc(state.user.name)})</button>`;
+  if (state.user.role === 'platform_owner') renderPlatformOwner();
+  else if (state.user.role === 'seller') renderSeller();
+  else renderAdmin();
+}
+
+// ================= LOGIN / BOOTSTRAP =================
 function renderLogin(err) {
   document.getElementById('headerRight').innerHTML = '';
   document.getElementById('app').innerHTML = h`
     <div class="card">
       <h2 style="margin-top:0">Log in</h2>
-      ${err ? `<div class="error">${err}</div>` : ''}
+      ${err ? `<div class="error">${esc(err)}</div>` : ''}
       <label>Mobile number</label>
       <input id="mobile" type="tel" placeholder="07xxxxxxxxx" inputmode="numeric">
       <label>Password</label>
@@ -110,8 +140,8 @@ function renderLogin(err) {
       <button class="primary" onclick="doLogin()">Log in</button>
     </div>
     <div class="card">
-      <p class="muted">First time setting this up? Only works once, before any users exist.</p>
-      <button class="secondary" onclick="showBootstrap()">First-time SuperAdmin setup</button>
+      <p class="muted">First time setting this up? Only works once, before any Platform Owner exists.</p>
+      <button class="secondary" onclick="showBootstrap()">First-time Platform Owner setup</button>
     </div>
   `;
 }
@@ -121,163 +151,260 @@ async function doLogin() {
   try {
     const data = await call('login', { mobile, password });
     state.session = data.session; state.user = data.user;
-    saveState();
-    scheduleAutoLogout();
-    render();
+    saveState(); scheduleAutoLogout(); render();
   } catch (e) { renderLogin(e.message); }
 }
 function showBootstrap() {
   document.getElementById('app').innerHTML = h`
     <div class="card">
-      <h2 style="margin-top:0">First-time SuperAdmin Setup</h2>
-      <p class="muted">Create the very first SuperAdmin account. This only works if no users exist yet.</p>
+      <h2 style="margin-top:0">First-time Platform Owner Setup</h2>
+      <p class="muted">Creates the very first Platform Owner account — the global role that creates each parish (Organization) and its first Admin. Only works if no Platform Owner exists yet.</p>
       <label>Your name</label><input id="bName">
       <label>Mobile number</label><input id="bMobile" type="tel">
-      <label>Password (yours alone — keep it private)</label><input id="bPassword" type="password">
-      <button class="primary" onclick="doBootstrap()">Create SuperAdmin</button>
+      <label>Password (8+ characters, yours alone)</label><input id="bPassword" type="password">
+      <button class="primary" onclick="doBootstrap()">Create Platform Owner</button>
       <button class="secondary" onclick="renderLogin()">Back to login</button>
+      <div id="bootstrapResult"></div>
     </div>`;
 }
 async function doBootstrap() {
+  const resEl = document.getElementById('bootstrapResult');
   try {
-    await call('bootstrap_superadmin', {
+    await call('bootstrap_platform_owner', {
       name: document.getElementById('bName').value.trim(),
       mobile: document.getElementById('bMobile').value.trim(),
       password: document.getElementById('bPassword').value,
     });
-    renderLogin('SuperAdmin created — please log in.');
-  } catch (e) { alert(e.message); }
+    renderLogin('Platform Owner created — please log in.');
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-// ---------------- SELLER VIEW ----------------
-let currentSeries = null;
-let activity = []; // {id, ticketsLabel, method, status, amount, paymentId}
-let activityCounter = 0;
-
-function pickDefaultCampaign(series) {
-  // Remembers the seller's last choice for the life of this login session (cleared on
-  // logout/expiry, since it lives in the same localStorage blob as the session token).
-  // Otherwise defaults to the earliest-created active campaign.
-  if (state.lastCampaignId && series.some(s => s.id === state.lastCampaignId)) return state.lastCampaignId;
-  return series.length ? series[0].id : null;
+// ================= PLATFORM OWNER =================
+async function renderPlatformOwner() {
+  const { organizations } = await call('list_organizations');
+  document.getElementById('app').innerHTML = h`
+    <div class="card">
+      <h2 style="margin-top:0">Organizations</h2>
+      <p class="muted">Each parish is its own Organization, with its own campaigns, sellers, and data — completely separate from any other.</p>
+      <table>
+        <tr><th>Name</th><th>Created</th></tr>
+        ${organizations.map(o => `<tr><td>${esc(o.name)}</td><td>${new Date(o.created_at).toLocaleDateString('en-GB')}</td></tr>`).join('')}
+      </table>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Add a new parish</h3>
+      <label>Organization name</label>
+      <input id="orgName" placeholder="e.g. St. Vincent De Paul Church, Osterley">
+      <button class="primary" onclick="doCreateOrg()">Create Organization</button>
+      <div id="orgResult"></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Add that parish's first Admin</h3>
+      <label>Organization</label>
+      <select id="orgForAdmin">${organizations.map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>
+      <label>Name</label><input id="adminName">
+      <label>Mobile number</label><input id="adminMobile" type="tel">
+      <label>Password (8+ characters)</label><input id="adminPassword" type="password">
+      <button class="primary" onclick="doAddOrgAdmin()">Create SuperAdmin for this parish</button>
+      <div id="adminResult"></div>
+    </div>
+  `;
+}
+async function doCreateOrg() {
+  const resEl = document.getElementById('orgResult');
+  try {
+    await call('create_organization', { name: document.getElementById('orgName').value.trim() });
+    renderPlatformOwner();
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function doAddOrgAdmin() {
+  const resEl = document.getElementById('adminResult');
+  try {
+    await call('create_user', {
+      org_id: document.getElementById('orgForAdmin').value,
+      role: 'superadmin',
+      name: document.getElementById('adminName').value.trim(),
+      mobile: document.getElementById('adminMobile').value.trim(),
+      password: document.getElementById('adminPassword').value,
+    });
+    resEl.innerHTML = `<div class="info">SuperAdmin created for that parish.</div>`;
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-function statsBlockHtml(stats) {
-  return `
-    <div class="stat"><span>Total tickets sold</span><b>${stats.ticketsSoldCount}</b></div>
-    <div class="stat"><span>Total cash collected</span><b>£${stats.cashCollected.toFixed(2)}</b></div>
-    <div class="stat"><span>Total cash reconciled</span><b>£${stats.cashReconciled.toFixed(2)}</b></div>
-    <div class="stat"><span>Total card payment</span><b>£${stats.cardTotal.toFixed(2)}</b></div>`;
-}
-async function refreshSellerStats() {
-  const el = document.getElementById('sellerStatsBlock');
-  if (!el || !currentSeries) return;
-  const stats = await call('seller_state', { series_id: currentSeries });
-  el.innerHTML = statsBlockHtml(stats);
-}
-function toggleQrPanel(show) {
-  const panel = document.getElementById('qrPanelCard');
-  if (panel) panel.style.display = show ? '' : 'none';
-}
+// ================= SELLER =================
+let sellCounts = {}, saleMode = 'physical', startNumValue = '', buyerNameValue = '', ticketNumbers = [];
+let pendingUndo = null, shareMenuOpenFor = null, qrOpen = false, tickHandle = null, activity = [];
+
+function currentCampaign() { return state.campaigns.find(c => c.id === state.lastCampaignId) || state.campaigns[0]; }
+function tierSummary(c) { return c.tiers.map(t => `${t.name} £${Number(t.price).toFixed(2)}`).join(' · '); }
 
 async function renderSeller() {
-  document.getElementById('headerRight').innerHTML = `<button onclick="logout()">Log out (${state.user.name})</button>`;
-  const { series } = await call('list_series');
-  state.series = series;
-  currentSeries = pickDefaultCampaign(series);
-  const stats = currentSeries ? await call('seller_state', { series_id: currentSeries }) : { ticketsSoldCount: 0, cashCollected: 0, cashReconciled: 0, cardTotal: 0 };
+  const { campaigns } = await call('list_campaigns');
+  state.campaigns = campaigns;
+  if (!state.lastCampaignId || !campaigns.find(c => c.id === state.lastCampaignId)) state.lastCampaignId = campaigns[0] ? campaigns[0].id : null;
+  saveState();
 
-  if (!series.length) {
-    document.getElementById('app').innerHTML = `
-      <div class="card">${statsBlockHtml(stats)}</div>
-      <div class="card"><div class="error">No campaign is active yet — ask a SuperAdmin to create or activate one under the Campaigns tab.</div></div>`;
+  if (!campaigns.length) {
+    document.getElementById('app').innerHTML = `<div class="card"><div class="error">No campaign is active yet — ask a SuperAdmin to create or activate one.</div></div>`;
     return;
   }
+  if (!state.org) { try { const { organization } = await call('get_org_settings'); state.org = organization; } catch {} }
+
+  const camp = currentCampaign();
+  const stats = await call('seller_state', { campaign_id: camp.id });
+  const physicalBlocks = camp.blocks.filter(b => b.type !== 'digital');
+  const digitalBlocks = camp.blocks.filter(b => b.type === 'digital');
+  if (ticketNumbers.__campaignId !== camp.id) {
+    sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+    startNumValue = ''; buyerNameValue = '';
+    saleMode = physicalBlocks.length ? 'physical' : 'digital';
+    ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
+  }
+  if (saleMode === 'physical' && !physicalBlocks.length) saleMode = 'digital';
+  if (saleMode === 'digital' && !digitalBlocks.length) saleMode = 'physical';
 
   document.getElementById('app').innerHTML = h`
-    <div class="card" id="sellerStatsBlock">${statsBlockHtml(stats)}</div>
+    <div class="card">
+      <div class="stat"><span>Tickets sold by you</span><b>${stats.ticketsSoldCount}</b></div>
+      <div class="stat"><span>Cash collected</span><b>£${stats.cashCollected.toFixed(2)}</b></div>
+      <div class="stat"><span>· Reconciled</span><b>£${stats.cashReconciled.toFixed(2)}</b></div>
+      <div class="stat"><span>Card total</span><b>£${stats.cardTotal.toFixed(2)}</b></div>
+    </div>
     <div class="card">
       <h2 style="margin-top:0">New Sale</h2>
       <label>Campaign</label>
-      <select id="seriesSelect" onchange="currentSeries=this.value; state.lastCampaignId=this.value; saveState(); updateTotal(); refreshSellerStats();">
-        ${series.map(s => `<option value="${s.id}" ${s.id===currentSeries?'selected':''}>${s.name} (£${s.adult_price} adult / £${s.child_price} child)</option>`).join('')}
+      <select id="campSelect" onchange="onCampaignChange(this.value)">
+        ${campaigns.map(c => `<option value="${c.id}" ${c.id===camp.id?'selected':''}>${esc(c.name)} (${esc(tierSummary(c))})</option>`).join('')}
       </select>
-      <div class="row" style="margin-top:14px">
-        <div style="flex:1"><label>No. of Adult tickets</label><input id="adultCount" type="number" min="0" inputmode="numeric" value="0" oninput="regenerateTicketNumbers()"></div>
-        <div style="flex:1"><label>No. of Child tickets</label><input id="childCount" type="number" min="0" inputmode="numeric" value="0" oninput="regenerateTicketNumbers()"></div>
+
+      ${physicalBlocks.length && digitalBlocks.length ? `
+      <label>Ticket type</label>
+      <div class="toggle">
+        <button type="button" class="${saleMode==='physical'?'active':''}" onclick="setSaleMode('physical')">Physical</button>
+        <button type="button" class="${saleMode==='digital'?'active alt':''}" onclick="setSaleMode('digital')">Digital</button>
+      </div>` : ''}
+
+      <div class="row" style="margin-top:12px">
+        ${camp.tiers.map(t => `
+          <div><label>No. of ${esc(t.name)}</label>
+            <input type="number" min="0" inputmode="numeric" value="${sellCounts[t.id]||0}" oninput="sellCounts['${t.id}']=Number(this.value)||0; regenerateTicketNumbers();"></div>`).join('')}
       </div>
-      <label>Starting ticket number <span class="muted">(rest fills in automatically — edit any that don't match)</span></label>
-      <input id="startingNumberInput" inputmode="numeric" placeholder="e.g. 30001" oninput="regenerateTicketNumbers()">
-      <div id="ticketNumberRows" style="margin-top:10px"></div>
+
+      ${saleMode==='digital' ? `
+        <div class="hint">Digital tickets — numbers are assigned automatically the moment you record the sale.</div>
+      ` : `
+        <label>Starting ticket number <span class="muted">(rest fills in automatically — edit any that don't match)</span></label>
+        <input type="text" id="startNum" inputmode="numeric" placeholder="e.g. ${physicalBlocks[0].range_start}" value="${esc(startNumValue)}" oninput="startNumValue=this.value; regenerateTicketNumbers()">
+      `}
+
+      <div id="ticketRows" style="margin-top:10px"></div>
       <div class="total" id="totalDisplay">£0.00</div>
+
       <label>Buyer name</label>
-      <input id="payerNameInput" placeholder="e.g. Mary O'Brien">
-      <button class="primary" style="background:var(--good)" onclick="submitSale('cash')">Record Cash Payment</button>
-      <button class="primary" style="background:#555" onclick="submitSale('card_manual')">Card Paid on Reader / Link — Log It</button>
-      <button class="secondary" onclick="toggleQrPanel(true)">Show QR to Buyer</button>
+      <input id="buyerName" placeholder="e.g. Mary O'Brien" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
+
+      <div id="paymentButtons">${paymentButtonsHtml()}</div>
+      <button class="secondary" onclick="toggleQr()">${qrOpen?'Back to Sale':'Show QR to Buyer'}</button>
+      <div id="submitError"></div>
     </div>
-    <div id="qrPanelCard" class="card qr-wrap" style="display:none">
-      <p>Ask the buyer to scan this to pay.</p>
-      <img src="assets/payment-qr.png" alt="Scan to pay" style="max-width:220px">
-      <button class="secondary" onclick="toggleQrPanel(false)" style="margin-top:10px">Back to Sale</button>
-    </div>
-    <div id="activityFeed"></div>
+
+    ${qrOpen ? renderQrPanel(camp) : ''}
+    <div id="feed"></div>
   `;
-  renderActivityFeed();
+  renderTicketRows(); updateTotal(); renderFeed();
 }
 
-let ticketNumberInputs = []; // parallel array of editable ticket numbers, auto-filled from the starting number
+function onCampaignChange(id) { state.lastCampaignId = id; saveState(); ticketNumbers = []; renderSeller(); }
+function setSaleMode(m) { saleMode = m; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
+function toggleQr() { qrOpen = !qrOpen; renderSeller(); }
+
+function renderQrPanel(camp) {
+  const url = state.org && state.org.payment_link_url;
+  if (!url) {
+    return `<div class="card qr-wrap"><p class="muted">No payment link has been set up for this parish yet — ask a SuperAdmin to add one under Campaigns → Payment Link.</p>
+      <button class="secondary" onclick="toggleQr()">Back to Sale</button></div>`;
+  }
+  const camp2 = currentCampaign();
+  const amount = camp2.tiers.reduce((s, t) => s + (sellCounts[t.id]||0) * Number(t.price), 0);
+  const text = amount > 0
+    ? `Please pay £${amount.toFixed(2)} for your ${camp2.name} tickets here: ${url}\nOnce it's through, just let the seller know — thank you!`
+    : `Pay for your ${camp2.name} tickets here: ${url}`;
+  const body = encodeURIComponent(text);
+  const subject = encodeURIComponent(`${camp2.name} — payment link`);
+  return `<div class="card qr-wrap">
+    <p class="muted">Ask the buyer to scan this to pay — one reusable link, no per-sale setup.</p>
+    <img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}" alt="Scan to pay">
+    <div style="text-align:left; margin-top:14px">
+      <label style="margin-top:0">Or send the same link directly — they can pay in their own time</label>
+      <div class="share-row">
+        <a class="share-link" href="sms:?body=${body}">📱 SMS</a>
+        <a class="share-link" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">💬 WhatsApp</a>
+        <a class="share-link" href="mailto:?subject=${subject}&body=${body}">✉️ Email</a>
+      </div>
+    </div>
+    <button class="secondary" onclick="toggleQr()" style="margin-top:12px">Back to Sale</button>
+  </div>`;
+}
 
 function regenerateTicketNumbers() {
-  const adultCount = Number(document.getElementById('adultCount')?.value) || 0;
-  const childCount = Number(document.getElementById('childCount')?.value) || 0;
-  const startVal = document.getElementById('startingNumberInput')?.value;
-  const total = adultCount + childCount;
-  const start = Number(startVal);
+  const camp = currentCampaign();
+  const order = camp.tiers.map(t => ({ id: t.id, count: sellCounts[t.id] || 0 }));
+  const total = order.reduce((s, o) => s + o.count, 0);
+  const seq = []; order.forEach(o => { for (let i=0;i<o.count;i++) seq.push(o.id); });
 
-  if (total <= 0 || !startVal || isNaN(start)) {
-    ticketNumberInputs = [];
+  if (saleMode === 'digital') {
+    ticketNumbers = total ? seq.map(tierId => ({ tierId, digital: true })) : [];
   } else {
-    ticketNumberInputs = Array.from({ length: total }, (_, i) => String(start + i));
+    const startEl = document.getElementById('startNum');
+    const start = Number(startEl ? startEl.value : '');
+    ticketNumbers = (!total || !startEl || !startEl.value || isNaN(start)) ? [] : seq.map((tierId, i) => ({ value: String(start+i), tierId }));
   }
-  renderTicketNumberRows();
-  updateTotal();
+  ticketNumbers.__campaignId = camp.id;
+  renderTicketRows(); updateTotal();
 }
 
-function renderTicketNumberRows() {
-  const wrap = document.getElementById('ticketNumberRows');
-  if (!wrap) return;
-  const adultCount = Number(document.getElementById('adultCount')?.value) || 0;
-  wrap.innerHTML = ticketNumberInputs.map((num, i) => h`
-    <div class="ticket-row">
-      <span class="badge" style="background:${i < adultCount ? 'var(--accent-dim)' : '#e2efe6'};color:${i < adultCount ? 'var(--accent)' : 'var(--good)'}">${i < adultCount ? 'Adult' : 'Child'}</span>
-      <input value="${num}" inputmode="numeric" oninput="setTicketNumberValue(${i}, this.value)">
-    </div>
-    <div id="tnStatus-${i}" style="font-size:12px;margin:-4px 0 8px 4px;color:#888"></div>
-    `).join('');
-  // Every auto-filled number is worth checking too, not just edited ones — the sequential
-  // guess can just as easily land on an already-sold ticket as a manually typed one.
-  ticketNumberInputs.forEach((num, i) => checkTicketLive(i, num));
+function renderTicketRows() {
+  const wrap = document.getElementById('ticketRows'); if (!wrap) return;
+  const camp = currentCampaign();
+  if (saleMode === 'digital') {
+    const byTier = {};
+    ticketNumbers.forEach(tn => byTier[tn.tierId] = (byTier[tn.tierId]||0)+1);
+    wrap.innerHTML = camp.tiers.filter(t => byTier[t.id]).map((t, i) => {
+      const idx = camp.tiers.findIndex(x=>x.id===t.id);
+      return `<div class="ticket-row"><span class="badge tier${idx%4}">${esc(t.name)} × ${byTier[t.id]}</span><span class="muted">assigned on save</span></div>`;
+    }).join('');
+    return;
+  }
+  wrap.innerHTML = ticketNumbers.map((tn, i) => {
+    const tierIdx = camp.tiers.findIndex(t => t.id === tn.tierId);
+    const tier = camp.tiers[tierIdx];
+    return `<div class="ticket-row">
+        <span class="badge tier${tierIdx%4}">${esc(tier.name)}</span>
+        <input value="${esc(tn.value)}" inputmode="numeric" oninput="setTicketValue(${i}, this.value)">
+      </div>
+      <div id="tnStatus-${i}" style="font-size:12px;margin:-4px 0 8px 4px;color:#888"></div>`;
+  }).join('');
+  ticketNumbers.forEach((tn, i) => checkTicketLive(i, tn.value));
 }
 
 const ticketCheckTimers = {};
-function setTicketNumberValue(i, v) {
-  ticketNumberInputs[i] = v;
+function setTicketValue(i, v) {
+  ticketNumbers[i].value = v;
   setTicketNumberStatus(i, '');
   clearTimeout(ticketCheckTimers[i]);
-  if (String(v).trim().length < 3 || !currentSeries) return;
-  ticketCheckTimers[i] = setTimeout(() => checkTicketLive(i, v), 400);
+  if (String(v).trim().length < 1) return;
+  ticketCheckTimers[i] = setTimeout(() => checkTicketLive(i, v), 350);
 }
-
 async function checkTicketLive(i, v) {
-  if (!v || String(v).trim().length < 3 || !currentSeries) return;
+  if (!v || String(v).trim() === '') return;
+  const camp = currentCampaign();
   setTicketNumberStatus(i, '⋯ checking', '#888');
   try {
-    await call('check_ticket', { series_id: currentSeries, ticket_number: Number(v) });
-    if (String(ticketNumberInputs[i]) !== String(v)) return; // stale — kept typing since
+    await call('check_ticket', { campaign_id: camp.id, ticket_number: Number(v) });
+    if (String(ticketNumbers[i] && ticketNumbers[i].value) !== String(v)) return;
     setTicketNumberStatus(i, '✓ available', 'var(--good)');
   } catch (e) {
-    if (String(ticketNumberInputs[i]) !== String(v)) return;
+    if (String(ticketNumbers[i] && ticketNumbers[i].value) !== String(v)) return;
     setTicketNumberStatus(i, e.message, 'var(--bad)');
   }
 }
@@ -287,599 +414,463 @@ function setTicketNumberStatus(i, text, color) {
 }
 
 function updateTotal() {
-  const series = state.series.find(s => s.id === currentSeries);
-  const totalEl = document.getElementById('totalDisplay');
-  if (!series || !totalEl) return;
-  const adultCount = Number(document.getElementById('adultCount')?.value) || 0;
-  const childCount = Number(document.getElementById('childCount')?.value) || 0;
-  const total = adultCount * Number(series.adult_price) + childCount * Number(series.child_price);
-  totalEl.textContent = `£${total.toFixed(2)}`;
+  const camp = currentCampaign();
+  const el = document.getElementById('totalDisplay'); if (!el) return;
+  const total = camp.tiers.reduce((s, t) => s + (sellCounts[t.id]||0) * Number(t.price), 0);
+  el.textContent = `£${total.toFixed(2)}`;
 }
 
-// Renders the running list of sales — recorded, or errored — without ever blocking
-// the ticket-entry form above it. Each entry updates in place.
-function renderActivityFeed() {
-  const el = document.getElementById('activityFeed');
-  if (!el) return;
-  el.innerHTML = activity.map(a => {
-    if (a.status === 'processing') {
-      return `<div class="card">Recording ${a.ticketsLabel}…</div>`;
-    }
-    if (a.status === 'error') {
-      return `<div class="card"><div class="error">${a.ticketsLabel}: ${a.message}</div></div>`;
-    }
-    if (a.method === 'cash') {
-      return `<div class="card"><div class="info">£${a.amount.toFixed(2)} cash recorded for ${a.ticketsLabel} (${a.payerName}).<br>${a.forSeller ? '<b>Hand this cash to an Admin.</b>' : 'Remember to reconcile via Cash Recon.'}</div></div>`;
-    }
-    if (a.method === 'card_manual') {
-      return `<div class="card"><div class="info">£${a.amount.toFixed(2)} card (via reader) logged for ${a.ticketsLabel} (${a.payerName}).</div>
-        <label for="photoInput-${a.id}" class="secondary" style="display:block;text-align:center;padding:10px;border-radius:10px;margin-top:8px;cursor:pointer">
-          ${a.photoAttached ? '✓ Photo attached' : '📷 Add photo of payment (optional)'}
-        </label>
-        <input type="file" accept="image/*" capture="environment" id="photoInput-${a.id}" style="display:none" onchange="attachPhoto(${a.id}, this)">
-        ${a.photoError ? `<div class="error">${a.photoError}</div>` : ''}
-      </div>`;
-    }
-    return '';
-  }).join('');
+function paymentButtonsHtml() {
+  const a = pendingUndo ? activity.find(x => x.id === pendingUndo.activityId) : null;
+  const scoped = pendingUndo && pendingUndo.campaignId === (currentCampaign() && currentCampaign().id);
+  const remaining = a ? a.remaining : 0;
+  const cashPending = scoped && pendingUndo.method === 'cash';
+  const cardPending = scoped && pendingUndo.method === 'card_manual';
+  const otherDisabled = scoped;
+  return `
+    <button class="primary" ${cashPending?`style="background:var(--ink)"`:''} ${otherDisabled && !cashPending ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
+      ${cashPending ? `Undo (${remaining}s)` : 'Record Cash Payment'}
+    </button>
+    <button class="primary" style="${cardPending?'background:var(--ink)':'background:#555'}" ${otherDisabled && !cardPending ? 'disabled' : ''} onclick="${cardPending?`doUndo(${pendingUndo.activityId})`:`submitSale('card_manual')`}">
+      ${cardPending ? `Undo (${remaining}s)` : 'Card Paid on Reader / Link — Log It'}
+    </button>`;
 }
-
-async function attachPhoto(activityId, inputEl) {
-  const file = inputEl.files[0];
-  if (!file) return;
-  const entry = activity.find(a => a.id === activityId);
-  if (!entry) return;
-
-  try {
-    const resizedBase64 = await resizeImageForUpload(file);
-    await call('upload_payment_photo', { payment_id: entry.paymentId, image_base64: resizedBase64 });
-    entry.photoAttached = true;
-    entry.photoError = null;
-  } catch (e) {
-    entry.photoError = 'Photo upload failed — sale is still recorded fine, you can retry the photo later from Recent Sales.';
-  }
-  renderActivityFeed();
-}
-
-// Resize/compress client-side before upload — important given church wifi is often weak,
-// and a full-resolution phone photo (5-10MB) would be slow or fail outright.
-function resizeImageForUpload(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const reader = new FileReader();
-    reader.onload = (e) => { img.src = e.target.result; };
-    reader.onerror = reject;
-    img.onload = () => {
-      const maxDim = 1000;
-      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.7));
-    };
-    img.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+function updatePaymentButtons() { const el = document.getElementById('paymentButtons'); if (el) el.innerHTML = paymentButtonsHtml(); }
 
 async function submitSale(method) {
-  const adultCount = Number(document.getElementById('adultCount').value) || 0;
-  const childCount = Number(document.getElementById('childCount').value) || 0;
-  const totalCount = adultCount + childCount;
-  if (totalCount <= 0) { alert('Enter at least one adult or child ticket'); return; }
-
-  const rawNumbers = ticketNumberInputs.map(n => n.trim()).filter(Boolean);
-  if (rawNumbers.length !== totalCount) { alert(`${totalCount} adult+child specified but ${rawNumbers.length} ticket number(s) are filled in — enter a starting number, or fill in any blanks.`); return; }
-
-  const payerInput = document.getElementById('payerNameInput');
-  const payer_name = payerInput.value.trim();
-  if (!payer_name) { alert('Buyer name is required.'); return; }
-
-  const adultNums = rawNumbers.slice(0, adultCount);
-  const childNums = rawNumbers.slice(adultCount);
-  const parts = [];
-  if (adultNums.length) parts.push(`Adults: ${adultNums.join(', ')}`);
-  if (childNums.length) parts.push(`Children: ${childNums.join(', ')}`);
-  const ticketsLabel = parts.join(' · ');
-  const forSeller = state.user.role === 'seller';
-
-  // Free up the form immediately so the seller can start the next sale
-  // without waiting for this one to finish — resolution shows up below instead.
-  document.getElementById('adultCount').value = 0;
-  document.getElementById('childCount').value = 0;
-  document.getElementById('startingNumberInput').value = '';
-  ticketNumberInputs = [];
-  renderTicketNumberRows();
-  payerInput.value = '';
-  updateTotal();
-
-  const id = ++activityCounter;
-  activity.unshift({ id, ticketsLabel, method, status: 'processing' });
-  if (activity.length > 20) activity.length = 20;
-  renderActivityFeed();
+  const camp = currentCampaign();
+  const errEl = document.getElementById('submitError');
+  if (!ticketNumbers.length) { errEl.innerHTML = `<div class="error">Enter at least one ticket count first.</div>`; return; }
+  if (saleMode !== 'digital') {
+    const statuses = ticketNumbers.map((tn,i)=>document.getElementById(`tnStatus-${i}`)?.textContent||'');
+    if (statuses.some(s => s.includes('already') || s.includes("doesn't exist"))) {
+      errEl.innerHTML = `<div class="error">Fix the flagged ticket number(s) before recording this sale.</div>`; return;
+    }
+  }
+  errEl.innerHTML = '';
+  // Physical doesn't need a pre-chosen block — a campaign can have more than one (e.g. a
+  // top-up), and the ticket number itself resolves which one. Digital does need one, to
+  // pick which pool a campaign's digital sale draws from.
+  const digitalBlock = saleMode === 'digital' ? camp.blocks.find(b=>b.type==='digital') : null;
+  const tier_counts = Object.fromEntries(camp.tiers.map(t => [t.id, sellCounts[t.id]||0]));
+  const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, saleMode, ticketNumbers: ticketNumbers.map(t=>({...t})) };
 
   try {
     const data = await call('record_sale', {
-      series_id: currentSeries, adult_count: adultCount, child_count: childCount,
-      ticket_numbers: rawNumbers, method, payer_name,
+      campaign_id: camp.id, mode: saleMode, block_id: digitalBlock ? digitalBlock.id : undefined, tier_counts,
+      ticket_numbers: saleMode === 'digital' ? undefined : ticketNumbers.map(t => t.value),
+      method, payer_name: buyerNameValue,
     });
-    const entry = activity.find(a => a.id === id);
-    if (method === 'cash') {
-      Object.assign(entry, { status: 'cash', amount: data.amount, forSeller, payerName: payer_name });
-    } else {
-      Object.assign(entry, { status: 'card_manual', amount: data.amount, paymentId: data.payment_id, payerName: payer_name });
-    }
-    renderActivityFeed();
-    refreshSellerStats();
+    const newId = Date.now();
+    activity.unshift({
+      id: newId, paymentId: data.payment_id, campaignId: camp.id, method, amount: data.amount,
+      buyerName: buyerNameValue, tickets: data.tickets, soldAt: new Date().toISOString(),
+      status: 'undo', remaining: 8, photoAttached: false, draft,
+    });
+    pendingUndo = { activityId: newId, method, campaignId: camp.id };
+
+    sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+    startNumValue = ''; buyerNameValue = '';
+    ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
+    renderSeller();
+    startTicker();
+  } catch (e) { errEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+
+async function doUndo(activityId) {
+  const a = activity.find(x => x.id === activityId); if (!a) return;
+  try {
+    await call('undo_sale', { payment_id: a.paymentId });
   } catch (e) {
-    const entry = activity.find(a => a.id === id);
-    Object.assign(entry, { status: 'error', message: e.message });
-    renderActivityFeed();
-  }
-}
-
-// ---------------- ADMIN VIEW ----------------
-let adminTab = 'dashboard';
-async function renderAdmin() {
-  document.getElementById('headerRight').innerHTML = `<button onclick="logout()">Log out (${state.user.name})</button>`;
-  const isSuper = state.user.role === 'superadmin';
-  if (!isSuper && (adminTab === 'series' || adminTab === 'users' || adminTab === 'recyclebin')) adminTab = 'dashboard';
-  document.getElementById('app').innerHTML = h`
-    <div class="tabs">
-      <button class="${adminTab==='dashboard'?'active':''}" onclick="setAdminTab('dashboard')">Dashboard</button>
-      <button class="${adminTab==='sell'?'active':''}" onclick="setAdminTab('sell')">Sell Tickets</button>
-      <button class="${adminTab==='cash'?'active':''}" onclick="setAdminTab('cash')">Cash Recon</button>
-      <button class="${adminTab==='sales'?'active':''}" onclick="setAdminTab('sales')">Recent Sales</button>
-      <button class="${adminTab==='attention'?'active':''}" onclick="setAdminTab('attention')">Needs Attention</button>
-      ${isSuper ? `<button class="${adminTab==='series'?'active':''}" onclick="setAdminTab('series')">Campaigns</button>` : ''}
-      ${isSuper ? `<button class="${adminTab==='users'?'active':''}" onclick="setAdminTab('users')">Users</button>` : ''}
-      ${isSuper ? `<button class="${adminTab==='retention'?'active':''}" onclick="setAdminTab('retention')">Data Retention</button>` : ''}
-      ${isSuper ? `<button class="${adminTab==='recyclebin'?'active':''}" onclick="setAdminTab('recyclebin')">Recycle Bin</button>` : ''}
-    </div>
-    <div id="retentionBanner"></div>
-    <div id="adminContent"></div>
-  `;
-  if (isSuper) renderRetentionBanner();
-  if (adminTab === 'dashboard') await renderDashboardTab();
-  if (adminTab === 'sell') await renderSellTab();
-  if (adminTab === 'cash') await renderCashTab();
-  if (adminTab === 'sales') await renderSalesTab();
-  if (adminTab === 'attention') await renderAttentionTab();
-  if (adminTab === 'retention') await renderRetentionTab();
-  if (adminTab === 'recyclebin') await renderRecycleBinTab();
-  if (adminTab === 'series') await renderSeriesTab();
-  if (adminTab === 'users') await renderUsersTab();
-}
-function setAdminTab(t) { adminTab = t; renderAdmin(); }
-
-let campaignFilter = ''; // '' = all campaigns
-async function renderDashboardTab() {
-  const { series } = await call('list_series');
-  const d = await call('dashboard_state', { series_id: campaignFilter || undefined });
-  const el = document.getElementById('adminContent');
-  const sellerRows = Object.entries(d.sellerBreakdown).map(([name, v]) => h`
-    <tr><td>${name}</td><td>£${v.card.toFixed(2)}</td><td>£${v.cash_confirmed.toFixed(2)}</td><td>£${v.cash_pending.toFixed(2)}</td></tr>
-  `).join('');
-  el.innerHTML = h`
-    <div class="card">
-      <label>Viewing</label>
-      <select onchange="campaignFilter=this.value; renderDashboardTab();">
-        <option value="" ${!campaignFilter?'selected':''}>All Campaigns (overview)</option>
-        ${series.map(s => `<option value="${s.id}" ${campaignFilter===s.id?'selected':''}>${s.name}</option>`).join('')}
-      </select>
-    </div>
-    <div class="card">
-      <h3 style="margin-top:0">Adult / Child Summary</h3>
-      <div class="stat"><span>Adult tickets sold</span><b>${d.adultSoldCount}</b></div>
-      <div class="stat"><span>Child tickets sold</span><b>${d.childSoldCount}</b></div>
-      <div class="stat"><span>Adult amount</span><b>£${d.adultAmount.toFixed(2)}</b></div>
-      <div class="stat"><span>Children amount</span><b>£${d.childAmount.toFixed(2)}</b></div>
-    </div>
-    <div class="card">
-      <div class="stat"><span><b>Total Collected</b></span><b>£${d.totalCollected.toFixed(2)}</b></div>
-      <div class="stat"><span>Card Payment</span><b>£${d.cardTotal.toFixed(2)}</b></div>
-      <div class="stat"><span>Cash</span><b>£${d.cashTotal.toFixed(2)}</b></div>
-      <div class="stat" style="padding-left:16px"><span>· Reconciled</span><b>£${d.cashConfirmed.toFixed(2)}</b></div>
-      <div class="stat" style="padding-left:16px"><span>· Pending</span><b style="color:var(--warn)">£${d.cashPending.toFixed(2)}</b></div>
-    </div>
-    <div class="card">
-      <div class="stat"><span>Sold</span><b>${d.sold} / ${d.total}</b></div>
-      <div class="stat"><span>Unsold</span><b>${d.unsold}</b></div>
-      <div class="stat"><span>Tickets held, payment incomplete</span><b style="color:var(--warn)">${d.heldCount}</b></div>
-      <div class="stat"><span>Data integrity</span>
-        <span class="badge ${d.integrityOk ? 'ok' : 'bad'}">${d.integrityOk ? 'OK' : 'MISMATCH — check log'}</span>
-      </div>
-    </div>
-    <div class="card">
-      <h3 style="margin-top:0">Seller breakdown</h3>
-      <table><tr><th>Seller</th><th>Card</th><th>Cash confirmed</th><th>Cash pending</th></tr>${sellerRows}</table>
-    </div>
-  `;
-}
-
-async function renderSellTab() {
-  const { series } = await call('list_series');
-  state.series = series;
-  currentSeries = pickDefaultCampaign(series);
-  const stats = currentSeries ? await call('seller_state', { series_id: currentSeries }) : { ticketsSoldCount: 0, cashCollected: 0, cashReconciled: 0, cardTotal: 0 };
-  const el = document.getElementById('adminContent');
-  if (!series.length) {
-    el.innerHTML = `<div class="card"><div class="error">No campaign is active yet — create or activate one under the Campaigns tab first.</div></div>`;
+    // window closed server-side, or something else changed — surface it, keep the entry as-is
+    document.getElementById('submitError').innerHTML = `<div class="error">${esc(e.message)}</div>`;
     return;
   }
-  el.innerHTML = h`
-    <div class="card" id="sellerStatsBlock">${statsBlockHtml(stats)}</div>
-    <div class="card">
-      <h3 style="margin-top:0">Sell Tickets</h3>
-      <p class="muted">Same sale flow sellers use — sales made here are recorded under your own admin login.</p>
-      <label>Campaign</label>
-      <select id="seriesSelect" onchange="currentSeries=this.value; state.lastCampaignId=this.value; saveState(); updateTotal(); refreshSellerStats();">
-        ${series.map(s => `<option value="${s.id}" ${s.id===currentSeries?'selected':''}>${s.name} (£${s.adult_price} adult / £${s.child_price} child)</option>`).join('')}
-      </select>
-      <div class="row" style="margin-top:14px">
-        <div style="flex:1"><label>No. of Adult tickets</label><input id="adultCount" type="number" min="0" inputmode="numeric" value="0" oninput="regenerateTicketNumbers()"></div>
-        <div style="flex:1"><label>No. of Child tickets</label><input id="childCount" type="number" min="0" inputmode="numeric" value="0" oninput="regenerateTicketNumbers()"></div>
+  activity = activity.filter(x => x.id !== activityId);
+  if (pendingUndo && pendingUndo.activityId === activityId) pendingUndo = null;
+
+  if (a.campaignId === state.lastCampaignId && a.draft) {
+    sellCounts = {...a.draft.sellCounts};
+    startNumValue = a.draft.startNumValue;
+    buyerNameValue = a.draft.buyerNameValue;
+    saleMode = a.draft.saleMode;
+    ticketNumbers = a.draft.ticketNumbers.map(t=>({...t}));
+    ticketNumbers.__campaignId = a.campaignId;
+    renderSeller();
+    const errEl = document.getElementById('submitError');
+    if (errEl) errEl.innerHTML = `<div class="info">Sale restored — tap the correct payment method below.</div>`;
+  } else {
+    renderFeed(); updatePaymentButtons();
+  }
+}
+
+function startTicker() {
+  if (tickHandle) return;
+  tickHandle = setInterval(() => {
+    let anyPending = false;
+    activity.forEach(a => { if (a.status === 'undo') { a.remaining -= 1; if (a.remaining <= 0) { a.status='final'; if (pendingUndo && pendingUndo.activityId===a.id) pendingUndo=null; } else anyPending = true; } });
+    renderFeed(); updatePaymentButtons();
+    if (!anyPending) { clearInterval(tickHandle); tickHandle = null; }
+  }, 1000);
+}
+
+function renderFeed() {
+  const el = document.getElementById('feed'); if (!el) return;
+  const camp = currentCampaign();
+  el.innerHTML = activity.filter(a => a.campaignId === camp.id).map(a => {
+    const label = `${a.tickets.length} ticket${a.tickets.length>1?'s':''} (${a.tickets.map(t=>t.ticket_number).join(', ')})`;
+    if (a.status === 'undo') return `<div class="card">${label} for ${esc(a.buyerName||'(no name given)')} — ${a.method==='cash'?'Cash':'Card'} £${a.amount.toFixed(2)} — logging… <span class="muted">(Undo is on the button above)</span></div>`;
+    const when = new Date(a.soldAt).toLocaleString('en-GB', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    return `<div class="card">
+      <div class="info">£${a.amount.toFixed(2)} ${a.method==='cash'?'cash':'card (reader)'} recorded for ${label} (${esc(a.buyerName||'no name given')}).</div>
+      <div style="font-size:11px;color:#888;margin-top:4px">Sold ${when}</div>
+      ${a.method==='card_manual' ? `
+        <label class="photo-label ${a.photoAttached?'attached':''}" for="photo-${a.id}">${a.photoAttached?`<img class="photo-thumb" src="${a.photoAttached}"> Photo attached`:'📷 Add photo of payment (optional)'}</label>
+        <input type="file" accept="image/*" capture="environment" id="photo-${a.id}" style="display:none" onchange="attachPhoto(${a.id}, this)">
+      ` : ''}
+      <div style="margin-top:9px">
+        <button class="link" onclick="toggleShareMenu(${a.id})">📤 Share ticket</button>
       </div>
-      <label>Starting ticket number <span class="muted">(rest fills in automatically — edit any that don't match)</span></label>
-      <input id="startingNumberInput" inputmode="numeric" placeholder="e.g. 30001" oninput="regenerateTicketNumbers()">
-      <div id="ticketNumberRows" style="margin-top:10px"></div>
-      <div class="total" id="totalDisplay">£0.00</div>
-      <label>Buyer name</label>
-      <input id="payerNameInput" placeholder="e.g. Mary O'Brien">
-      <button class="primary" style="background:var(--good)" onclick="submitSale('cash')">Record Cash Payment</button>
-      <button class="primary" style="background:#555" onclick="submitSale('card_manual')">Card Paid on Reader / Link — Log It</button>
-      <button class="secondary" onclick="toggleQrPanel(true)">Show QR to Buyer</button>
-    </div>
-    <div id="qrPanelCard" class="card qr-wrap" style="display:none">
-      <p>Ask the buyer to scan this to pay.</p>
-      <img src="assets/payment-qr.png" alt="Scan to pay" style="max-width:220px">
-      <button class="secondary" onclick="toggleQrPanel(false)" style="margin-top:10px">Back to Sale</button>
-    </div>
-    <div id="activityFeed"></div>
-  `;
-  renderActivityFeed();
+      ${shareMenuOpenFor===a.id ? shareMenuHtml(a) : ''}
+    </div>`;
+  }).join('');
 }
 
-async function renderCashTab() {
-  const { users } = await call('list_users');
-  const { series } = await call('list_series');
-  const sellers = users.filter(u => u.active); // anyone who can sell (seller, admin, or superadmin) can have cash to reconcile
+function toggleShareMenu(id) { shareMenuOpenFor = shareMenuOpenFor === id ? null : id; renderFeed(); }
+function shareMessageFor(a) {
+  const camp = state.campaigns.find(c => c.id === a.campaignId);
+  const byTier = {};
+  a.tickets.forEach(t => byTier[t.tier_name] = (byTier[t.tier_name]||0)+1);
+  const denom = Object.entries(byTier).map(([name,n]) => `${n} x ${name}`).join(', ');
+  const numbers = a.tickets.map(t => t.ticket_number).join(', ');
+  const when = new Date(a.soldAt).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  return [camp.name, `${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Ticket number(s): ${numbers}`, `Total: £${a.amount.toFixed(2)}`, `Sold: ${when}`, `Thank you for your support!`].join('\n');
+}
+function shareMenuHtml(a) {
+  const body = encodeURIComponent(shareMessageFor(a));
+  const camp = state.campaigns.find(c => c.id === a.campaignId);
+  const subject = encodeURIComponent(`${camp.name} — your ticket`);
+  return `<div style="background:#f4f0e6;border:1px dashed var(--line);border-radius:10px;padding:10px;margin-top:8px">
+    <div style="font-size:11.5px;color:#777;margin-bottom:8px">Send this ticket by:</div>
+    <div class="share-row">
+      <a class="share-link" href="sms:?body=${body}">📱 SMS</a>
+      <a class="share-link" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">💬 WhatsApp</a>
+      <a class="share-link" href="mailto:?subject=${subject}&body=${body}">✉️ Email</a>
+    </div>
+  </div>`;
+}
+
+async function attachPhoto(activityId, inputEl) {
+  const file = inputEl.files[0]; if (!file) return;
+  const entry = activity.find(a => a.id === activityId); if (!entry) return;
+  try {
+    const resizedBase64 = await resizeImageForUpload(file);
+    await call('upload_payment_photo', { payment_id: entry.paymentId, image_base64: resizedBase64 });
+    entry.photoAttached = resizedBase64;
+  } catch (e) { alert('Photo upload failed — sale is still recorded fine: ' + e.message); }
+  renderFeed();
+}
+function resizeImageForUpload(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(); const reader = new FileReader();
+    reader.onload = e => { img.src = e.target.result; };
+    reader.onerror = reject;
+    img.onload = () => {
+      const maxDim = 1000; const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width * scale; canvas.height = img.height * scale;
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = reject; reader.readAsDataURL(file);
+  });
+}
+
+
+// ================= ADMIN / SUPERADMIN =================
+let adminTab = 'campaigns', campaignFilter = '';
+async function renderAdmin() {
+  document.getElementById('app').innerHTML = h`
+    <div id="retentionBanner"></div>
+    <div class="tabs">
+      <button class="${adminTab==='campaigns'?'active':''}" onclick="setAdminTab('campaigns')">Campaigns</button>
+      <button class="${adminTab==='sales'?'active':''}" onclick="setAdminTab('sales')">Sales</button>
+      <button class="${adminTab==='cash'?'active':''}" onclick="setAdminTab('cash')">Cash Recon</button>
+      <button class="${adminTab==='attention'?'active':''}" onclick="setAdminTab('attention')">Needs Attention</button>
+      ${state.user.role==='superadmin' ? `<button class="${adminTab==='users'?'active':''}" onclick="setAdminTab('users')">Users</button>` : ''}
+      ${state.user.role==='superadmin' ? `<button class="${adminTab==='bin'?'active':''}" onclick="setAdminTab('bin')">Recycle Bin</button>` : ''}
+    </div>
+    <div id="adminContent"></div>
+  `;
+  if (state.user.role === 'superadmin') renderRetentionBanner();
+  dispatchAdminTab();
+}
+function setAdminTab(t) { adminTab = t; dispatchAdminTab(); }
+function dispatchAdminTab() {
+  ({ campaigns: renderCampaignsTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, users: renderUsersTab, bin: renderRecycleBinTab })[adminTab]();
+}
+
+async function renderRetentionBanner() {
+  const bannerEl = document.getElementById('retentionBanner'); if (!bannerEl) return;
+  try {
+    const { count } = await call('retention_flags');
+    if (!count) { bannerEl.innerHTML = ''; return; }
+    bannerEl.innerHTML = `<div class="card"><div class="hint">${count} old record(s) still carry a buyer's name past the retention window.
+      <button class="small" style="margin-top:8px" onclick="doAnonymize()">Anonymize names now</button></div></div>`;
+  } catch { bannerEl.innerHTML = ''; }
+}
+async function doAnonymize() {
+  try { const r = await call('anonymize_old_data'); alert(`Cleared ${r.payments_cleared} payment name(s) and ${r.tickets_cleared} ticket name(s).`); renderRetentionBanner(); }
+  catch (e) { alert(e.message); }
+}
+
+// ---- Campaigns tab ----
+let draftTiers = [{name:'',price:''},{name:'',price:''}];
+let draftBlocks = [{type:'physical', label:'', range_start:'', range_end:''}];
+
+async function renderCampaignsTab() {
+  const { campaigns } = await call('list_campaigns', { include_inactive: true });
+  let orgSettings = null;
+  if (state.user.role === 'superadmin') { try { orgSettings = (await call('get_org_settings')).organization; } catch {} }
+
   const el = document.getElementById('adminContent');
   el.innerHTML = h`
+    ${orgSettings ? `
     <div class="card">
-      <h3 style="margin-top:0">Confirm Cash Received</h3>
-      <label>Campaign</label>
-      <select id="reconSeries">${series.map(s => `<option value="${s.id}">${s.name}</option>`).join('') || '<option disabled>No campaigns yet</option>'}</select>
-      <label>Person handing over cash</label>
-      <select id="reconSeller">${sellers.map(s => `<option value="${s.id}">${s.name}${s.role !== 'seller' ? ' ('+s.role+')' : ''}</option>`).join('')}</select>
-      <label>Amount received (£)</label>
-      <input id="reconAmount" type="number" step="0.01" inputmode="decimal">
-      <button class="primary" onclick="doCashRecon()">Confirm & Reconcile</button>
-      <div id="reconResult"></div>
+      <h3 style="margin-top:0">Payment Link</h3>
+      <p class="muted">One reusable SumUp Payment Link for this parish — shown as a QR and shareable by SMS/WhatsApp/Email on the Sell screen.</p>
+      <input id="paymentLinkInput" placeholder="https://pay.sumup.com/..." value="${esc(orgSettings.payment_link_url||'')}">
+      <button class="small" style="margin-top:8px" onclick="doSavePaymentLink()">Save</button>
+      <div id="paymentLinkResult"></div>
+    </div>` : ''}
+    <div class="card">
+      <h3 style="margin-top:0">Existing Campaigns</h3>
+      <table>
+        <tr><th>Name</th><th>Tiers</th><th>Blocks</th><th>Status</th><th></th></tr>
+        ${campaigns.map(c => `<tr>
+          <td>${esc(c.name)}</td>
+          <td>${esc(tierSummary(c))}</td>
+          <td>${esc(blockSummary(c))}</td>
+          <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span></td>
+          <td>
+            ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
+            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
+            <button class="small" onclick="doBinCampaign('${c.id}','${esc(c.name).replace(/'/g,"\\'")}')">Bin</button>` : ''}
+          </td>
+        </tr>`).join('')}
+      </table>
+      <p class="muted">Only Active campaigns are selectable on the Sell screen.</p>
     </div>
+    ${state.user.role==='superadmin' ? `
+    <div class="card">
+      <h3 style="margin-top:0">Add New Campaign</h3>
+      <label>Name</label><input id="cName" placeholder="e.g. Christmas Dinner 2026">
+      <label>Price tiers</label>
+      <div id="tierRows">${draftTiers.map((t,i)=>tierRowHtml(t,i)).join('')}</div>
+      <button class="ghost" onclick="addTierRow()">+ Add another tier</button>
+      <label>Ticket blocks <span class="muted">— physical, digital, or a mix (hybrid)</span></label>
+      <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i)).join('')}</div>
+      <button class="ghost" onclick="addBlockRow()">+ Add another block</button>
+      <button class="primary" onclick="createCampaign()">Create Campaign</button>
+      <div id="createResult"></div>
+    </div>` : ''}
   `;
 }
-async function doCashRecon() {
-  const seller_id = document.getElementById('reconSeller').value;
-  const series_id = document.getElementById('reconSeries').value;
-  const amount_received = Number(document.getElementById('reconAmount').value);
-  const resEl = document.getElementById('reconResult');
+function blockSummary(c) { return c.blocks.map(b => b.type==='digital' ? `${b.label} · digital` : `${b.range_start}–${b.range_end}${b.label!=='Main'?' ('+b.label+')':''}`).join(', '); }
+
+function tierRowHtml(t,i) {
+  return `<div class="tier-row">
+    <div><label>${i===0?'Tier name':''}</label><input value="${esc(t.name)}" placeholder="e.g. Adult" oninput="draftTiers[${i}].name=this.value"></div>
+    <div style="max-width:100px"><label>${i===0?'Price £':''}</label><input type="number" step="0.01" min="0" value="${t.price}" oninput="draftTiers[${i}].price=this.value"></div>
+    <button class="icon-x" onclick="removeTierRow(${i})" ${draftTiers.length<=1?'style="visibility:hidden"':''}>✕</button>
+  </div>`;
+}
+function blockRowHtml(b,i) {
+  const isDigital = b.type==='digital';
+  return `<div class="block-row" style="flex-wrap:wrap">
+    <div style="flex:0 0 auto"><label>${i===0?'Type':''}</label>
+      <div class="toggle" style="width:150px">
+        <button type="button" class="${!isDigital?'active':''}" onclick="setBlockType(${i},'physical')">Physical</button>
+        <button type="button" class="${isDigital?'active alt':''}" onclick="setBlockType(${i},'digital')">Digital</button>
+      </div>
+    </div>
+    ${isDigital ? `<div style="flex:1 1 110px"><span class="muted">Nothing else to fill in — it names and numbers itself.</span></div>` : `
+    <div style="flex:1 1 100px"><label>${i===0?'Label':''}</label><input value="${esc(b.label)}" placeholder="e.g. Main" oninput="draftBlocks[${i}].label=this.value"></div>
+    <div style="flex:1 1 80px"><label>${i===0?'Start #':''}</label><input type="number" value="${b.range_start}" oninput="draftBlocks[${i}].range_start=this.value"></div>
+    <div style="flex:1 1 80px"><label>${i===0?'End #':''}</label><input type="number" value="${b.range_end}" oninput="draftBlocks[${i}].range_end=this.value"></div>`}
+    <button class="icon-x" onclick="removeBlockRow(${i})" ${draftBlocks.length<=1?'style="visibility:hidden"':''}>✕</button>
+  </div>`;
+}
+function setBlockType(i,type) { draftBlocks[i].type = type; renderCampaignsTab(); }
+function addTierRow() { draftTiers.push({name:'',price:''}); renderCampaignsTab(); }
+function removeTierRow(i) { if (draftTiers.length<=1) return; draftTiers.splice(i,1); renderCampaignsTab(); }
+function addBlockRow() { draftBlocks.push({type:'physical', label:'', range_start:'', range_end:''}); renderCampaignsTab(); }
+function removeBlockRow(i) { if (draftBlocks.length<=1) return; draftBlocks.splice(i,1); renderCampaignsTab(); }
+
+async function createCampaign() {
+  const resEl = document.getElementById('createResult');
   try {
-    const data = await call('cash_recon', { seller_id, series_id, amount_received });
-    let msg = `Matched ${data.matched_count} sale(s) totalling £${data.matched_amount.toFixed(2)}.`;
-    if (data.surplus > 0) msg += ` <br><b style="color:var(--warn)">£${data.surplus.toFixed(2)} surplus — everything's matched, this is extra on top. Check with seller.</b>`;
-    if (data.shortfall > 0) msg += ` <br><b style="color:var(--bad)">£${data.shortfall.toFixed(2)} short of the next pending sale (£${data.still_pending[0] ? Number(data.still_pending[0].amount).toFixed(2) : '?'}) — nothing more confirmed until the rest is handed over.</b>`;
-    if (data.still_pending.length) msg += `<br>${data.still_pending.length} sale(s) still pending for this seller.`;
-    resEl.innerHTML = `<div class="info">${msg}</div>`;
-  } catch (e) { resEl.innerHTML = `<div class="error">${e.message}</div>`; }
+    const tiers = draftTiers.filter(t=>t.name.trim()!=='' && t.price!=='').map(t=>({name:t.name.trim(), price:Number(t.price)}));
+    const blocks = draftBlocks.filter(b=>b.type==='digital' || (b.range_start!=='' && b.range_end!=='')).map(b =>
+      b.type==='digital' ? { type:'digital' } : { type:'physical', label:b.label.trim()||'Main', range_start:Number(b.range_start), range_end:Number(b.range_end) });
+    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks });
+    draftTiers = [{name:'',price:''},{name:'',price:''}];
+    draftBlocks = [{type:'physical', label:'', range_start:'', range_end:''}];
+    renderCampaignsTab();
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
+async function downloadCampaignReport(id) {
+  try {
+    const { csv, filename } = await call('export_campaign_report', { campaign_id: id });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  } catch (e) { alert(e.message); }
+}
+async function doBinCampaign(id, name) {
+  if (!confirm(`Move "${name}" to the Recycle Bin? Data is kept, not deleted.`)) return;
+  try { await call('bin_campaign', { campaign_id: id }); renderCampaignsTab(); } catch (e) { alert(e.message); }
+}
+async function doSavePaymentLink() {
+  const resEl = document.getElementById('paymentLinkResult');
+  try { await call('set_org_payment_link', { payment_link_url: document.getElementById('paymentLinkInput').value.trim() }); resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; }
+  catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-async function renderSalesTab() {
-  const { series } = await call('list_series');
-  const { payments } = await call('list_recent_payments', { series_id: campaignFilter || undefined });
+async function renderRecycleBinTab() {
+  const { campaigns } = await call('list_binned_campaigns');
   const el = document.getElementById('adminContent');
-  el.innerHTML = `<div class="card">
-    <label>Viewing</label>
+  el.innerHTML = h`<div class="card"><h3 style="margin-top:0">Recycle Bin</h3>
+    ${!campaigns.length ? '<p class="muted">Nothing in the bin.</p>' : `
+    <table><tr><th>Name</th><th>Tiers</th><th></th></tr>
+    ${campaigns.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(tierSummary(c))}</td>
+      <td><button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
+      <button class="small" onclick="doRestoreCampaign('${c.id}')">Restore</button></td></tr>`).join('')}
+    </table>`}
+  </div>`;
+}
+async function doRestoreCampaign(id) { try { await call('restore_campaign', { campaign_id: id }); renderRecycleBinTab(); } catch (e) { alert(e.message); } }
+
+// ---- Sales tab ----
+async function renderSalesTab() {
+  const { campaigns } = await call('list_campaigns');
+  const { payments } = await call('list_recent_payments', { campaign_id: campaignFilter || undefined });
+  const el = document.getElementById('adminContent');
+  el.innerHTML = `<div class="card"><label>Viewing</label>
     <select onchange="campaignFilter=this.value; renderSalesTab();">
-      <option value="" ${!campaignFilter?'selected':''}>All Campaigns</option>
-      ${series.map(s => `<option value="${s.id}" ${campaignFilter===s.id?'selected':''}>${s.name}</option>`).join('')}
-    </select>
-    </div>
+      <option value="">All Campaigns</option>
+      ${campaigns.map(c=>`<option value="${c.id}" ${campaignFilter===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+    </select></div>
     <div class="card"><h3 style="margin-top:0">Recent Sales</h3><table>
     <tr><th>Tickets</th><th>Seller</th><th>Amt</th><th>Method</th><th>Status</th><th></th></tr>
-    ${payments.map(p => `
-      <tr>
-        <td>${p.tickets.join(' · ')}</td>
-        <td>${p.seller}</td>
-        <td>£${Number(p.amount).toFixed(2)}</td>
-        <td>${p.method}</td>
-        <td><span class="badge ${p.status==='paid'?'ok':p.status==='pending'?'warn':'bad'}">${p.status}</span></td>
-        <td>${p.status !== 'void' ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}
-        ${p.has_photo ? `<button class="small" onclick="viewPhoto('${p.id}')">View Photo</button>` : ''}</td>
-      </tr>`).join('')}
-  </table></div>`;
-}
-async function viewPhoto(paymentId) {
-  try {
-    const { url } = await call('get_payment_photo_url', { payment_id: paymentId });
-    window.open(url, '_blank');
-  } catch (e) { alert(e.message); }
+    ${payments.map(p=>`<tr>
+      <td>${p.tickets.join(' · ')}</td><td>${esc(p.seller)}</td><td>£${Number(p.amount).toFixed(2)}</td><td>${p.method}</td>
+      <td><span class="badge ${p.status==='paid'?'ok':p.status==='pending'?'warn':'bad'}">${p.status}</span></td>
+      <td>${p.status!=='void' ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}
+      ${p.has_photo ? `<button class="small" onclick="viewPhoto('${p.id}')">Photo</button>` : ''}</td>
+    </tr>`).join('')}
+    </table></div>`;
 }
 async function doVoid(paymentId) {
   const reason = prompt('Reason for voiding this sale?');
   if (!reason) return;
-  try { await call('void_sale', { payment_id: paymentId, reason }); renderSalesTab(); }
-  catch (e) { alert(e.message); }
+  try { await call('void_sale', { payment_id: paymentId, reason }); renderSalesTab(); } catch (e) { alert(e.message); }
+}
+async function viewPhoto(paymentId) {
+  try { const { url } = await call('get_payment_photo_url', { payment_id: paymentId }); window.open(url, '_blank'); } catch (e) { alert(e.message); }
 }
 
-function minutesAgo(iso) { return Math.round((Date.now() - new Date(iso).getTime()) / 60000); }
-
-async function renderAttentionTab() {
-  const { series } = await call('list_series');
-  const { payments } = await call('list_incomplete_payments', { series_id: campaignFilter || undefined });
+// ---- Cash Recon tab ----
+async function renderCashTab() {
+  const { campaigns } = await call('list_campaigns');
+  const { users } = await call('list_users');
+  const sellers = users.filter(u => u.active); // anyone active can have cash to reconcile
   const el = document.getElementById('adminContent');
-  const filterHtml = `<div class="card">
-    <label>Viewing</label>
-    <select onchange="campaignFilter=this.value; renderAttentionTab();">
-      <option value="" ${!campaignFilter?'selected':''}>All Campaigns</option>
-      ${series.map(s => `<option value="${s.id}" ${campaignFilter===s.id?'selected':''}>${s.name}</option>`).join('')}
-    </select>
-    </div>`;
-  if (!payments.length) {
-    el.innerHTML = filterHtml + `<div class="card"><div class="info">Nothing outstanding — every card payment in flight has either completed or been resolved.</div></div>`;
-    return;
-  }
-  el.innerHTML = filterHtml + `<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
-    <p class="muted">Card payments awaiting completion or that failed/expired — resend generates a fresh payment link for the same tickets.</p>
-    <table><tr><th>Tickets</th><th>Payer</th><th>Amount</th><th>Seller</th><th>Status</th><th>Age</th><th></th></tr>
-    ${payments.map(p => `
-      <tr>
-        <td>${p.tickets.join(' · ')}</td>
-        <td>${p.payer_name || '—'}</td>
-        <td>£${Number(p.amount).toFixed(2)}</td>
-        <td>${p.seller}</td>
-        <td><span class="badge ${p.status==='pending'?'warn':'bad'}">${p.status}</span></td>
-        <td>${minutesAgo(p.created_at)}m${p.resend_count ? ` · resent ${p.resend_count}x` : ''}</td>
-        <td><button class="small" onclick="doResend('${p.id}')">Resend</button></td>
-      </tr>`).join('')}
-    </table>
-  </div>
-  <div id="resendResult"></div>`;
+  el.innerHTML = `<div class="card"><h3 style="margin-top:0">Cash Reconciliation</h3>
+    <label>Campaign</label><select id="reconCampaign">${campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+    <label>Seller</label><select id="reconSeller">${sellers.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+    <label>Cash amount handed over (£)</label><input id="reconAmount" type="number" step="0.01">
+    <button class="primary" onclick="doCashRecon()">Confirm & Reconcile</button>
+    <div id="reconResult"></div>
+  </div>`;
 }
-
-async function doResend(paymentId) {
-  const resEl = document.getElementById('resendResult');
+async function doCashRecon() {
+  const resEl = document.getElementById('reconResult');
   try {
-    const data = await call('resend_payment', { payment_id: paymentId });
-    resEl.innerHTML = h`
-      <div class="card qr-wrap">
-        <p>New payment link for £${data.amount.toFixed(2)}</p>
-        <img src="https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(data.pay_url)}" alt="Scan to pay">
-        <a class="secondary" style="display:block;text-decoration:none;text-align:center;padding:12px;border-radius:10px" href="${data.pay_url}" target="_blank">Open payment page</a>
-        <a class="secondary" style="display:block;text-decoration:none;text-align:center;padding:12px;border-radius:10px;margin-top:8px" href="https://wa.me/?text=${encodeURIComponent('Pay for your tickets here: ' + data.pay_url)}" target="_blank">Share via WhatsApp</a>
-      </div>`;
-  } catch (e) { resEl.innerHTML = `<div class="error">${e.message}</div>`; }
-}
-
-async function renderSeriesTab() {
-  const { series } = await call('list_series', { include_inactive: true });
-  const el = document.getElementById('adminContent');
-  el.innerHTML = h`
-    <div class="card"><h3 style="margin-top:0">Existing Campaigns</h3>
-      <table><tr><th>Name</th><th>Range</th><th>Adult</th><th>Child</th><th>Status</th><th></th></tr>
-      ${series.map(s => `<tr><td>${s.name}</td><td>${s.range_start}-${s.range_end}</td><td>£${s.adult_price}</td><td>£${s.child_price}</td>
-        <td><span class="badge ${s.active?'ok':'bad'}">${s.active?'Active':'Inactive'}</span></td>
-        <td>
-          <button class="small" onclick="toggleCampaignActive('${s.id}', ${!s.active})">${s.active?'Deactivate':'Activate'}</button>
-          <button class="small" onclick="downloadCampaignReport('${s.id}')">Download Report</button>
-          <button class="small" onclick="doBinCampaign('${s.id}', '${s.name.replace(/'/g,"\\'")}')">Move to Bin</button>
-        </td></tr>`).join('')}
-      </table>
-      <p class="muted">Only Active campaigns are selectable on the Sell page. When more than one is active, the earliest-created one shows by default.</p>
-    </div>
-    <div class="card"><h3 style="margin-top:0">Add New Campaign</h3>
-      <label>Name</label><input id="sName" placeholder="e.g. BBQ26-TOPUP">
-      <label>Ticket number range</label>
-      <div class="row"><input id="sStart" type="number" placeholder="Start"><input id="sEnd" type="number" placeholder="End"></div>
-      <label>Adult price (£)</label><input id="sAdult" type="number" step="0.01" value="12">
-      <label>Child price (£)</label><input id="sChild" type="number" step="0.01" value="5">
-      <button class="primary" onclick="doCreateSeries()">Create Campaign</button>
-      <div id="seriesResult"></div>
-    </div>
-  `;
-}
-async function toggleCampaignActive(seriesId, active) {
-  try { await call('set_campaign_active', { series_id: seriesId, active }); renderSeriesTab(); }
-  catch (e) { alert(e.message); }
-}
-async function downloadCampaignReport(seriesId) {
-  try {
-    const { csv, filename } = await call('export_campaign_report', { series_id: seriesId });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  } catch (e) { alert(e.message); }
-}
-async function doBinCampaign(seriesId, name) {
-  if (!confirm(`Move "${name}" to the Recycle Bin? It'll disappear from every dashboard and seller's stats, but the data isn't deleted — you can restore it later.`)) return;
-  try { await call('bin_campaign', { series_id: seriesId }); renderSeriesTab(); }
-  catch (e) { alert(e.message); }
-}
-
-async function renderRecycleBinTab() {
-  const { series } = await call('list_binned_campaigns');
-  const el = document.getElementById('adminContent');
-  el.innerHTML = h`
-    <div class="card">
-      <h3 style="margin-top:0">Recycle Bin</h3>
-      <p class="muted">Binned campaigns are excluded from every dashboard and seller's stats — the data is kept, not deleted, and reports can still be downloaded.</p>
-      ${!series.length ? '<p class="muted">Nothing in the bin.</p>' : `
-      <table><tr><th>Name</th><th>Range</th><th>Adult</th><th>Child</th><th></th></tr>
-      ${series.map(s => `<tr><td>${s.name}</td><td>${s.range_start}-${s.range_end}</td><td>£${s.adult_price}</td><td>£${s.child_price}</td>
-        <td>
-          <button class="small" onclick="downloadCampaignReport('${s.id}')">Download Report</button>
-          <button class="small" onclick="doRestoreCampaign('${s.id}')">Restore</button>
-        </td></tr>`).join('')}
-      </table>`}
-    </div>
-  `;
-}
-async function doRestoreCampaign(seriesId) {
-  try { await call('restore_campaign', { series_id: seriesId }); renderRecycleBinTab(); }
-  catch (e) { alert(e.message); }
-}
-
-async function doCreateSeries() {
-  const resEl = document.getElementById('seriesResult');
-  try {
-    await call('create_series', {
-      name: document.getElementById('sName').value.trim(),
-      range_start: Number(document.getElementById('sStart').value),
-      range_end: Number(document.getElementById('sEnd').value),
-      adult_price: Number(document.getElementById('sAdult').value),
-      child_price: Number(document.getElementById('sChild').value),
+    const data = await call('cash_recon', {
+      seller_id: document.getElementById('reconSeller').value,
+      campaign_id: document.getElementById('reconCampaign').value,
+      amount_received: Number(document.getElementById('reconAmount').value),
     });
-    renderSeriesTab();
-  } catch (e) { resEl.innerHTML = `<div class="error">${e.message}</div>`; }
+    let msg = `Matched ${data.matched_count} sale(s) totalling £${data.matched_amount.toFixed(2)}.`;
+    if (data.surplus > 0) msg += `<br><b style="color:var(--warn)">£${data.surplus.toFixed(2)} surplus — everything's matched, this is extra. Check with seller.</b>`;
+    if (data.shortfall > 0) msg += `<br><b style="color:var(--bad)">£${data.shortfall.toFixed(2)} short of the next pending sale — nothing more confirmed until the rest is handed over.</b>`;
+    if (data.still_pending.length) msg += `<br>${data.still_pending.length} sale(s) still pending for this seller.`;
+    resEl.innerHTML = `<div class="info">${msg}</div>`;
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-async function renderRetentionBanner() {
-  const bannerEl = document.getElementById('retentionBanner');
-  if (!bannerEl) return;
-  try {
-    const { count } = await call('retention_flags');
-    if (count > 0) {
-      bannerEl.innerHTML = `<div class="card"><div class="error">
-        ${count} record(s) contain a name older than 90 days — your data retention policy says these should be reviewed.
-        <button class="small" style="margin-left:8px" onclick="setAdminTab('retention')">Review now</button>
-      </div></div>`;
-    }
-  } catch { /* non-critical */ }
-}
-
-async function renderRetentionTab() {
-  const { count, payments, tickets } = await call('retention_flags');
+// ---- Needs Attention tab (card payments awaiting/failed via SumUp) ----
+async function renderAttentionTab() {
+  const { payments } = await call('list_incomplete_payments', { campaign_id: campaignFilter || undefined });
   const el = document.getElementById('adminContent');
-  el.innerHTML = h`
-    <div class="card">
-      <h3 style="margin-top:0">Data Retention (90-day policy)</h3>
-      <p class="muted">Personal names older than 90 days, flagged for review. Anonymizing clears the name only —
-      amounts, ticket numbers, and totals are kept, since financial records typically need to be retained
-      for accounting purposes even after personal data should be minimized.</p>
-      ${count === 0 ? '<div class="info">Nothing due for review right now.</div>' : h`
-        <div class="stat"><span>Payer names flagged</span><b>${payments.length}</b></div>
-        <div class="stat"><span>Ticket attendee names flagged</span><b>${tickets.length}</b></div>
-        <button class="primary" style="background:var(--bad)" onclick="doAnonymize()">Anonymize all ${count} flagged record(s)</button>
-      `}
-      <div id="retentionResult"></div>
-    </div>
-  `;
+  el.innerHTML = `<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
+    ${!payments.length ? '<p class="muted">Nothing needs attention.</p>' : `
+    <table><tr><th>Tickets</th><th>Buyer</th><th>Amt</th><th>Status</th><th></th></tr>
+    ${payments.map(p=>`<tr><td>${p.tickets.join(' · ')}</td><td>${esc(p.payer_name||'')}</td><td>£${Number(p.amount).toFixed(2)}</td>
+      <td><span class="badge ${p.status==='failed'?'bad':'warn'}">${p.status}</span></td>
+      <td><button class="small" onclick="doResend('${p.id}')">Resend</button></td></tr>`).join('')}
+    </table>`}
+  </div>`;
 }
-async function doAnonymize() {
-  if (!confirm('This permanently clears names on all flagged records. Amounts and ticket numbers are kept. Continue?')) return;
-  const resEl = document.getElementById('retentionResult');
-  try {
-    const data = await call('anonymize_old_data');
-    resEl.innerHTML = `<div class="info">Cleared ${data.payments_cleared} payer name(s) and ${data.tickets_cleared} ticket name(s).</div>`;
-    renderRetentionTab();
-    renderRetentionBanner();
-  } catch (e) { resEl.innerHTML = `<div class="error">${e.message}</div>`; }
+async function doResend(paymentId) {
+  try { const r = await call('resend_payment', { payment_id: paymentId }); alert('New payment link created: ' + r.pay_url); renderAttentionTab(); }
+  catch (e) { alert(e.message); }
 }
 
+// ---- Users tab (SuperAdmin only) ----
 async function renderUsersTab() {
   const { users } = await call('list_users');
-  const { series } = await call('list_series', { include_inactive: true });
+  const { campaigns } = await call('list_campaigns', { include_inactive: true });
   const el = document.getElementById('adminContent');
-  el.innerHTML = h`
-    <div class="card"><h3 style="margin-top:0">All Users</h3>
-      <p class="muted">By default every user sees and can sell all active campaigns. Use "Restrict" to switch specific campaigns off for someone.</p>
-      <table><tr><th>Name</th><th>Mobile</th><th>Role</th><th>Status</th><th>Disabled campaigns</th><th></th></tr>
-      ${users.map(u => `
-        <tr><td>${u.name}</td><td>${u.mobile}</td><td>${u.role}</td>
-        <td><span class="badge ${u.active?'ok':'bad'}">${u.active?'active':'disabled'}</span></td>
-        <td>${u.disabled_campaign_names.length ? u.disabled_campaign_names.join(', ') : '<span class="muted">none — full access</span>'}</td>
-        <td>
-          <button class="small" onclick="toggleUser('${u.id}', ${!u.active})">${u.active?'Disable':'Enable'}</button>
-          <button class="small" onclick="toggleAssignEditor('${u.id}')">Restrict</button>
-          <button class="small" onclick="doResetPassword('${u.id}', '${u.name.replace(/'/g,"\\'")}')">Reset Password</button>
-        </td></tr>
-        <tr id="assignRow-${u.id}" style="display:none"><td colspan="6">
-          <p class="muted">Tick any campaign to switch it OFF for this user specifically:</p>
-          ${series.map(s => `<label style="margin-right:14px"><input type="checkbox" value="${s.id}" class="assignCb-${u.id}" ${u.disabled_campaign_ids.includes(s.id)?'checked':''} style="width:auto"> ${s.name}</label>`).join('')}
-          <button class="small" onclick="saveAssignments('${u.id}')">Save</button>
-        </td></tr>
-      `).join('')}
-      </table>
-      <div id="assignResult"></div>
-    </div>
+  el.innerHTML = `<div class="card"><h3 style="margin-top:0">Users</h3>
+    <table><tr><th>Name</th><th>Mobile</th><th>Role</th><th>Status</th><th></th></tr>
+    ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${u.role}</td>
+      <td><span class="badge ${u.active?'ok':'bad'}">${u.active?'Active':'Disabled'}</span></td>
+      <td><button class="small" onclick="toggleUserActive('${u.id}', ${!u.active})">${u.active?'Disable':'Enable'}</button>
+      <button class="small" onclick="doResetPassword('${u.id}')">Reset PW</button></td></tr>`).join('')}
+    </table></div>
     <div class="card"><h3 style="margin-top:0">Add User</h3>
-      <label>Name</label><input id="uName">
-      <label>Mobile number</label><input id="uMobile" type="tel">
-      <label>Role</label>
-      <select id="uRole"><option value="seller">Volunteer Seller</option><option value="admin">Admin</option><option value="superadmin">SuperAdmin</option></select>
-      <label>Password</label><input id="uPassword" type="password">
-      <p class="muted">For Volunteer Sellers, use the one shared password everyone will use. For Admins/SuperAdmins, give each their own.</p>
-      <label>Restrict from campaign(s) <span class="muted">(optional — by default this user gets every active campaign; tick to switch specific ones off)</span></label>
-      ${series.map(s => `<label style="display:block;margin:4px 0"><input type="checkbox" value="${s.id}" class="newUserCb" style="width:auto"> ${s.name}</label>`).join('') || '<p class="muted">No campaigns exist yet.</p>'}
-      <button class="primary" onclick="doCreateUser()">Add User</button>
-      <div id="userResult"></div>
-    </div>
-  `;
-}
-function toggleAssignEditor(userId) {
-  const row = document.getElementById(`assignRow-${userId}`);
-  if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
-}
-async function saveAssignments(userId) {
-  const checked = Array.from(document.querySelectorAll(`.assignCb-${userId}:checked`)).map(cb => cb.value);
-  const resEl = document.getElementById('assignResult');
-  try {
-    await call('set_disabled_campaigns', { user_id: userId, disabled_campaign_ids: checked });
-    renderUsersTab();
-  } catch (e) { resEl.innerHTML = `<div class="error">${e.message}</div>`; }
+    <label>Name</label><input id="uName">
+    <label>Mobile</label><input id="uMobile" type="tel">
+    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="superadmin">SuperAdmin</option></select>
+    <label>Password (8+ characters)</label><input id="uPassword" type="password">
+    <button class="primary" onclick="doCreateUser()">Create User</button>
+    <div id="userResult"></div>
+    </div>`;
 }
 async function doCreateUser() {
   const resEl = document.getElementById('userResult');
-  const disabled_campaign_ids = Array.from(document.querySelectorAll('.newUserCb:checked')).map(cb => cb.value);
   try {
     await call('create_user', {
       name: document.getElementById('uName').value.trim(),
       mobile: document.getElementById('uMobile').value.trim(),
       role: document.getElementById('uRole').value,
       password: document.getElementById('uPassword').value,
-      disabled_campaign_ids,
     });
     renderUsersTab();
-  } catch (e) { resEl.innerHTML = `<div class="error">${e.message}</div>`; }
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
-async function toggleUser(id, active) {
-  try { await call('set_user_active', { user_id: id, active }); renderUsersTab(); }
-  catch (e) { alert(e.message); }
-}
-
-async function doResetPassword(userId, userName) {
-  const newPassword = prompt(`New password for ${userName}:`);
-  if (!newPassword) return;
-  try {
-    await call('reset_password', { user_id: userId, new_password: newPassword });
-    alert(`Password reset for ${userName}.`);
-  } catch (e) { alert(e.message); }
+async function toggleUserActive(id, active) { try { await call('set_user_active', { user_id: id, active }); renderUsersTab(); } catch (e) { alert(e.message); } }
+async function doResetPassword(id) {
+  const pw = prompt('New password (8+ characters):'); if (!pw) return;
+  try { await call('reset_password', { user_id: id, new_password: pw }); alert('Password reset.'); } catch (e) { alert(e.message); }
 }
 
-// ---------------- ROUTER ----------------
-function render() {
-  if (!state.session) { renderLogin(); return; }
-  if (state.user.role === 'seller') renderSeller();
-  else renderAdmin();
-}
-scheduleAutoLogout();
+// ---------- boot ----------
+if (state.session) scheduleAutoLogout();
 render();
 </script>
 </body>
