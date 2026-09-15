@@ -10,9 +10,22 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me';
+// No insecure fallback: the original silently signed sessions with the literal string
+// 'change-me' if this env var was ever left unset, which would let anyone forge a valid
+// session (including Platform Owner) just by knowing that default. Fail loudly instead.
+if (!process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET environment variable is not set — refusing to start with an insecure default.');
+}
+const SESSION_SECRET = process.env.SESSION_SECRET;
 const SUMUP_API_KEY = process.env.SUMUP_API_KEY;
 const SUMUP_MERCHANT_CODE = process.env.SUMUP_MERCHANT_CODE;
+
+const MIN_PASSWORD_LENGTH = 8;
+function assertPasswordStrength(password) {
+  if (!password || password.length < MIN_PASSWORD_LENGTH) {
+    throw httpError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+}
 
 // ---------- session token helpers (lightweight signed token, no external deps) ----------
 function signSession(payload) {
@@ -55,6 +68,7 @@ const json = (status, body) => ({
 async function bootstrapPlatformOwner({ mobile, name, password }) {
   const { count } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'platform_owner');
   if (count > 0) throw httpError(403, 'Setup already complete. Ask the existing Platform Owner to add you.');
+  assertPasswordStrength(password);
   const hash = await bcrypt.hash(password, 10);
   const { data, error } = await supabase.from('users')
     .insert({ mobile, name, role: 'platform_owner', org_id: null, password_hash: hash })
@@ -106,6 +120,7 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
     if (!['seller', 'admin', 'superadmin'].includes(role)) throw httpError(400, 'Invalid role');
     targetOrgId = session.org_id;
   }
+  assertPasswordStrength(password);
   const hash = await bcrypt.hash(password, 10);
   const { data, error } = await supabase.from('users')
     .insert({ mobile, name, role, org_id: targetOrgId, password_hash: hash, created_by: session.uid })
@@ -143,7 +158,7 @@ async function setUserActive(session, { user_id, active }) {
 async function resetPassword(session, { user_id, new_password }) {
   requireOrgRole(session, ['superadmin']);
   await requireUserInOwnOrg(session, user_id);
-  if (!new_password || new_password.length < 4) throw httpError(400, 'Password must be at least 4 characters');
+  assertPasswordStrength(new_password);
   const hash = await bcrypt.hash(new_password, 10);
   const { error } = await supabase.from('users').update({ password_hash: hash }).eq('id', user_id);
   if (error) throw httpError(400, error.message);
@@ -444,23 +459,24 @@ async function recordSale(session, { campaign_id, block_id, tier_counts, ticket_
     if (!ticket_numbers || ticket_numbers.length !== totalCount) {
       throw httpError(400, `Entered ${ticket_numbers ? ticket_numbers.length : 0} ticket number(s) but ${totalCount} were specified — these must match.`);
     }
-    // atomically claim tickets: only succeeds if currently unsold (guards against races)
-    for (let i = 0; i < ticket_numbers.length; i++) {
-      const num = Number(ticket_numbers[i]);
-      const { data: claimed, error: claimErr } = await supabase.from('tickets')
-        .update({ tier_id: tierIdSequence[i], status: initialStatus, payment_id: payment.id, sold_by: session.uid, sold_at: new Date().toISOString() })
-        .eq('block_id', block_id).eq('ticket_number', num).eq('status', 'unsold')
-        .select();
-      if (claimErr || !claimed || claimed.length === 0) {
-        // roll back: void the payment we just created, release any tickets already claimed under it
-        await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null }).eq('payment_id', payment.id);
-        await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'ticket unavailable at claim time' }).eq('id', payment.id);
-        // Figure out WHY the claim failed, so the message is accurate rather than assuming a
-        // race — the far more common cause is a typo or wrong campaign/block selected.
+    // Atomic, all-or-nothing claim: the DB function itself rolls back every update if even
+    // one requested ticket isn't currently 'unsold', so there's no window where a crash or
+    // network blip could leave a sale half-claimed (see claim_physical_tickets migration).
+    const items = ticket_numbers.map((num, i) => ({ ticket_number: Number(num), tier_id: tierIdSequence[i] }));
+    const { error: claimErr } = await supabase.rpc('claim_physical_tickets', {
+      p_block_id: block_id, p_items: items, p_status: initialStatus, p_payment_id: payment.id, p_sold_by: session.uid,
+    });
+    if (claimErr) {
+      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'ticket unavailable at claim time' }).eq('id', payment.id);
+      // Figure out WHY the claim failed, so the message is accurate rather than assuming a
+      // race — the far more common cause is a typo or wrong campaign/block selected. Nothing
+      // was actually claimed (the function rolled itself back), so this reads fresh state.
+      for (const num of ticket_numbers.map(Number)) {
         const { data: existing } = await supabase.from('tickets').select('status').eq('block_id', block_id).eq('ticket_number', num).maybeSingle();
         if (!existing) throw httpError(404, `Ticket ${num} doesn't exist in ${campaign.name} — check the campaign selected and the number entered.`);
-        throw httpError(409, `Ticket ${num} is already ${existing.status} — sale cancelled, please recheck.`);
+        if (existing.status !== 'unsold') throw httpError(409, `Ticket ${num} is already ${existing.status} — sale cancelled, please recheck.`);
       }
+      throw httpError(409, 'One or more tickets became unavailable — sale cancelled, please recheck.');
     }
   }
 
