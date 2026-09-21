@@ -48,6 +48,8 @@ preserve every one of these, not "improve" them away:
    logged the same way, once the seller sees the payment come through.
    **Corrected 2026-09-21:** the payment link (and its QR) belongs to each
    **campaign**, not to the parish as a whole — every campaign has its own.
+   **Superseded 2026-09-21 by §9:** each sale now gets its own SumUp link (with the
+   sale's id as its reference) instead of one fixed campaign link.
 6. **Optional, non-blocking photo evidence** for manually-logged payments —
    never required, never blocks the next sale.
 7. **Specific, accurate error messages.** "This ticket doesn't exist in this
