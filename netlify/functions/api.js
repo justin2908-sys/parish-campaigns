@@ -188,14 +188,11 @@ async function listUsers(session) {
   return { users: out };
 }
 
-async function getOrgSettings(session) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  const { data } = await supabase.from('organizations').select('id, name, payment_link_url').eq('id', session.org_id).single();
-  return { organization: data };
-}
-async function setOrgPaymentLink(session, { payment_link_url }) {
+// Each campaign has its own payment link (and therefore its own QR).
+async function setCampaignPaymentLink(session, { campaign_id, payment_link_url }) {
   requireOrgRole(session, ['superadmin']);
-  const { error } = await supabase.from('organizations').update({ payment_link_url: payment_link_url || null }).eq('id', session.org_id);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const { error } = await supabase.from('campaigns').update({ payment_link_url: (payment_link_url || '').trim() || null }).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
@@ -203,7 +200,7 @@ async function setOrgPaymentLink(session, { payment_link_url }) {
 // ---------- Campaigns, Tiers, Ticket Blocks ----------
 
 // tiers: [{ name, price }]  blocks: [{ type: 'physical'|'digital', label?, range_start?, range_end? }]
-async function createCampaign(session, { name, tiers, blocks }) {
+async function createCampaign(session, { name, tiers, blocks, payment_link_url }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
@@ -219,7 +216,7 @@ async function createCampaign(session, { name, tiers, blocks }) {
   }
 
   const { data: campaign, error: campErr } = await supabase.from('campaigns')
-    .insert({ org_id: session.org_id, name: name.trim(), created_by: session.uid })
+    .insert({ org_id: session.org_id, name: name.trim(), created_by: session.uid, payment_link_url: (payment_link_url || '').trim() || null })
     .select().single();
   if (campErr) throw httpError(400, campErr.message);
 
@@ -909,8 +906,7 @@ const actions = {
   list_organizations: (s) => listOrganizations(s),
 
   login: (s, b) => login(b),
-  get_org_settings: (s) => getOrgSettings(s),
-  set_org_payment_link: (s, b) => setOrgPaymentLink(s, b),
+  set_campaign_payment_link: (s, b) => setCampaignPaymentLink(s, b),
   create_user: (s, b) => createUser(s, b),
   set_user_active: (s, b) => setUserActive(s, b),
   reset_password: (s, b) => resetPassword(s, b),

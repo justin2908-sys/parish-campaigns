@@ -248,7 +248,6 @@ async function renderSeller() {
     document.getElementById('app').innerHTML = `<div class="card"><div class="error">No campaign is active yet — ask a SuperAdmin to create or activate one.</div></div>`;
     return;
   }
-  if (!state.org) { try { const { organization } = await call('get_org_settings'); state.org = organization; } catch {} }
 
   const camp = currentCampaign();
   const stats = await call('seller_state', { campaign_id: camp.id });
@@ -319,9 +318,9 @@ function setSaleMode(m) { saleMode = m; startNumValue = ''; ticketNumbers = []; 
 function toggleQr() { qrOpen = !qrOpen; renderSeller(); }
 
 function renderQrPanel(camp) {
-  const url = state.org && state.org.payment_link_url;
+  const url = camp.payment_link_url;
   if (!url) {
-    return `<div class="card qr-wrap"><p class="muted">No payment link has been set up for this parish yet — ask a SuperAdmin to add one under Campaigns → Payment Link.</p>
+    return `<div class="card qr-wrap"><p class="muted">No payment link has been set up for ${esc(camp.name)} yet — ask a SuperAdmin to add one under Campaigns.</p>
       <button class="secondary" onclick="toggleQr()">Back to Sale</button></div>`;
   }
   const camp2 = currentCampaign();
@@ -630,19 +629,8 @@ let draftBlocks = [{type:'physical', label:'', range_start:'', range_end:''}];
 
 async function renderCampaignsTab() {
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
-  let orgSettings = null;
-  if (state.user.role === 'superadmin') { try { orgSettings = (await call('get_org_settings')).organization; } catch {} }
-
   const el = document.getElementById('adminContent');
   el.innerHTML = h`
-    ${orgSettings ? `
-    <div class="card">
-      <h3 style="margin-top:0">Payment Link</h3>
-      <p class="muted">One reusable SumUp Payment Link for this parish — shown as a QR and shareable by SMS/WhatsApp/Email on the Sell screen.</p>
-      <input id="paymentLinkInput" placeholder="https://pay.sumup.com/..." value="${esc(orgSettings.payment_link_url||'')}">
-      <button class="small" style="margin-top:8px" onclick="doSavePaymentLink()">Save</button>
-      <div id="paymentLinkResult"></div>
-    </div>` : ''}
     <div class="card">
       <h3 style="margin-top:0">Existing Campaigns</h3>
       <table>
@@ -654,6 +642,7 @@ async function renderCampaignsTab() {
           <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span></td>
           <td>
             ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
+            <button class="small" onclick="doEditPaymentLink('${c.id}', '${esc(c.payment_link_url||'').replace(/'/g,"\\'")}')">${c.payment_link_url ? 'Pay link ✓' : 'Add pay link'}</button>
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
             <button class="small" onclick="doBinCampaign('${c.id}','${esc(c.name).replace(/'/g,"\\'")}')">Bin</button>` : ''}
           </td>
@@ -668,6 +657,8 @@ async function renderCampaignsTab() {
       <label>Price tiers</label>
       <div id="tierRows">${draftTiers.map((t,i)=>tierRowHtml(t,i)).join('')}</div>
       <button class="ghost" onclick="addTierRow()">+ Add another tier</button>
+      <label>Payment link <span class="muted">(optional — this campaign's own link; becomes its QR on the Sell screen)</span></label>
+      <input id="cPayLink" placeholder="https://pay.sumup.com/...">
       <label>Ticket blocks <span class="muted">— physical, digital, or a mix (hybrid)</span></label>
       <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i)).join('')}</div>
       <button class="ghost" onclick="addBlockRow()">+ Add another block</button>
@@ -713,7 +704,7 @@ async function createCampaign() {
     const tiers = draftTiers.filter(t=>t.name.trim()!=='' && t.price!=='').map(t=>({name:t.name.trim(), price:Number(t.price)}));
     const blocks = draftBlocks.filter(b=>b.type==='digital' || (b.range_start!=='' && b.range_end!=='')).map(b =>
       b.type==='digital' ? { type:'digital' } : { type:'physical', label:b.label.trim()||'Main', range_start:Number(b.range_start), range_end:Number(b.range_end) });
-    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks });
+    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks, payment_link_url: document.getElementById('cPayLink').value });
     draftTiers = [{name:'',price:''},{name:'',price:''}];
     draftBlocks = [{type:'physical', label:'', range_start:'', range_end:''}];
     renderCampaignsTab();
@@ -733,10 +724,11 @@ async function doBinCampaign(id, name) {
   if (!confirm(`Move "${name}" to the Recycle Bin? Data is kept, not deleted.`)) return;
   try { await call('bin_campaign', { campaign_id: id }); renderCampaignsTab(); } catch (e) { alert(e.message); }
 }
-async function doSavePaymentLink() {
-  const resEl = document.getElementById('paymentLinkResult');
-  try { await call('set_org_payment_link', { payment_link_url: document.getElementById('paymentLinkInput').value.trim() }); resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; }
-  catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+async function doEditPaymentLink(campaignId, current) {
+  const url = prompt("This campaign's payment link (leave empty to remove):", current);
+  if (url === null) return;
+  try { await call('set_campaign_payment_link', { campaign_id: campaignId, payment_link_url: url }); renderCampaignsTab(); }
+  catch (e) { alert(e.message); }
 }
 
 async function renderRecycleBinTab() {

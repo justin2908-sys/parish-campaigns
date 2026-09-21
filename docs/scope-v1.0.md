@@ -46,6 +46,8 @@ preserve every one of these, not "improve" them away:
    the seller's screen — the buyer pays in their own time, and the seller
    moves straight on to the next sale without waiting. The sale is still
    logged the same way, once the seller sees the payment come through.
+   **Corrected 2026-09-21:** the payment link (and its QR) belongs to each
+   **campaign**, not to the parish as a whole — every campaign has its own.
 6. **Optional, non-blocking photo evidence** for manually-logged payments —
    never required, never blocks the next sale.
 7. **Specific, accurate error messages.** "This ticket doesn't exist in this
