@@ -276,3 +276,39 @@ against, so that consistency is the digital equivalent of the same rule.
   specific contact; the seller picks who). The message includes: campaign
   name, ticket count and tier breakdown (e.g. "2 x Adult, 1 x Child"), the
   ticket number(s), the amount, and the date/time of sale.
+
+---
+
+## 9. Payment modes and Pay by Link — decided 2026-09-21
+
+**Physical tickets are paid three ways:**
+
+1. **Cash** — logged by the seller, reconciled oldest-first as before.
+2. **Pay at Machine** — the buyer taps on the POS machine outside the church; the seller
+   logs it (optional photo evidence, as before).
+3. **Pay by Link** — a SumUp payment link is generated **for that sale** (not a shared
+   campaign link) and sent to the buyer from the seller's own SMS / WhatsApp / Email.
+
+**Pay by Link must let us pinpoint who has a physical ticket and whether they've paid.**
+For every link sale we record: the ticket numbers handed over, the buyer's name, the
+**mobile or email the link was addressed to**, the **channel it was sent by** and **when**,
+and SumUp's reference. The SumUp `checkout_reference` is the sale's own id, so every payment
+SumUp reports maps back to exactly those tickets and that buyer. SumUp notifies the app
+(`/api/sumup_webhook`) when a checkout changes status; the app never trusts the notification
+itself — it re-fetches the checkout from SumUp with its own key. The physical ticket stays
+"held" (never resellable) until paid; unpaid links surface in **Needs Attention** with the
+buyer's contact so they can be chased, or a fresh link issued.
+
+Notes: the link's contact is personal data and is anonymized with the buyer's name after
+the retention window. A link sale can't be self-Undone (the link already exists) — an Admin
+Voids it; if such a sale is later paid anyway, the void is flagged loudly for a refund.
+The reference is per sale (one payment can cover several tickets); each ticket row points
+to its sale, so every ticket is traceable to its SumUp reference.
+
+**Online-only campaigns** (e.g. an online raffle): tickets are digital, generated online, and
+**can only be paid by Pay by Link** (enforced server-side). An unpaid online ticket is
+removed when its link expires — nothing exists until it's paid.
+
+*Open, to decide before building the buyer-facing side:* who starts an online purchase (a
+seller sending a link, or the buyer on a public page), and how the buyer receives the ticket
+after paying.

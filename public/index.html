@@ -233,7 +233,8 @@ async function doAddOrgAdmin() {
 
 // ================= SELLER =================
 let sellCounts = {}, saleMode = 'physical', startNumValue = '', buyerNameValue = '', ticketNumbers = [];
-let pendingUndo = null, shareMenuOpenFor = null, qrOpen = false, tickHandle = null, activity = [];
+let pendingUndo = null, shareMenuOpenFor = null, tickHandle = null, linkPollHandle = null, activity = [];
+let contactValue = '';
 
 function currentCampaign() { return state.campaigns.find(c => c.id === state.lastCampaignId) || state.campaigns[0]; }
 function tierSummary(c) { return c.tiers.map(t => `${t.name} £${Number(t.price).toFixed(2)}`).join(' · '); }
@@ -255,7 +256,7 @@ async function renderSeller() {
   const digitalBlocks = camp.blocks.filter(b => b.type === 'digital');
   if (ticketNumbers.__campaignId !== camp.id) {
     sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
-    startNumValue = ''; buyerNameValue = '';
+    startNumValue = ''; buyerNameValue = ''; contactValue = '';
     saleMode = physicalBlocks.length ? 'physical' : 'digital';
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
   }
@@ -267,7 +268,8 @@ async function renderSeller() {
       <div class="stat"><span>Tickets sold by you</span><b>${stats.ticketsSoldCount}</b></div>
       <div class="stat"><span>Cash collected</span><b>£${stats.cashCollected.toFixed(2)}</b></div>
       <div class="stat"><span>· Reconciled</span><b>£${stats.cashReconciled.toFixed(2)}</b></div>
-      <div class="stat"><span>Card total</span><b>£${stats.cardTotal.toFixed(2)}</b></div>
+      <div class="stat"><span>Card &amp; link paid</span><b>£${stats.cardTotal.toFixed(2)}</b></div>
+      <div class="stat"><span>Links awaiting payment</span><b>£${stats.linkPending.toFixed(2)}</b></div>
     </div>
     <div class="card">
       <h2 style="margin-top:0">New Sale</h2>
@@ -302,12 +304,13 @@ async function renderSeller() {
       <label>Buyer name</label>
       <input id="buyerName" placeholder="e.g. Mary O'Brien" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
 
+      <label>Buyer's mobile or email <span class="muted">${saleMode==='digital' ? '(where the payment link is sent)' : '(needed for Pay by Link — that\'s how we tie the ticket to them)'}</span></label>
+      <input id="contactInput" placeholder="07… or name@example.com" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
+
       <div id="paymentButtons">${paymentButtonsHtml()}</div>
-      <button class="secondary" onclick="toggleQr()">${qrOpen?'Back to Sale':'Show QR to Buyer'}</button>
       <div id="submitError"></div>
     </div>
 
-    ${qrOpen ? renderQrPanel(camp) : ''}
     <div id="feed"></div>
   `;
   renderTicketRows(); updateTotal(); renderFeed();
@@ -315,34 +318,53 @@ async function renderSeller() {
 
 function onCampaignChange(id) { state.lastCampaignId = id; saveState(); ticketNumbers = []; renderSeller(); }
 function setSaleMode(m) { saleMode = m; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
-function toggleQr() { qrOpen = !qrOpen; renderSeller(); }
-
-function renderQrPanel(camp) {
-  const url = camp.payment_link_url;
-  if (!url) {
-    return `<div class="card qr-wrap"><p class="muted">No payment link has been set up for ${esc(camp.name)} yet — ask a SuperAdmin to add one under Campaigns.</p>
-      <button class="secondary" onclick="toggleQr()">Back to Sale</button></div>`;
+// ---- Pay by Link: sending the link to the buyer's own mobile/email ----
+// The contact is pre-filled as the recipient, so the seller just taps send in their own
+// SMS/WhatsApp/Mail app; we record which channel was used and when.
+function contactKind(v) { return String(v || '').includes('@') ? 'email' : 'phone'; }
+function waNumber(v) { // WhatsApp wants international digits only; assume UK for a leading 0
+  const d = String(v).replace(/[^\d+]/g, '');
+  if (d.startsWith('+')) return d.slice(1);
+  if (d.startsWith('00')) return d.slice(2);
+  if (d.startsWith('0')) return '44' + d.slice(1);
+  return d;
+}
+function linkShareHtml(paymentId, contact, message, subject) {
+  const body = encodeURIComponent(message), subj = encodeURIComponent(subject);
+  if (contactKind(contact) === 'email') {
+    return `<div class="share-row"><a class="share-link" href="mailto:${encodeURIComponent(contact)}?subject=${subj}&body=${body}" onclick="logShared('${paymentId}','email')">✉️ Email ${esc(contact)}</a></div>`;
   }
-  const camp2 = currentCampaign();
-  const amount = camp2.tiers.reduce((s, t) => s + (sellCounts[t.id]||0) * Number(t.price), 0);
-  const text = amount > 0
-    ? `Please pay £${amount.toFixed(2)} for your ${camp2.name} tickets here: ${url}\nOnce it's through, just let the seller know — thank you!`
-    : `Pay for your ${camp2.name} tickets here: ${url}`;
-  const body = encodeURIComponent(text);
-  const subject = encodeURIComponent(`${camp2.name} — payment link`);
-  return `<div class="card qr-wrap">
-    <p class="muted">Ask the buyer to scan this to pay — one reusable link, no per-sale setup.</p>
-    <img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}" alt="Scan to pay">
-    <div style="text-align:left; margin-top:14px">
-      <label style="margin-top:0">Or send the same link directly — they can pay in their own time</label>
-      <div class="share-row">
-        <a class="share-link" href="sms:?body=${body}">📱 SMS</a>
-        <a class="share-link" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">💬 WhatsApp</a>
-        <a class="share-link" href="mailto:?subject=${subject}&body=${body}">✉️ Email</a>
-      </div>
-    </div>
-    <button class="secondary" onclick="toggleQr()" style="margin-top:12px">Back to Sale</button>
+  return `<div class="share-row">
+    <a class="share-link" href="sms:${esc(contact)}?body=${body}" onclick="logShared('${paymentId}','sms')">📱 SMS</a>
+    <a class="share-link" href="https://wa.me/${waNumber(contact)}?text=${body}" target="_blank" rel="noopener" onclick="logShared('${paymentId}','whatsapp')">💬 WhatsApp</a>
   </div>`;
+}
+function linkMessage(campaignName, amount, ticketNumbers, payUrl) {
+  return `Hello — please pay £${Number(amount).toFixed(2)} for your ${campaignName} ticket${ticketNumbers.length>1?'s':''} (no. ${ticketNumbers.join(', ')}):\n${payUrl}\nThank you for your support!`;
+}
+async function logShared(paymentId, channel) {
+  try {
+    await call('log_link_shared', { payment_id: paymentId, channel });
+    const a = activity.find(x => x.paymentId === paymentId);
+    if (a) { a.sharedVia = channel; a.sharedAt = new Date().toISOString(); setTimeout(renderFeed, 400); }
+  } catch {}
+}
+// SumUp tells the server the moment a link is paid; this just keeps the seller's screen current.
+function startLinkPoller() {
+  if (linkPollHandle) return;
+  linkPollHandle = setInterval(async () => {
+    const waiting = activity.filter(a => a.method === 'link' && a.status === 'linkpending');
+    if (!waiting.length) { clearInterval(linkPollHandle); linkPollHandle = null; return; }
+    let changed = false;
+    for (const a of waiting) {
+      try {
+        const { status } = await call('checkout_status', { payment_id: a.paymentId });
+        if (status === 'paid') { a.status = 'linkpaid'; changed = true; }
+        else if (status === 'failed' || status === 'void') { a.status = 'linkfailed'; changed = true; }
+      } catch {}
+    }
+    if (changed) renderFeed();
+  }, 8000);
 }
 
 function regenerateTicketNumbers() {
@@ -419,20 +441,28 @@ function updateTotal() {
   el.textContent = `£${total.toFixed(2)}`;
 }
 
+// Three ways to pay for physical tickets: Cash, Pay at Machine (tapped on the POS machine
+// outside the church, seller logs it), Pay by Link (a per-sale SumUp link sent to the buyer).
+// Undo lives on whichever of Cash/Machine was just tapped — a link, once created, can't be undone.
 function paymentButtonsHtml() {
-  const a = pendingUndo ? activity.find(x => x.id === pendingUndo.activityId) : null;
-  const scoped = pendingUndo && pendingUndo.campaignId === (currentCampaign() && currentCampaign().id);
+  const camp = currentCampaign();
+  const scoped = pendingUndo && camp && pendingUndo.campaignId === camp.id;
+  const a = scoped ? activity.find(x => x.id === pendingUndo.activityId) : null;
   const remaining = a ? a.remaining : 0;
   const cashPending = scoped && pendingUndo.method === 'cash';
-  const cardPending = scoped && pendingUndo.method === 'card_manual';
-  const otherDisabled = scoped;
+  const machinePending = scoped && pendingUndo.method === 'machine';
+  const linkBtn = `<button class="primary" style="background:var(--tier-c)" ${scoped ? 'disabled' : ''} onclick="submitSale('link')">Pay by Link — send to buyer</button>`;
+  if (saleMode === 'digital') {
+    return linkBtn + `<div class="hint">Online tickets are paid by link only.</div>`;
+  }
   return `
-    <button class="primary" ${cashPending?`style="background:var(--ink)"`:''} ${otherDisabled && !cashPending ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
-      ${cashPending ? `Undo (${remaining}s)` : 'Record Cash Payment'}
+    <button class="primary" style="${cashPending?'background:var(--ink)':'background:var(--good)'}" ${scoped && !cashPending ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
+      ${cashPending ? `Undo (${remaining}s)` : 'Cash'}
     </button>
-    <button class="primary" style="${cardPending?'background:var(--ink)':'background:#555'}" ${otherDisabled && !cardPending ? 'disabled' : ''} onclick="${cardPending?`doUndo(${pendingUndo.activityId})`:`submitSale('card_manual')`}">
-      ${cardPending ? `Undo (${remaining}s)` : 'Card Paid on Reader / Link — Log It'}
-    </button>`;
+    <button class="primary" style="${machinePending?'background:var(--ink)':'background:#555'}" ${scoped && !machinePending ? 'disabled' : ''} onclick="${machinePending?`doUndo(${pendingUndo.activityId})`:`submitSale('machine')`}">
+      ${machinePending ? `Undo (${remaining}s)` : 'Pay at Machine — log it'}
+    </button>
+    ${linkBtn}`;
 }
 function updatePaymentButtons() { const el = document.getElementById('paymentButtons'); if (el) el.innerHTML = paymentButtonsHtml(); }
 
@@ -446,33 +476,43 @@ async function submitSale(method) {
       errEl.innerHTML = `<div class="error">Fix the flagged ticket number(s) before recording this sale.</div>`; return;
     }
   }
+  if (method === 'link' && !contactValue.trim()) {
+    errEl.innerHTML = `<div class="error">Enter the buyer's mobile number or email first — that's where the payment link goes, and how we tie the ticket to them.</div>`; return;
+  }
+  if (!buyerNameValue.trim()) { errEl.innerHTML = `<div class="error">Enter the buyer's name first.</div>`; return; }
   errEl.innerHTML = '';
   // Physical doesn't need a pre-chosen block — a campaign can have more than one (e.g. a
   // top-up), and the ticket number itself resolves which one. Digital does need one, to
   // pick which pool a campaign's digital sale draws from.
   const digitalBlock = saleMode === 'digital' ? camp.blocks.find(b=>b.type==='digital') : null;
   const tier_counts = Object.fromEntries(camp.tiers.map(t => [t.id, sellCounts[t.id]||0]));
-  const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, saleMode, ticketNumbers: ticketNumbers.map(t=>({...t})) };
+  const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, contactValue, saleMode, ticketNumbers: ticketNumbers.map(t=>({...t})) };
 
   try {
     const data = await call('record_sale', {
       campaign_id: camp.id, mode: saleMode, block_id: digitalBlock ? digitalBlock.id : undefined, tier_counts,
       ticket_numbers: saleMode === 'digital' ? undefined : ticketNumbers.map(t => t.value),
-      method, payer_name: buyerNameValue,
+      method, payer_name: buyerNameValue, contact_value: method === 'link' ? contactValue : undefined,
     });
     const newId = Date.now();
-    activity.unshift({
+    const entry = {
       id: newId, paymentId: data.payment_id, campaignId: camp.id, method, amount: data.amount,
       buyerName: buyerNameValue, tickets: data.tickets, soldAt: new Date().toISOString(),
       status: 'undo', remaining: 8, photoAttached: false, draft,
-    });
-    pendingUndo = { activityId: newId, method, campaignId: camp.id };
+    };
+    if (method === 'link') {
+      // Not undoable: the link exists now. Track it until SumUp says it's paid.
+      Object.assign(entry, { status: 'linkpending', payUrl: data.pay_url, contact: data.contact_value, sharedVia: null });
+    } else {
+      pendingUndo = { activityId: newId, method, campaignId: camp.id };
+    }
+    activity.unshift(entry);
 
     sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
-    startNumValue = ''; buyerNameValue = '';
+    startNumValue = ''; buyerNameValue = ''; contactValue = '';
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
     renderSeller();
-    startTicker();
+    if (method === 'link') startLinkPoller(); else startTicker();
   } catch (e) { errEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
@@ -492,6 +532,7 @@ async function doUndo(activityId) {
     sellCounts = {...a.draft.sellCounts};
     startNumValue = a.draft.startNumValue;
     buyerNameValue = a.draft.buyerNameValue;
+    contactValue = a.draft.contactValue || '';
     saleMode = a.draft.saleMode;
     ticketNumbers = a.draft.ticketNumbers.map(t=>({...t}));
     ticketNumbers.__campaignId = a.campaignId;
@@ -518,12 +559,28 @@ function renderFeed() {
   const camp = currentCampaign();
   el.innerHTML = activity.filter(a => a.campaignId === camp.id).map(a => {
     const label = `${a.tickets.length} ticket${a.tickets.length>1?'s':''} (${a.tickets.map(t=>t.ticket_number).join(', ')})`;
-    if (a.status === 'undo') return `<div class="card">${label} for ${esc(a.buyerName||'(no name given)')} — ${a.method==='cash'?'Cash':'Card'} £${a.amount.toFixed(2)} — logging… <span class="muted">(Undo is on the button above)</span></div>`;
     const when = new Date(a.soldAt).toLocaleString('en-GB', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    if (a.method === 'link') {
+      const nums = a.tickets.map(t => t.ticket_number);
+      const sentLine = a.sharedVia
+        ? `Sent by ${{sms:'SMS',whatsapp:'WhatsApp',email:'Email'}[a.sharedVia]} to ${esc(a.contact)} at ${new Date(a.sharedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`
+        : `Not sent yet — tap a button below to send it to ${esc(a.contact)}`;
+      if (a.status === 'linkpaid') return `<div class="card"><div class="info">✓ Paid — £${a.amount.toFixed(2)} for ${label} (${esc(a.buyerName)}, ${esc(a.contact)}). SumUp confirmed it.</div><div style="font-size:11px;color:#888;margin-top:4px">${sentLine} · Sold ${when}</div></div>`;
+      const failed = a.status === 'linkfailed';
+      return `<div class="card">
+        <div class="${failed ? 'error' : 'hint'}" style="margin-top:0">${failed ? 'Link expired or failed' : '⏳ Awaiting payment'} — £${a.amount.toFixed(2)} for ${label}, ${esc(a.buyerName)}</div>
+        <div style="font-size:12px;color:#777;margin:6px 0">${sentLine}</div>
+        ${failed ? `<div class="muted">An Admin can issue a fresh link from Needs Attention. The ticket stays with ${esc(a.buyerName)} in the meantime.</div>` : `
+        ${linkShareHtml(a.paymentId, a.contact, linkMessage(currentCampaign().name, a.amount, nums, a.payUrl), currentCampaign().name + ' — payment link')}
+        <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Or show a QR for them to scan</summary>
+          <div class="qr-wrap" style="margin-top:8px"><img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(a.payUrl)}" alt="Scan to pay"></div></details>`}
+      </div>`;
+    }
+    if (a.status === 'undo') return `<div class="card">${label} for ${esc(a.buyerName||'(no name given)')} — ${a.method==='cash'?'Cash':'Machine'} £${a.amount.toFixed(2)} — logging… <span class="muted">(Undo is on the button above)</span></div>`;
     return `<div class="card">
-      <div class="info">£${a.amount.toFixed(2)} ${a.method==='cash'?'cash':'card (reader)'} recorded for ${label} (${esc(a.buyerName||'no name given')}).</div>
+      <div class="info">£${a.amount.toFixed(2)} ${a.method==='cash'?'cash':'paid at machine'} recorded for ${label} (${esc(a.buyerName||'no name given')}).</div>
       <div style="font-size:11px;color:#888;margin-top:4px">Sold ${when}</div>
-      ${a.method==='card_manual' ? `
+      ${a.method==='machine' ? `
         <label class="photo-label ${a.photoAttached?'attached':''}" for="photo-${a.id}">${a.photoAttached?`<img class="photo-thumb" src="${a.photoAttached}"> Photo attached`:'📷 Add photo of payment (optional)'}</label>
         <input type="file" accept="image/*" capture="environment" id="photo-${a.id}" style="display:none" onchange="attachPhoto(${a.id}, this)">
       ` : ''}
@@ -631,6 +688,12 @@ async function renderCampaignsTab() {
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
   const el = document.getElementById('adminContent');
   el.innerHTML = h`
+    ${state.user.role==='superadmin' ? `<div class="card">
+      <h3 style="margin-top:0">SumUp connection</h3>
+      <p class="muted">Checks that Pay by Link will work: creates a £0.01 test link and cancels it straight away. No money moves.</p>
+      <button class="small" onclick="doSumupCheck()">Test SumUp connection</button>
+      <div id="sumupCheckResult"></div>
+    </div>` : ''}
     <div class="card">
       <h3 style="margin-top:0">Existing Campaigns</h3>
       <table>
@@ -642,7 +705,6 @@ async function renderCampaignsTab() {
           <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span></td>
           <td>
             ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
-            <button class="small" onclick="doEditPaymentLink('${c.id}', '${esc(c.payment_link_url||'').replace(/'/g,"\\'")}')">${c.payment_link_url ? 'Pay link ✓' : 'Add pay link'}</button>
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
             <button class="small" onclick="doBinCampaign('${c.id}','${esc(c.name).replace(/'/g,"\\'")}')">Bin</button>` : ''}
           </td>
@@ -657,8 +719,6 @@ async function renderCampaignsTab() {
       <label>Price tiers</label>
       <div id="tierRows">${draftTiers.map((t,i)=>tierRowHtml(t,i)).join('')}</div>
       <button class="ghost" onclick="addTierRow()">+ Add another tier</button>
-      <label>Payment link <span class="muted">(optional — this campaign's own link; becomes its QR on the Sell screen)</span></label>
-      <input id="cPayLink" placeholder="https://pay.sumup.com/...">
       <label>Ticket blocks <span class="muted">— physical, digital, or a mix (hybrid)</span></label>
       <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i)).join('')}</div>
       <button class="ghost" onclick="addBlockRow()">+ Add another block</button>
@@ -704,7 +764,7 @@ async function createCampaign() {
     const tiers = draftTiers.filter(t=>t.name.trim()!=='' && t.price!=='').map(t=>({name:t.name.trim(), price:Number(t.price)}));
     const blocks = draftBlocks.filter(b=>b.type==='digital' || (b.range_start!=='' && b.range_end!=='')).map(b =>
       b.type==='digital' ? { type:'digital' } : { type:'physical', label:b.label.trim()||'Main', range_start:Number(b.range_start), range_end:Number(b.range_end) });
-    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks, payment_link_url: document.getElementById('cPayLink').value });
+    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks });
     draftTiers = [{name:'',price:''},{name:'',price:''}];
     draftBlocks = [{type:'physical', label:'', range_start:'', range_end:''}];
     renderCampaignsTab();
@@ -720,15 +780,18 @@ async function downloadCampaignReport(id) {
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
   } catch (e) { alert(e.message); }
 }
+async function doSumupCheck() {
+  const resEl = document.getElementById('sumupCheckResult');
+  resEl.innerHTML = `<div class="hint">Checking…</div>`;
+  try {
+    const r = await call('sumup_check');
+    resEl.innerHTML = `<div class="${r.ok ? 'info' : 'error'}"><b>${r.ok ? '✓ Pay by Link is ready to use' : 'Pay by Link will not work yet'}</b>
+      ${r.steps.map(s => `<div style="margin-top:4px">${s.ok ? '✓' : '✗'} ${esc(s.step)} — ${esc(s.detail)}</div>`).join('')}</div>`;
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
 async function doBinCampaign(id, name) {
   if (!confirm(`Move "${name}" to the Recycle Bin? Data is kept, not deleted.`)) return;
   try { await call('bin_campaign', { campaign_id: id }); renderCampaignsTab(); } catch (e) { alert(e.message); }
-}
-async function doEditPaymentLink(campaignId, current) {
-  const url = prompt("This campaign's payment link (leave empty to remove):", current);
-  if (url === null) return;
-  try { await call('set_campaign_payment_link', { campaign_id: campaignId, payment_link_url: url }); renderCampaignsTab(); }
-  catch (e) { alert(e.message); }
 }
 
 async function renderRecycleBinTab() {
@@ -756,9 +819,11 @@ async function renderSalesTab() {
       ${campaigns.map(c=>`<option value="${c.id}" ${campaignFilter===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
     </select></div>
     <div class="card"><h3 style="margin-top:0">Recent Sales</h3><table>
-    <tr><th>Tickets</th><th>Seller</th><th>Amt</th><th>Method</th><th>Status</th><th></th></tr>
+    <tr><th>Tickets</th><th>Buyer</th><th>Seller</th><th>Amt</th><th>Method</th><th>Status</th><th></th></tr>
     ${payments.map(p=>`<tr>
-      <td>${p.tickets.join(' · ')}</td><td>${esc(p.seller)}</td><td>£${Number(p.amount).toFixed(2)}</td><td>${p.method}</td>
+      <td>${p.tickets.join(' · ')}</td>
+      <td>${esc(p.payer_name||'—')}${p.contact_value ? `<br><span class="muted">${esc(p.contact_value)}${p.contact_channel ? ' · via ' + p.contact_channel : ''}</span>` : ''}</td>
+      <td>${esc(p.seller)}</td><td>£${Number(p.amount).toFixed(2)}</td><td>${{cash:'Cash',machine:'Machine',link:'Link'}[p.method]||p.method}</td>
       <td><span class="badge ${p.status==='paid'?'ok':p.status==='pending'?'warn':'bad'}">${p.status}</span></td>
       <td>${p.status!=='void' ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}
       ${p.has_photo ? `<button class="small" onclick="viewPhoto('${p.id}')">Photo</button>` : ''}</td>
@@ -804,21 +869,29 @@ async function doCashRecon() {
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-// ---- Needs Attention tab (card payments awaiting/failed via SumUp) ----
+// ---- Needs Attention tab: Pay-by-Link sales not yet paid (or whose link expired) ----
+// Each row shows who the link was sent to, so an unpaid handed-over ticket can be chased.
 async function renderAttentionTab() {
   const { payments } = await call('list_incomplete_payments', { campaign_id: campaignFilter || undefined });
   const el = document.getElementById('adminContent');
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
-    ${!payments.length ? '<p class="muted">Nothing needs attention.</p>' : `
-    <table><tr><th>Tickets</th><th>Buyer</th><th>Amt</th><th>Status</th><th></th></tr>
-    ${payments.map(p=>`<tr><td>${p.tickets.join(' · ')}</td><td>${esc(p.payer_name||'')}</td><td>£${Number(p.amount).toFixed(2)}</td>
-      <td><span class="badge ${p.status==='failed'?'bad':'warn'}">${p.status}</span></td>
-      <td><button class="small" onclick="doResend('${p.id}')">Resend</button></td></tr>`).join('')}
-    </table>`}
+    <p class="muted">Pay-by-Link sales that haven't been paid. The ticket is with the buyer — chase them on the contact below, or issue a fresh link if it expired.</p>
+    ${!payments.length ? '<p class="muted">Nothing needs attention.</p>' : payments.map(p => {
+      const msg = `Hello — a reminder to please pay £${Number(p.amount).toFixed(2)} for your tickets (${p.tickets.join(' · ')}):\n${p.link_url}\nThank you for your support!`;
+      const sent = p.link_shared_at ? `Sent via ${p.contact_channel} on ${new Date(p.link_shared_at).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}` : 'Not recorded as sent';
+      return `<div style="border-top:1px solid var(--line);padding:12px 0">
+        <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.payer_name||'(name removed)')}</b>
+          <span class="badge ${p.status==='failed'?'bad':'warn'}">${p.status==='failed'?'link expired':'awaiting payment'}</span></div>
+        <div class="muted">${esc(p.contact_value||'(contact removed)')} · £${Number(p.amount).toFixed(2)} · tickets ${p.tickets.join(' · ')} · seller ${esc(p.seller)}</div>
+        <div class="muted">${sent}${p.resend_count ? ` · resent ${p.resend_count}×` : ''}</div>
+        ${p.status==='pending' && p.link_url && p.contact_value ? `<div style="margin-top:8px">${linkShareHtml(p.id, p.contact_value, msg, 'Payment link')}</div>` : ''}
+        <div style="margin-top:8px"><button class="small" onclick="doResend('${p.id}')">${p.status==='failed' ? 'Create a fresh link' : 'Replace link'}</button></div>
+      </div>`;
+    }).join('')}
   </div>`;
 }
 async function doResend(paymentId) {
-  try { const r = await call('resend_payment', { payment_id: paymentId }); alert('New payment link created: ' + r.pay_url); renderAttentionTab(); }
+  try { await call('resend_payment', { payment_id: paymentId }); renderAttentionTab(); }
   catch (e) { alert(e.message); }
 }
 
