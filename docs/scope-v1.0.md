@@ -399,3 +399,26 @@ physical or online, and an online ticket is currently released as soon as SumUp 
 link failed/expired — not held for a fixed communicated window. These two ideas (a proper
 post-payment confirmation page, and a longer stated grace window before release) aren't
 mutually exclusive and can both be built.
+
+---
+
+## 12. Cash/Machine allowed for online tickets too — decided 2026-09-22
+
+**Reconsiders part of §10:** online tickets are no longer restricted to Pay by Link only.
+The real distinction isn't "online vs. physical," it's **whether a seller is physically
+present vouching for the sale, versus an unattended remote purchase**. When a seller is
+standing with a buyer taking cash or a card tap on the machine, the trust model is identical
+whether the ticket comes from the physical stack or the online series — there's no paper
+ticket to hand over for an online one, but the seller can send the existing "Share ticket"
+confirmation on the spot instead. Forcing Pay by Link in that moment (buyer's cash already
+out, now wait for a text and a link) added friction without adding trust.
+
+Pay-by-Link-only remains the right rule specifically for an **unattended** sale — a buyer on
+a future public page, or paying in their own time from a link sent earlier — since nobody is
+there in person to vouch for them. `record_sale` is only ever reachable by an authenticated
+seller/admin/superadmin today, so this restriction was removed from it entirely; it belongs
+on the future public buyer-direct endpoint instead, not on this one.
+
+**Decided against:** flagging which online entries were electronically verified (via Link)
+vs. seller-vouched (Cash/Machine) in reporting, for raffle-draw optics. Justin: seller
+accountability (the buyer name required on every sale) is enough.

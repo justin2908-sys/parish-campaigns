@@ -318,7 +318,7 @@ async function renderSeller() {
       <label>Buyer name</label>
       <input id="buyerName" placeholder="e.g. Mary O'Brien" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
 
-      <label>Buyer's mobile or email <span class="muted">${isOnline ? '(where the payment link is sent)' : '(needed for Pay by Link — that\'s how we tie the ticket to them)'}</span></label>
+      <label>Buyer's mobile or email <span class="muted">(needed for Pay by Link — that's where it's sent, and how we tie the ticket to them)</span></label>
       <input id="contactInput" placeholder="07… or name@example.com" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
 
       <div id="paymentButtons">${paymentButtonsHtml()}</div>
@@ -458,22 +458,20 @@ function updateTotal() {
   el.textContent = `£${total.toFixed(2)}`;
 }
 
-// Three ways to pay for physical tickets: Cash, Pay at Machine (tapped on the POS machine
-// outside the church, seller logs it), Pay by Link (a per-sale SumUp link sent to the buyer).
+// Three ways to pay, for physical AND online tickets alike: Cash, Pay at Machine (tapped on
+// the POS machine, seller logs it), Pay by Link (a per-sale SumUp link sent to the buyer).
+// Cash/Machine work the same for an online lucky number as for a physical ticket — the seller
+// is standing there vouching for it either way. Link-only would be a rule for an unattended
+// sale with no seller present (e.g. a future public buyer page), not for "online" as such.
 // Undo lives on whichever of Cash/Machine was just tapped — a link, once created, can't be undone.
 function paymentButtonsHtml() {
   const camp = currentCampaign();
-  const block = camp && camp.blocks.find(b => b.id === selectedBlockId);
-  const isOnline = !!block && block.type === 'digital';
   const scoped = pendingUndo && camp && pendingUndo.campaignId === camp.id;
   const a = scoped ? activity.find(x => x.id === pendingUndo.activityId) : null;
   const remaining = a ? a.remaining : 0;
   const cashPending = scoped && pendingUndo.method === 'cash';
   const machinePending = scoped && pendingUndo.method === 'machine';
   const linkBtn = `<button class="primary" style="background:var(--tier-c)" ${scoped ? 'disabled' : ''} onclick="submitSale('link')">Pay by Link — send to buyer</button>`;
-  if (isOnline) {
-    return linkBtn + `<div class="hint">Online tickets are paid by link only.</div>`;
-  }
   return `
     <button class="primary" style="${cashPending?'background:var(--ink)':'background:var(--good)'}" ${scoped && !cashPending ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
       ${cashPending ? `Undo (${remaining}s)` : 'Cash'}

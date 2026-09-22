@@ -474,24 +474,19 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   counts.forEach(c => { for (let i = 0; i < c.count; i++) tierIdSequence.push(c.tier.id); });
   const amount = counts.reduce((s, c) => s + c.count * Number(c.tier.price), 0);
 
-  // Online tickets are paid for online only — there's no cash or machine payment for
-  // something with no physical form to hand over. Figure out which block(s) are actually
-  // involved before claiming anything, so this is enforced up front, not after the fact.
+  // Cash/Machine/Link are all available for online tickets too, same as physical — the
+  // trust model is identical whether a seller is standing there taking cash for a physical
+  // ticket or an online lucky number, since it's the same seller vouching for it in person
+  // either way. Link-only is a rule for an *unattended* sale (no seller present, e.g. a
+  // future public buyer-direct page), not a rule about the ticket's type as such — this
+  // action is only ever reachable by an authenticated seller/admin/superadmin, so that
+  // restriction doesn't apply here.
   let autoAssignBlock = null;
   if (auto_assign_block_id) {
     autoAssignBlock = blocks.find(b => b.id === auto_assign_block_id);
     if (!autoAssignBlock) throw httpError(404, 'Ticket block not found in this campaign');
-    if (autoAssignBlock.type === 'digital' && method !== 'link') throw httpError(400, 'Online tickets can only be paid by payment link.');
-  } else {
-    if (!ticket_numbers.length || ticket_numbers.length !== totalCount) {
-      throw httpError(400, `Entered ${ticket_numbers ? ticket_numbers.length : 0} ticket number(s) but ${totalCount} were specified — these must match.`);
-    }
-    const nums = ticket_numbers.map(Number);
-    const { data: existingRows } = await supabase.from('tickets').select('block_id').eq('campaign_id', campaign_id).in('ticket_number', nums);
-    const touchedBlockIds = new Set((existingRows || []).map(r => r.block_id));
-    if (blocks.some(b => touchedBlockIds.has(b.id) && b.type === 'digital') && method !== 'link') {
-      throw httpError(400, 'Online tickets can only be paid by payment link.');
-    }
+  } else if (!ticket_numbers.length || ticket_numbers.length !== totalCount) {
+    throw httpError(400, `Entered ${ticket_numbers ? ticket_numbers.length : 0} ticket number(s) but ${totalCount} were specified — these must match.`);
   }
   const contact = method === 'link' ? parseContact(contact_value) : null;
 
