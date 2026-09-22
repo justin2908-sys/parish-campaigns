@@ -360,3 +360,42 @@ bookmark. No SMS/email service, no new third-party account, no ongoing per-messa
 `payments.seller_id` will become nullable to represent "no seller involved" cleanly. Until
 the public buyer-facing purchase page itself is built, only the seller-initiated Sell screen
 supports online tickets today.
+
+---
+
+## 11. Buyer confirmation experience — open, deferred by Justin on 2026-09-22
+
+**Reminder: buyer-direct online purchases (§10's open item) are still not built.** Deferred
+again this session — pick up next time.
+
+**New requirement, recorded for when this is built:** the confirmation page — showing the
+buyer their actual assigned ticket, with a Save button to keep the image on their phone —
+must appear **after** payment succeeds, not before. Before payment, both flows only ever
+promise an *assignment subject to payment*:
+
+- **Seller-initiated:** the message sent already says (in effect) "Online Raffle number
+  O15001, O15002 has been assigned to you, subject to payment" with the SumUp link — this
+  part already works. What's missing: once that link is paid, the buyer should land on a
+  confirmation page (their actual ticket, Save button) — not on raw API output.
+- **Buyer-direct (not yet built):** the same shape — "Ticket O12345 has been assigned to you,
+  subject to payment" with a link — buyer pays, then returns to see the same kind of
+  confirmation page.
+
+**Concrete bug found while recording this:** `createSumupCheckout`'s `return_url` currently
+points straight at `/api/sumup_webhook`, which returns JSON — if that's genuinely what SumUp
+redirects the buyer's own browser to after paying (rather than only a server-to-server
+notification address), a real buyer would land on raw API output instead of a page. This
+needs a dedicated user-facing confirmation page as its target, separate from the
+server-to-server notification handling — to be fixed together with the confirmation page
+itself, not before.
+
+**Alternative/fallback Justin raised, worth keeping regardless of the above:** a
+trust-based hold — assign the ticket immediately, with a stated deadline ("subject to
+payment within 24 hours of assignment, after which it's released to anyone else"), showing
+the actual date/time by which payment is due. Note this would need its own hold window for
+online tickets specifically: today's `STALE_MINUTES = 35` (a SumUp hosted-checkout-validity
+figure, not a considered buyer-facing grace period) applies uniformly to every link sale,
+physical or online, and an online ticket is currently released as soon as SumUp reports the
+link failed/expired — not held for a fixed communicated window. These two ideas (a proper
+post-payment confirmation page, and a longer stated grace window before release) aren't
+mutually exclusive and can both be built.
