@@ -321,3 +321,43 @@ checkout id, never on this string. So it's formatted purely to be readable to Ju
 SumUp's own dashboard/exports: `<CAMPAIGN-SLUG>-<SHORT-ID>`, e.g. `RAFFLE2026-A1B2C3D4`,
 letting a scan of SumUp's own transaction list show at a glance which campaign a payment
 belongs to.
+
+---
+
+## 10. Online ticket series, lucky numbers, and seller vs. buyer-direct — decided 2026-09-22
+
+**Online tickets now come from a real, declared series, exactly like physical.** Raised by
+Justin: a defined range (e.g. "O15001 to O20000"), not an open-ended counter, so a specific
+number can be checked and picked — a "lucky number" — the same way a physical ticket already
+works. This replaced the original digital-block design (an auto-incrementing counter minting
+numbers on the fly, nothing to check against): physical and digital blocks are now
+structurally identical, both pre-populating every number in their declared range as
+'unsold'. The only remaining differences are (a) an online block can only be paid by Pay by
+Link — there's no cash or machine payment for something with no physical form — and (b) an
+online block can carry an optional display prefix (e.g. "O"), shown before the raw number to
+buyers. This is not an invented physical-reality mismatch (non-negotiable #8): for a ticket
+with no separate physical object, whatever number the buyer is told IS what they're holding.
+
+For an online series, a seller (or eventually a buyer) chooses between **"Pick a number"**
+(a specific lucky number, live-checked) and **"Any available"** (the lowest-numbered unsold
+tickets, claimed atomically — two simultaneous "any available" purchases can never collide).
+
+**A paid ticket now sends the buyer an actual ticket, not just a payment link.** Once a Pay
+by Link sale shows Paid, a "Share ticket" action appears (the same mechanism already built
+for Cash/Machine sales), pre-filled with the buyer's own contact — campaign, tier breakdown,
+ticket number(s), amount, and sale date/time. Justin is separately supplying the physical
+ticket's exact layout so the message can mirror it.
+
+**Both a seller-initiated sale and a buyer-direct purchase (no seller involved) need to be
+supported.** The backend now supports either: a purchase always has a `seller_id`, but
+whether that's a real staff member acting for someone, versus a future buyer-initiated flow,
+is a distinction the data model needs to represent cleanly rather than forcing every online
+sale through a person. This is not yet built — see the open item below.
+
+*Open, before building the buyer-direct purchase flow:* (1) how the buyer receives their
+ticket with no seller present to hand it over — a confirmation/ticket page on the site itself
+(no new cost or vendor) versus an automated SMS/email service (a new third-party account and
+ongoing cost); (2) whether `payments.seller_id` becomes nullable to represent "no seller
+involved" cleanly, versus every sale requiring one. Until decided, the public buyer-facing
+purchase page itself has not been built — only the seller-initiated Sell screen supports
+online tickets today.

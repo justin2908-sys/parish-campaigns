@@ -190,19 +190,21 @@ async function listUsers(session) {
 
 // ---------- Campaigns, Tiers, Ticket Blocks ----------
 
-// tiers: [{ name, price }]  blocks: [{ type: 'physical'|'digital', label?, range_start?, range_end? }]
+// tiers: [{ name, price }]
+// blocks: [{ type: 'physical'|'digital', label?, range_start, range_end, number_prefix? }]
+// Physical and digital blocks are structurally identical now — both declare a real numbered
+// range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
+// and only meaningful for digital: a physical ticket must show exactly the number printed on
+// it (non-negotiable #8), so a physical block's prefix is always forced blank here.
 async function createCampaign(session, { name, tiers, blocks }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
   if (!blocks || !blocks.length) throw httpError(400, 'Add at least one ticket block');
   for (const b of blocks) {
-    if (b.type === 'physical') {
-      if (b.range_start == null || b.range_end == null || b.range_end < b.range_start) {
-        throw httpError(400, "A physical block's end must be after its start");
-      }
-    } else if (b.type !== 'digital') {
-      throw httpError(400, `Unknown block type: ${b.type}`);
+    if (!['physical', 'digital'].includes(b.type)) throw httpError(400, `Unknown block type: ${b.type}`);
+    if (b.range_start == null || b.range_end == null || Number(b.range_end) < Number(b.range_start)) {
+      throw httpError(400, "Every ticket block needs a start and end number, with end after start");
     }
   }
 
@@ -221,27 +223,24 @@ async function createCampaign(session, { name, tiers, blocks }) {
   for (const b of blocks) {
     const isDigital = b.type === 'digital';
     const label = isDigital
-      ? ((++digitalCount) === 1 ? 'Online' : `Online ${digitalCount}`)
+      ? (b.label && b.label.trim()) || ((++digitalCount) === 1 ? 'Online' : `Online ${digitalCount}`)
       : (b.label && b.label.trim()) || 'Main';
+    const range_start = Number(b.range_start), range_end = Number(b.range_end);
     const { data: block, error: blockErr } = await supabase.from('ticket_blocks')
       .insert({
-        campaign_id: campaign.id, type: b.type, label,
-        range_start: isDigital ? null : b.range_start,
-        range_end: isDigital ? null : b.range_end,
+        campaign_id: campaign.id, type: b.type, label, range_start, range_end,
+        number_prefix: isDigital ? (b.number_prefix || '').trim() : '',
       })
       .select().single();
     if (blockErr) throw httpError(500, 'Campaign created but a ticket block failed: ' + blockErr.message);
     blockRows.push(block);
 
-    // Physical blocks pre-populate every ticket number as 'unsold', same as the live BBQ build.
-    // Digital blocks pre-populate nothing — numbers are minted at the moment of sale.
-    if (!isDigital) {
-      const rows = [];
-      for (let n = b.range_start; n <= b.range_end; n++) rows.push({ campaign_id: campaign.id, block_id: block.id, ticket_number: n });
-      for (let i = 0; i < rows.length; i += 500) {
-        const { error: e2 } = await supabase.from('tickets').insert(rows.slice(i, i + 500));
-        if (e2) throw httpError(500, 'Campaign created but ticket generation failed: ' + e2.message);
-      }
+    // Pre-populate every ticket number in the range as 'unsold' — physical and digital alike.
+    const rows = [];
+    for (let n = range_start; n <= range_end; n++) rows.push({ campaign_id: campaign.id, block_id: block.id, ticket_number: n });
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error: e2 } = await supabase.from('tickets').insert(rows.slice(i, i + 500));
+      if (e2) throw httpError(500, 'Campaign created but ticket generation failed: ' + e2.message);
     }
   }
 
@@ -283,12 +282,12 @@ async function syncCheckout(payment) {
   }
   if ((data.status === 'FAILED' || data.status === 'EXPIRED') && payment.status === 'pending') {
     await supabase.from('payments').update({ status: 'failed' }).eq('id', payment.id);
-    // A PHYSICAL ticket stays 'held' — it's already in someone's hand, so it must never quietly
-    // become resellable; only an explicit Admin Void does that. A DIGITAL ticket was never
-    // handed to anyone (nothing exists until it's paid), so an unpaid one is simply removed.
+    // A PHYSICAL ticket stays 'held' — it's already in someone's hand, so it must never
+    // quietly become resellable; only an explicit Admin Void does that. An ONLINE ticket was
+    // never physically handed to anyone, so an unpaid one is simply released back to its series.
     const { data: rows } = await supabase.from('tickets').select('id, ticket_blocks!inner(type)').eq('payment_id', payment.id);
-    const digitalIds = (rows || []).filter(t => t.ticket_blocks.type === 'digital').map(t => t.id);
-    if (digitalIds.length) await supabase.from('tickets').delete().in('id', digitalIds);
+    const onlineIds = (rows || []).filter(t => t.ticket_blocks.type === 'digital').map(t => t.id);
+    if (onlineIds.length) await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null }).in('id', onlineIds);
     return 'failed';
   }
   return payment.status;
@@ -387,11 +386,12 @@ async function exportCampaignReport(session, { campaign_id }) {
   const userName = (id) => (users.find(u => u.id === id) || {}).name || '';
   const tierName = (id) => (tiers.find(t => t.id === id) || {}).name || '';
   const blockLabel = (id) => (blocks.find(b => b.id === id) || {}).label || '';
+  const displayNumber = (t) => `${(blocks.find(b => b.id === t.block_id) || {}).number_prefix || ''}${t.ticket_number}`;
   const paymentById = {};
   for (const p of payments) paymentById[p.id] = p;
 
   const headers = [
-    'Ticket Number', 'Block', 'Tier', 'Ticket Status', 'Buyer Name', 'Method', 'Payment Amount',
+    'Ticket Number', 'Display Number', 'Block', 'Tier', 'Ticket Status', 'Buyer Name', 'Method', 'Payment Amount',
     'Payment Status', 'Seller', 'Sold At', 'Cash Confirmed By', 'Cash Confirmed At',
     'Voided', 'Void Reason', 'SumUp Reference', 'SumUp Transaction Code', 'Link Sent To', 'Link Sent Via', 'Link Sent At', 'Has Photo Evidence',
   ];
@@ -399,6 +399,7 @@ async function exportCampaignReport(session, { campaign_id }) {
     const p = t.payment_id ? paymentById[t.payment_id] : null;
     return [
       t.ticket_number,
+      displayNumber(t),
       blockLabel(t.block_id),
       tierName(t.tier_id),
       t.status,
@@ -428,42 +429,38 @@ async function exportCampaignReport(session, { campaign_id }) {
 
 // ---------- Selling ----------
 
-// Seller: fetch a physical ticket to check it's unsold & find it, without locking it yet.
-// Digital tickets are never pre-populated, so there's nothing to check — they're always
-// available by construction, minted fresh at sale time.
+// Fetch a ticket to check it's unsold & find it, without locking it yet. Works the same for
+// a physical or online series now — both pre-populate real rows across a declared range.
 async function checkTicket(session, { campaign_id, ticket_number }) {
   requireRole(session, ['seller', 'admin', 'superadmin']);
-  const { data } = await supabase.from('tickets').select('*, ticket_blocks!inner(type)')
-    .eq('campaign_id', campaign_id).eq('ticket_number', ticket_number).eq('ticket_blocks.type', 'physical').maybeSingle();
+  const { data } = await supabase.from('tickets').select('*')
+    .eq('campaign_id', campaign_id).eq('ticket_number', ticket_number).maybeSingle();
   if (!data) throw httpError(404, `Ticket ${ticket_number} doesn't exist in this campaign`);
   if (data.status !== 'unsold') throw httpError(409, `Ticket ${ticket_number} is already ${data.status}`);
   return { ok: true };
 }
 
-// tier_counts: { [tier_id]: count }. mode picks physical (ticket_numbers required — a
-// campaign can have more than one physical block, e.g. a later top-up, so which block a
-// number belongs to is resolved by the number itself, not a pre-chosen block_id) or digital
-// (block_id required only to choose which digital pool, if a campaign somehow has more than
-// one — numbers are assigned server-side from that block's own counter). One buyer name
-// covers the whole transaction.
-async function recordSale(session, { campaign_id, mode, block_id, tier_counts, ticket_numbers, method, payer_name, contact_value }) {
+// tier_counts: { [tier_id]: count }. Exactly one of:
+//   ticket_numbers   — specific numbers wanted (a "lucky number" pick, or physical's usual
+//                      sequential entry). Resolved by campaign + number, not a pre-chosen
+//                      block — a campaign can have more than one block of a type (e.g. a
+//                      physical top-up, or a second online series).
+//   auto_assign_block_id — "any available", claims the lowest-numbered unsold tickets in
+//                      that one specific block (needed here since a campaign could have more
+//                      than one pool to choose from).
+// One buyer name covers the whole transaction.
+async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, auto_assign_block_id, method, payer_name, contact_value }) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
-  if (!['physical', 'digital'].includes(mode)) throw httpError(400, 'mode must be physical or digital');
   if (!['cash', 'machine', 'link'].includes(method)) throw httpError(400, 'Payment method must be cash, machine or link');
-  // Online (digital) tickets are paid for online only — there's no cash or machine payment
-  // for something that only exists once the payment has gone through.
-  if (mode === 'digital' && method !== 'link') throw httpError(400, 'Online tickets can only be paid by payment link.');
-  const contact = method === 'link' ? parseContact(contact_value) : null;
+  if (!!ticket_numbers === !!auto_assign_block_id) {
+    throw httpError(400, 'Specify either exact ticket numbers or a block to auto-assign from, not both or neither.');
+  }
 
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).single();
   if (!campaign) throw httpError(404, 'Campaign not found');
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
-  let block = null;
-  if (mode === 'digital') {
-    block = (await supabase.from('ticket_blocks').select('*').eq('id', block_id).eq('campaign_id', campaign_id).eq('type', 'digital').maybeSingle()).data;
-    if (!block) throw httpError(404, 'Digital ticket block not found in this campaign');
-  }
+  const { data: blocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id);
 
   const counts = tiers.map(t => ({ tier: t, count: Number(tier_counts[t.id]) || 0 }));
   const totalCount = counts.reduce((s, c) => s + c.count, 0);
@@ -477,6 +474,27 @@ async function recordSale(session, { campaign_id, mode, block_id, tier_counts, t
   counts.forEach(c => { for (let i = 0; i < c.count; i++) tierIdSequence.push(c.tier.id); });
   const amount = counts.reduce((s, c) => s + c.count * Number(c.tier.price), 0);
 
+  // Online tickets are paid for online only — there's no cash or machine payment for
+  // something with no physical form to hand over. Figure out which block(s) are actually
+  // involved before claiming anything, so this is enforced up front, not after the fact.
+  let autoAssignBlock = null;
+  if (auto_assign_block_id) {
+    autoAssignBlock = blocks.find(b => b.id === auto_assign_block_id);
+    if (!autoAssignBlock) throw httpError(404, 'Ticket block not found in this campaign');
+    if (autoAssignBlock.type === 'digital' && method !== 'link') throw httpError(400, 'Online tickets can only be paid by payment link.');
+  } else {
+    if (!ticket_numbers.length || ticket_numbers.length !== totalCount) {
+      throw httpError(400, `Entered ${ticket_numbers ? ticket_numbers.length : 0} ticket number(s) but ${totalCount} were specified — these must match.`);
+    }
+    const nums = ticket_numbers.map(Number);
+    const { data: existingRows } = await supabase.from('tickets').select('block_id').eq('campaign_id', campaign_id).in('ticket_number', nums);
+    const touchedBlockIds = new Set((existingRows || []).map(r => r.block_id));
+    if (blocks.some(b => touchedBlockIds.has(b.id) && b.type === 'digital') && method !== 'link') {
+      throw httpError(400, 'Online tickets can only be paid by payment link.');
+    }
+  }
+  const contact = method === 'link' ? parseContact(contact_value) : null;
+
   const initialStatus = method === 'cash' ? 'cash_pending' : (method === 'machine' ? 'paid' : 'held');
 
   const { data: payment, error: payErr } = await supabase.from('payments')
@@ -484,33 +502,21 @@ async function recordSale(session, { campaign_id, mode, block_id, tier_counts, t
     .select().single();
   if (payErr) throw httpError(500, payErr.message);
 
-  if (mode === 'digital') {
-    // Atomically reserve the next N numbers off this block's own counter — avoids two
-    // concurrent digital sales handing out the same number.
-    const { data: reserved, error: resErr } = await supabase
-      .rpc('reserve_digital_tickets', { p_block_id: block.id, p_count: totalCount });
-    if (resErr) {
-      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'digital ticket reservation failed' }).eq('id', payment.id);
-      throw httpError(500, 'Could not assign digital ticket numbers: ' + resErr.message);
+  if (auto_assign_block_id) {
+    const { error: claimErr } = await supabase.rpc('claim_lowest_available_tickets', {
+      p_block_id: auto_assign_block_id, p_tier_ids: tierIdSequence, p_status: initialStatus, p_payment_id: payment.id, p_sold_by: session.uid,
+    });
+    if (claimErr) {
+      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'not enough tickets available' }).eq('id', payment.id);
+      throw httpError(409, `Not enough tickets are available in "${autoAssignBlock.label}" right now — try a smaller quantity.`);
     }
-    const startNumber = reserved; // first number in the reserved run
-    const rows = tierIdSequence.map((tierId, i) => ({
-      campaign_id, block_id: block.id, ticket_number: startNumber + i, tier_id: tierId,
-      status: initialStatus, payment_id: payment.id, sold_by: session.uid, sold_at: new Date().toISOString(),
-    }));
-    const { error: insErr } = await supabase.from('tickets').insert(rows);
-    if (insErr) throw httpError(500, 'Payment recorded but digital tickets failed: ' + insErr.message);
   } else {
-    if (!ticket_numbers || ticket_numbers.length !== totalCount) {
-      throw httpError(400, `Entered ${ticket_numbers ? ticket_numbers.length : 0} ticket number(s) but ${totalCount} were specified — these must match.`);
-    }
     // Atomic, all-or-nothing claim, resolved by campaign + ticket number rather than a
-    // pre-chosen block — a campaign can have more than one physical block (e.g. a later
-    // top-up), and the number itself determines which one it belongs to. The DB function
-    // rolls back every update if even one requested ticket isn't currently 'unsold', so
-    // there's no window where a crash or network blip could leave a sale half-claimed.
+    // pre-chosen block. The DB function rolls back every update if even one requested ticket
+    // isn't currently 'unsold', so there's no window where a crash or network blip could
+    // leave a sale half-claimed.
     const items = ticket_numbers.map((num, i) => ({ ticket_number: Number(num), tier_id: tierIdSequence[i] }));
-    const { error: claimErr } = await supabase.rpc('claim_physical_tickets', {
+    const { error: claimErr } = await supabase.rpc('claim_specific_tickets', {
       p_campaign_id: campaign_id, p_items: items, p_status: initialStatus, p_payment_id: payment.id, p_sold_by: session.uid,
     });
     if (claimErr) {
@@ -519,7 +525,7 @@ async function recordSale(session, { campaign_id, mode, block_id, tier_counts, t
       // race — the far more common cause is a typo or wrong campaign selected. Nothing was
       // actually claimed (the function rolled itself back), so this reads fresh state.
       for (const num of ticket_numbers.map(Number)) {
-        const { data: existing } = await supabase.from('tickets').select('status, ticket_blocks!inner(type)').eq('campaign_id', campaign_id).eq('ticket_number', num).eq('ticket_blocks.type', 'physical').maybeSingle();
+        const { data: existing } = await supabase.from('tickets').select('status').eq('campaign_id', campaign_id).eq('ticket_number', num).maybeSingle();
         if (!existing) throw httpError(404, `Ticket ${num} doesn't exist in ${campaign.name} — check the campaign selected and the number entered.`);
         if (existing.status !== 'unsold') throw httpError(409, `Ticket ${num} is already ${existing.status} — sale cancelled, please recheck.`);
       }
@@ -527,12 +533,16 @@ async function recordSale(session, { campaign_id, mode, block_id, tier_counts, t
     }
   }
 
-  // Read back exactly what was claimed/minted — the caller (esp. a digital sale, whose
-  // numbers it couldn't have known in advance) needs the real assigned tickets, both to
-  // display them and to restore an accurate Undo if the payment method was mis-tapped.
-  const { data: soldTicketRows } = await supabase.from('tickets').select('ticket_number, tier_id').eq('payment_id', payment.id).order('ticket_number');
+  // Read back exactly what was claimed — the caller (esp. an auto-assigned sale, whose
+  // numbers it couldn't have known in advance) needs the real tickets, both to display them
+  // and to restore an accurate Undo if the payment method was mis-tapped.
+  const { data: soldTicketRows } = await supabase.from('tickets').select('ticket_number, tier_id, block_id').eq('payment_id', payment.id).order('ticket_number');
   const tierNameById = Object.fromEntries(tiers.map(t => [t.id, t.name]));
-  const soldTickets = soldTicketRows.map(t => ({ ticket_number: t.ticket_number, tier_id: t.tier_id, tier_name: tierNameById[t.tier_id] }));
+  const blockById = Object.fromEntries(blocks.map(b => [b.id, b]));
+  const soldTickets = soldTicketRows.map(t => ({
+    ticket_number: t.ticket_number, tier_id: t.tier_id, tier_name: tierNameById[t.tier_id],
+    display_number: `${(blockById[t.block_id] || {}).number_prefix || ''}${t.ticket_number}`,
+  }));
 
   if (method === 'cash') {
     await supabase.from('payments').update({ status: 'pending' }).eq('id', payment.id);
@@ -546,7 +556,7 @@ async function recordSale(session, { campaign_id, mode, block_id, tier_counts, t
 
   // link: a fresh SumUp checkout for THIS sale. Its reference is this sale's own id, so every
   // payment SumUp reports can be matched back to exactly these tickets and this buyer.
-  const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: campaign.name, ticketNumbers: soldTickets.map(t => t.ticket_number) });
+  const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: campaign.name, ticketNumbers: soldTickets.map(t => t.display_number) });
   if (!created.ok) {
     await releaseSaleTickets(payment.id);
     await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'could not create SumUp payment link' }).eq('id', payment.id);
@@ -586,14 +596,10 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
   return { ok: true, checkout_id: data.id, ref, pay_url: data.hosted_checkout_url };
 }
 
-// Puts a sale's tickets back: physical ones return to unsold; digital ones (which only
-// exist because of this sale) are removed.
+// Puts a sale's tickets back to unsold — physical and online alike, both are real
+// pre-populated rows now, so releasing one is always a reset, never a delete.
 async function releaseSaleTickets(payment_id) {
-  const { data: rows } = await supabase.from('tickets').select('id, ticket_blocks!inner(type)').eq('payment_id', payment_id);
-  const physicalIds = (rows || []).filter(t => t.ticket_blocks.type === 'physical').map(t => t.id);
-  const digitalIds = (rows || []).filter(t => t.ticket_blocks.type === 'digital').map(t => t.id);
-  if (digitalIds.length) await supabase.from('tickets').delete().in('id', digitalIds);
-  if (physicalIds.length) await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null, attendee_name: null }).in('id', physicalIds);
+  await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null, attendee_name: null }).eq('payment_id', payment_id);
 }
 
 // A Pay-by-Link sale must record where the link went, so a physical ticket handed to someone
@@ -627,24 +633,11 @@ async function undoSale(session, { payment_id }) {
   const ageSeconds = (Date.now() - new Date(payment.created_at).getTime()) / 1000;
   if (ageSeconds > UNDO_WINDOW_SECONDS) throw httpError(400, 'The Undo window has passed — ask an Admin to Void it instead.');
 
-  const { data: ticketRows } = await supabase.from('tickets').select('id, block_id, ticket_blocks!inner(type)').eq('payment_id', payment_id);
-  const physicalIds = ticketRows.filter(t => t.ticket_blocks.type === 'physical').map(t => t.id);
-  const digitalRows = ticketRows.filter(t => t.ticket_blocks.type === 'digital');
-
-  if (digitalRows.length) {
-    // Roll the block's counter back so the corrected resubmission reuses these same numbers
-    // instead of skipping ahead and leaving a gap — the tickets themselves were correct,
-    // only the payment method was mis-tapped.
-    const byBlock = {};
-    for (const t of digitalRows) byBlock[t.block_id] = (byBlock[t.block_id] || 0) + 1;
-    for (const [blockId, count] of Object.entries(byBlock)) {
-      await supabase.rpc('release_digital_tickets', { p_block_id: blockId, p_count: count });
-    }
-    await supabase.from('tickets').delete().in('id', digitalRows.map(t => t.id));
-  }
-  if (physicalIds.length) {
-    await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null }).in('id', physicalIds);
-  }
+  // Every block now pre-populates real rows, physical or online, so undoing a sale is always
+  // just releasing those rows back to unsold — same numbers, ready to reclaim on resubmission.
+  // (In practice this only ever runs for Cash/Machine: online tickets are link-only, and a
+  // link sale can't reach here at all — see the check above.)
+  await releaseSaleTickets(payment_id);
   await supabase.from('payments').delete().eq('id', payment_id);
   return { ok: true };
 }
@@ -854,15 +847,17 @@ async function dashboardState(session, { campaign_id } = {}) {
 }
 
 // Shows tickets grouped by tier ("Adult: 1, 2 · Child: 3, 4") rather than concatenating a
-// letter onto each number — the physical ticket only ever has the plain number printed on
-// it, so a prefix in the app that isn't on what anyone's holding just adds confusion.
-function groupTicketsForDisplay(payment, allTickets, tiers) {
+// letter onto each number by default — the number shown is exactly the block's own display
+// number (raw for physical, prefixed for an online series, e.g. "O15221"), never invented.
+function groupTicketsForDisplay(payment, allTickets, tiers, blocks) {
   const mine = allTickets.filter(t => t.payment_id === payment.id);
   const byTier = {};
   for (const t of mine) {
     const tier = tiers.find(x => x.id === t.tier_id);
+    const block = blocks.find(x => x.id === t.block_id);
     const name = tier ? tier.name : 'Unknown';
-    (byTier[name] = byTier[name] || []).push(t.ticket_number);
+    const num = `${(block && block.number_prefix) || ''}${t.ticket_number}`;
+    (byTier[name] = byTier[name] || []).push(num);
   }
   return Object.entries(byTier).map(([name, nums]) => `${name}: ${nums.join(', ')}`);
 }
@@ -875,8 +870,9 @@ async function listRecentPayments(session, { campaign_id } = {}) {
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
   const { data: users } = await supabase.from('users').select('id,name');
-  const { data: tickets } = await supabase.from('tickets').select('payment_id, ticket_number, tier_id, attendee_name');
+  const { data: tickets } = await supabase.from('tickets').select('payment_id, ticket_number, tier_id, block_id, attendee_name');
   const { data: tiers } = await supabase.from('tiers').select('id, name');
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
   const out = payments.map(p => ({
     id: p.id,
     seller: (users.find(u => u.id === p.seller_id) || {}).name || 'Unknown',
@@ -884,7 +880,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
     payer_name: p.payer_name, contact_value: p.contact_value, contact_channel: p.contact_channel,
     created_at: p.created_at,
     has_photo: !!p.photo_path,
-    tickets: groupTicketsForDisplay(p, tickets, tiers),
+    tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
   return { payments: out };
 }
@@ -898,8 +894,9 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
   const { data: users } = await supabase.from('users').select('id,name');
-  const { data: tickets } = await supabase.from('tickets').select('payment_id, ticket_number, tier_id');
+  const { data: tickets } = await supabase.from('tickets').select('payment_id, ticket_number, tier_id, block_id');
   const { data: tiers } = await supabase.from('tiers').select('id, name');
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
   const out = (payments || []).map(p => ({
     id: p.id,
     seller: (users.find(u => u.id === p.seller_id) || {}).name || 'Unknown',
@@ -909,7 +906,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
     status: p.status, // 'pending' = link issued, not yet paid. 'failed' = expired/declined, needs resend.
     created_at: p.created_at,
     resend_count: p.resend_count,
-    tickets: groupTicketsForDisplay(p, tickets, tiers),
+    tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
   return { payments: out };
 }
@@ -921,21 +918,31 @@ async function resendPayment(session, { payment_id }) {
   if (payment.method !== 'link') throw httpError(400, 'Only pay-by-link sales can have their link resent');
   if (payment.status === 'paid' || payment.status === 'void') throw httpError(400, `Cannot resend — this payment is already ${payment.status}`);
 
-  const { data: currentTickets } = await supabase.from('tickets').select('*').eq('payment_id', payment.id);
-  if (!currentTickets || !currentTickets.length) throw httpError(400, 'These tickets no longer exist (an unpaid online ticket is removed when its link expires) — start a new sale instead.');
-
-  // If the old checkout was actually paid (e.g. the notification was late), don't issue a second link.
+  // If the old checkout was actually paid (e.g. the notification was late), don't issue a
+  // second link. Note: this may also release online tickets back to unsold right here if
+  // SumUp now reports them failed/expired (see syncCheckout) — checked next.
   const current = await syncCheckout(payment);
   if (current === 'paid') throw httpError(400, 'That payment has just come through — no need to resend.');
 
-  // Re-claim (covers the case where the stale-payment sweep already released them to unsold)
+  // A physical ticket stays 'held' on failure/expiry (still tied to this payment, ready to
+  // reclaim for a fresh link). An online ticket is released immediately instead — nobody's
+  // physically holding it — so by the time an Admin resends, those numbers may already be
+  // gone to someone else. Detect that rather than silently reissuing numbers that moved on.
+  const { data: currentTickets } = await supabase.from('tickets').select('*').eq('payment_id', payment.id);
+  if (!currentTickets || !currentTickets.length) {
+    throw httpError(400, "These tickets have already been released back to the series (an unpaid online ticket frees up once its link expires) — start a new sale for this buyer instead.");
+  }
+
   for (const t of currentTickets) {
     await supabase.from('tickets').update({ status: 'held', payment_id: payment.id, sold_by: session.uid, sold_at: new Date().toISOString() }).eq('id', t.id);
   }
 
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', payment.campaign_id);
+  const prefixByBlock = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
   const created = await createSumupCheckout({
     payment_id: payment.id, refSuffix: `-R${payment.resend_count + 1}`, amount: payment.amount,
-    campaignName: payment.campaigns.name, ticketNumbers: currentTickets.map(t => t.ticket_number).sort((a, b) => a - b),
+    campaignName: payment.campaigns.name,
+    ticketNumbers: currentTickets.sort((a, b) => a.ticket_number - b.ticket_number).map(t => `${prefixByBlock[t.block_id] || ''}${t.ticket_number}`),
   });
   if (!created.ok) throw httpError(502, created.message);
 

@@ -237,7 +237,7 @@ async function doAddOrgAdmin() {
 }
 
 // ================= SELLER =================
-let sellCounts = {}, saleMode = 'physical', startNumValue = '', buyerNameValue = '', ticketNumbers = [];
+let sellCounts = {}, selectedBlockId = null, pickMode = 'manual', startNumValue = '', buyerNameValue = '', ticketNumbers = [];
 let pendingUndo = null, shareMenuOpenFor = null, tickHandle = null, linkPollHandle = null, activity = [];
 let contactValue = '';
 
@@ -257,16 +257,17 @@ async function renderSeller() {
 
   const camp = currentCampaign();
   const stats = await call('seller_state', { campaign_id: camp.id });
-  const physicalBlocks = camp.blocks.filter(b => b.type !== 'digital');
-  const digitalBlocks = camp.blocks.filter(b => b.type === 'digital');
   if (ticketNumbers.__campaignId !== camp.id) {
     sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
-    saleMode = physicalBlocks.length ? 'physical' : 'digital';
+    selectedBlockId = camp.blocks[0] ? camp.blocks[0].id : null;
+    pickMode = 'manual';
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
   }
-  if (saleMode === 'physical' && !physicalBlocks.length) saleMode = 'digital';
-  if (saleMode === 'digital' && !digitalBlocks.length) saleMode = 'physical';
+  if (!camp.blocks.find(b => b.id === selectedBlockId)) selectedBlockId = camp.blocks[0] ? camp.blocks[0].id : null;
+  const block = camp.blocks.find(b => b.id === selectedBlockId);
+  const isOnline = !!block && block.type === 'digital';
+  const autoMode = isOnline && pickMode === 'auto';
 
   document.getElementById('app').innerHTML = h`
     ${state.user.role!=='seller' ? `<button class="secondary" style="margin-bottom:14px" onclick="viewMode='admin'; render();">← Back to Admin</button>` : ''}
@@ -284,11 +285,17 @@ async function renderSeller() {
         ${campaigns.map(c => `<option value="${c.id}" ${c.id===camp.id?'selected':''}>${esc(c.name)} (${esc(tierSummary(c))})</option>`).join('')}
       </select>
 
-      ${physicalBlocks.length && digitalBlocks.length ? `
-      <label>Ticket type</label>
+      ${camp.blocks.length > 1 ? `
+      <label>Selling from</label>
+      <select id="blockSelect" onchange="onBlockChange(this.value)">
+        ${camp.blocks.map(b => `<option value="${b.id}" ${b.id===block.id?'selected':''}>${esc(b.label)}${b.type==='digital'?' (Online)':''}</option>`).join('')}
+      </select>` : ''}
+
+      ${isOnline ? `
+      <label>Ticket numbers</label>
       <div class="toggle">
-        <button type="button" class="${saleMode==='physical'?'active':''}" onclick="setSaleMode('physical')">Physical</button>
-        <button type="button" class="${saleMode==='digital'?'active alt':''}" onclick="setSaleMode('digital')">Digital</button>
+        <button type="button" class="${pickMode==='manual'?'active':''}" onclick="setPickMode('manual')">Pick a number</button>
+        <button type="button" class="${pickMode==='auto'?'active alt':''}" onclick="setPickMode('auto')">Any available</button>
       </div>` : ''}
 
       <div class="row" style="margin-top:12px">
@@ -297,11 +304,12 @@ async function renderSeller() {
             <input type="number" min="0" inputmode="numeric" value="${sellCounts[t.id]||0}" oninput="sellCounts['${t.id}']=Number(this.value)||0; regenerateTicketNumbers();"></div>`).join('')}
       </div>
 
-      ${saleMode==='digital' ? `
-        <div class="hint">Digital tickets — numbers are assigned automatically the moment you record the sale.</div>
+      ${autoMode ? `
+        <div class="hint">Any available number(s) in ${esc(block.label)} — assigned automatically the moment you record the sale.</div>
       ` : `
-        <label>Starting ticket number <span class="muted">(rest fills in automatically — edit any that don't match)</span></label>
-        <input type="text" id="startNum" inputmode="numeric" placeholder="e.g. ${physicalBlocks[0].range_start}" value="${esc(startNumValue)}" oninput="startNumValue=this.value; regenerateTicketNumbers()">
+        <label>${isOnline ? "Your lucky number" : 'Starting ticket number'} <span class="muted">(rest fills in automatically — edit any that don't match)</span></label>
+        <input type="text" id="startNum" inputmode="numeric" placeholder="e.g. ${block.range_start}" value="${esc(startNumValue)}" oninput="startNumValue=this.value; regenerateTicketNumbers()">
+        ${block.number_prefix ? `<div class="hint">Shown to the buyer as ${esc(block.number_prefix)}${esc(startNumValue||'…')}</div>` : ''}
       `}
 
       <div id="ticketRows" style="margin-top:10px"></div>
@@ -310,7 +318,7 @@ async function renderSeller() {
       <label>Buyer name</label>
       <input id="buyerName" placeholder="e.g. Mary O'Brien" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
 
-      <label>Buyer's mobile or email <span class="muted">${saleMode==='digital' ? '(where the payment link is sent)' : '(needed for Pay by Link — that\'s how we tie the ticket to them)'}</span></label>
+      <label>Buyer's mobile or email <span class="muted">${isOnline ? '(where the payment link is sent)' : '(needed for Pay by Link — that\'s how we tie the ticket to them)'}</span></label>
       <input id="contactInput" placeholder="07… or name@example.com" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
 
       <div id="paymentButtons">${paymentButtonsHtml()}</div>
@@ -323,7 +331,8 @@ async function renderSeller() {
 }
 
 function onCampaignChange(id) { state.lastCampaignId = id; saveState(); ticketNumbers = []; renderSeller(); }
-function setSaleMode(m) { saleMode = m; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
+function onBlockChange(id) { selectedBlockId = id; pickMode = 'manual'; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
+function setPickMode(m) { pickMode = m; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
 // ---- Pay by Link: sending the link to the buyer's own mobile/email ----
 // The contact is pre-filled as the recipient, so the seller just taps send in their own
 // SMS/WhatsApp/Mail app; we record which channel was used and when.
@@ -375,12 +384,13 @@ function startLinkPoller() {
 
 function regenerateTicketNumbers() {
   const camp = currentCampaign();
+  const block = camp.blocks.find(b => b.id === selectedBlockId);
   const order = camp.tiers.map(t => ({ id: t.id, count: sellCounts[t.id] || 0 }));
   const total = order.reduce((s, o) => s + o.count, 0);
   const seq = []; order.forEach(o => { for (let i=0;i<o.count;i++) seq.push(o.id); });
 
-  if (saleMode === 'digital') {
-    ticketNumbers = total ? seq.map(tierId => ({ tierId, digital: true })) : [];
+  if (block && block.type === 'digital' && pickMode === 'auto') {
+    ticketNumbers = total ? seq.map(tierId => ({ tierId, auto: true })) : [];
   } else {
     const startEl = document.getElementById('startNum');
     const start = Number(startEl ? startEl.value : '');
@@ -393,12 +403,13 @@ function regenerateTicketNumbers() {
 function renderTicketRows() {
   const wrap = document.getElementById('ticketRows'); if (!wrap) return;
   const camp = currentCampaign();
-  if (saleMode === 'digital') {
+  const block = camp.blocks.find(b => b.id === selectedBlockId);
+  if (block && block.type === 'digital' && pickMode === 'auto') {
     const byTier = {};
     ticketNumbers.forEach(tn => byTier[tn.tierId] = (byTier[tn.tierId]||0)+1);
-    wrap.innerHTML = camp.tiers.filter(t => byTier[t.id]).map((t, i) => {
+    wrap.innerHTML = camp.tiers.filter(t => byTier[t.id]).map((t) => {
       const idx = camp.tiers.findIndex(x=>x.id===t.id);
-      return `<div class="ticket-row"><span class="badge tier${idx%4}">${esc(t.name)} × ${byTier[t.id]}</span><span class="muted">assigned on save</span></div>`;
+      return `<div class="ticket-row"><span class="badge tier${idx%4}">${esc(t.name)} × ${byTier[t.id]}</span><span class="muted">any available</span></div>`;
     }).join('');
     return;
   }
@@ -452,13 +463,15 @@ function updateTotal() {
 // Undo lives on whichever of Cash/Machine was just tapped — a link, once created, can't be undone.
 function paymentButtonsHtml() {
   const camp = currentCampaign();
+  const block = camp && camp.blocks.find(b => b.id === selectedBlockId);
+  const isOnline = !!block && block.type === 'digital';
   const scoped = pendingUndo && camp && pendingUndo.campaignId === camp.id;
   const a = scoped ? activity.find(x => x.id === pendingUndo.activityId) : null;
   const remaining = a ? a.remaining : 0;
   const cashPending = scoped && pendingUndo.method === 'cash';
   const machinePending = scoped && pendingUndo.method === 'machine';
   const linkBtn = `<button class="primary" style="background:var(--tier-c)" ${scoped ? 'disabled' : ''} onclick="submitSale('link')">Pay by Link — send to buyer</button>`;
-  if (saleMode === 'digital') {
+  if (isOnline) {
     return linkBtn + `<div class="hint">Online tickets are paid by link only.</div>`;
   }
   return `
@@ -474,9 +487,11 @@ function updatePaymentButtons() { const el = document.getElementById('paymentBut
 
 async function submitSale(method) {
   const camp = currentCampaign();
+  const block = camp.blocks.find(b => b.id === selectedBlockId);
+  const autoMode = block && block.type === 'digital' && pickMode === 'auto';
   const errEl = document.getElementById('submitError');
   if (!ticketNumbers.length) { errEl.innerHTML = `<div class="error">Enter at least one ticket count first.</div>`; return; }
-  if (saleMode !== 'digital') {
+  if (!autoMode) {
     const statuses = ticketNumbers.map((tn,i)=>document.getElementById(`tnStatus-${i}`)?.textContent||'');
     if (statuses.some(s => s.includes('already') || s.includes("doesn't exist"))) {
       errEl.innerHTML = `<div class="error">Fix the flagged ticket number(s) before recording this sale.</div>`; return;
@@ -487,17 +502,14 @@ async function submitSale(method) {
   }
   if (!buyerNameValue.trim()) { errEl.innerHTML = `<div class="error">Enter the buyer's name first.</div>`; return; }
   errEl.innerHTML = '';
-  // Physical doesn't need a pre-chosen block — a campaign can have more than one (e.g. a
-  // top-up), and the ticket number itself resolves which one. Digital does need one, to
-  // pick which pool a campaign's digital sale draws from.
-  const digitalBlock = saleMode === 'digital' ? camp.blocks.find(b=>b.type==='digital') : null;
   const tier_counts = Object.fromEntries(camp.tiers.map(t => [t.id, sellCounts[t.id]||0]));
-  const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, contactValue, saleMode, ticketNumbers: ticketNumbers.map(t=>({...t})) };
+  const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, contactValue, selectedBlockId, pickMode, ticketNumbers: ticketNumbers.map(t=>({...t})) };
 
   try {
     const data = await call('record_sale', {
-      campaign_id: camp.id, mode: saleMode, block_id: digitalBlock ? digitalBlock.id : undefined, tier_counts,
-      ticket_numbers: saleMode === 'digital' ? undefined : ticketNumbers.map(t => t.value),
+      campaign_id: camp.id, tier_counts,
+      ticket_numbers: autoMode ? undefined : ticketNumbers.map(t => t.value),
+      auto_assign_block_id: autoMode ? selectedBlockId : undefined,
       method, payer_name: buyerNameValue, contact_value: method === 'link' ? contactValue : undefined,
     });
     const newId = Date.now();
@@ -539,7 +551,8 @@ async function doUndo(activityId) {
     startNumValue = a.draft.startNumValue;
     buyerNameValue = a.draft.buyerNameValue;
     contactValue = a.draft.contactValue || '';
-    saleMode = a.draft.saleMode;
+    selectedBlockId = a.draft.selectedBlockId;
+    pickMode = a.draft.pickMode;
     ticketNumbers = a.draft.ticketNumbers.map(t=>({...t}));
     ticketNumbers.__campaignId = a.campaignId;
     renderSeller();
@@ -564,14 +577,19 @@ function renderFeed() {
   const el = document.getElementById('feed'); if (!el) return;
   const camp = currentCampaign();
   el.innerHTML = activity.filter(a => a.campaignId === camp.id).map(a => {
-    const label = `${a.tickets.length} ticket${a.tickets.length>1?'s':''} (${a.tickets.map(t=>t.ticket_number).join(', ')})`;
+    const label = `${a.tickets.length} ticket${a.tickets.length>1?'s':''} (${a.tickets.map(t=>t.display_number||t.ticket_number).join(', ')})`;
     const when = new Date(a.soldAt).toLocaleString('en-GB', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
     if (a.method === 'link') {
-      const nums = a.tickets.map(t => t.ticket_number);
+      const nums = a.tickets.map(t => t.display_number || t.ticket_number);
       const sentLine = a.sharedVia
         ? `Sent by ${{sms:'SMS',whatsapp:'WhatsApp',email:'Email'}[a.sharedVia]} to ${esc(a.contact)} at ${new Date(a.sharedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`
         : `Not sent yet — tap a button below to send it to ${esc(a.contact)}`;
-      if (a.status === 'linkpaid') return `<div class="card"><div class="info">✓ Paid — £${a.amount.toFixed(2)} for ${label} (${esc(a.buyerName)}, ${esc(a.contact)}). SumUp confirmed it.</div><div style="font-size:11px;color:#888;margin-top:4px">${sentLine} · Sold ${when}</div></div>`;
+      if (a.status === 'linkpaid') return `<div class="card">
+        <div class="info">✓ Paid — £${a.amount.toFixed(2)} for ${label} (${esc(a.buyerName)}, ${esc(a.contact)}). SumUp confirmed it.</div>
+        <div style="font-size:11px;color:#888;margin-top:4px">${sentLine} · Sold ${when}</div>
+        <div style="margin-top:9px"><button class="link" onclick="toggleShareMenu(${a.id})">📤 Share ticket</button></div>
+        ${shareMenuOpenFor===a.id ? shareMenuHtml(a) : ''}
+      </div>`;
       const failed = a.status === 'linkfailed';
       return `<div class="card">
         <div class="${failed ? 'error' : 'hint'}" style="margin-top:0">${failed ? 'Link expired or failed' : '⏳ Awaiting payment'} — £${a.amount.toFixed(2)} for ${label}, ${esc(a.buyerName)}</div>
@@ -604,14 +622,28 @@ function shareMessageFor(a) {
   const byTier = {};
   a.tickets.forEach(t => byTier[t.tier_name] = (byTier[t.tier_name]||0)+1);
   const denom = Object.entries(byTier).map(([name,n]) => `${n} x ${name}`).join(', ');
-  const numbers = a.tickets.map(t => t.ticket_number).join(', ');
+  const numbers = a.tickets.map(t => t.display_number || t.ticket_number).join(', ');
   const when = new Date(a.soldAt).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
   return [camp.name, `${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Ticket number(s): ${numbers}`, `Total: £${a.amount.toFixed(2)}`, `Sold: ${when}`, `Thank you for your support!`].join('\n');
 }
+// Reused for both a Cash/Machine sale (no known contact — three generic buttons) and a paid
+// Pay by Link sale (contact already on file, so it's pre-filled — but not tracked via
+// logShared, which is specifically for the payment-request send, not this confirmation).
 function shareMenuHtml(a) {
   const body = encodeURIComponent(shareMessageFor(a));
   const camp = state.campaigns.find(c => c.id === a.campaignId);
   const subject = encodeURIComponent(`${camp.name} — your ticket`);
+  if (a.contact) {
+    return `<div style="background:#f4f0e6;border:1px dashed var(--line);border-radius:10px;padding:10px;margin-top:8px">
+      <div style="font-size:11.5px;color:#777;margin-bottom:8px">Send this ticket by:</div>
+      ${contactKind(a.contact)==='email'
+        ? `<div class="share-row"><a class="share-link" href="mailto:${encodeURIComponent(a.contact)}?subject=${subject}&body=${body}">✉️ Email ${esc(a.contact)}</a></div>`
+        : `<div class="share-row">
+            <a class="share-link" href="sms:${esc(a.contact)}?body=${body}">📱 SMS</a>
+            <a class="share-link" href="https://wa.me/${waNumber(a.contact)}?text=${body}" target="_blank" rel="noopener">💬 WhatsApp</a>
+          </div>`}
+    </div>`;
+  }
   return `<div style="background:#f4f0e6;border:1px dashed var(--line);border-radius:10px;padding:10px;margin-top:8px">
     <div style="font-size:11.5px;color:#777;margin-bottom:8px">Send this ticket by:</div>
     <div class="share-row">
@@ -689,7 +721,7 @@ async function doAnonymize() {
 
 // ---- Campaigns tab ----
 let draftTiers = [{name:'',price:''},{name:'',price:''}];
-let draftBlocks = [{type:'physical', label:'', range_start:'', range_end:''}];
+let draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
 
 async function renderCampaignsTab() {
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
@@ -734,7 +766,10 @@ async function renderCampaignsTab() {
     </div>` : ''}
   `;
 }
-function blockSummary(c) { return c.blocks.map(b => b.type==='digital' ? `${b.label} · digital` : `${b.range_start}–${b.range_end}${b.label!=='Main'?' ('+b.label+')':''}`).join(', '); }
+function blockSummary(c) { return c.blocks.map(b => {
+  const range = `${b.number_prefix||''}${b.range_start}–${b.number_prefix||''}${b.range_end}`;
+  return b.type==='digital' ? `${range} (${b.label}, online)` : `${range}${b.label!=='Main'?' ('+b.label+')':''}`;
+}).join(', '); }
 
 function tierRowHtml(t,i) {
   return `<div class="tier-row">
@@ -743,6 +778,10 @@ function tierRowHtml(t,i) {
     <button class="icon-x" onclick="removeTierRow(${i})" ${draftTiers.length<=1?'style="visibility:hidden"':''}>✕</button>
   </div>`;
 }
+// Physical and digital blocks take the same fields now — both need a real declared range,
+// pre-populated the same way. A digital ("Online") block can also carry a display prefix
+// (e.g. "O"), shown before the raw number to buyers; a physical block never gets one, since
+// a physical ticket must show exactly the number printed on it (non-negotiable #8).
 function blockRowHtml(b,i) {
   const isDigital = b.type==='digital';
   return `<div class="block-row" style="flex-wrap:wrap">
@@ -752,28 +791,32 @@ function blockRowHtml(b,i) {
         <button type="button" class="${isDigital?'active alt':''}" onclick="setBlockType(${i},'digital')">Digital</button>
       </div>
     </div>
-    ${isDigital ? `<div style="flex:1 1 110px"><span class="muted">Nothing else to fill in — it names and numbers itself.</span></div>` : `
-    <div style="flex:1 1 100px"><label>${i===0?'Label':''}</label><input value="${esc(b.label)}" placeholder="e.g. Main" oninput="draftBlocks[${i}].label=this.value"></div>
+    <div style="flex:1 1 100px"><label>${i===0?'Label':''}</label><input value="${esc(b.label)}" placeholder="${isDigital?'e.g. Online':'e.g. Main'}" oninput="draftBlocks[${i}].label=this.value"></div>
     <div style="flex:1 1 80px"><label>${i===0?'Start #':''}</label><input type="number" value="${b.range_start}" oninput="draftBlocks[${i}].range_start=this.value"></div>
-    <div style="flex:1 1 80px"><label>${i===0?'End #':''}</label><input type="number" value="${b.range_end}" oninput="draftBlocks[${i}].range_end=this.value"></div>`}
+    <div style="flex:1 1 80px"><label>${i===0?'End #':''}</label><input type="number" value="${b.range_end}" oninput="draftBlocks[${i}].range_end=this.value"></div>
+    ${isDigital ? `<div style="flex:1 1 90px"><label>${i===0?'Prefix':''}</label><input value="${esc(b.number_prefix||'')}" placeholder="e.g. O" maxlength="6" oninput="draftBlocks[${i}].number_prefix=this.value"></div>` : ''}
     <button class="icon-x" onclick="removeBlockRow(${i})" ${draftBlocks.length<=1?'style="visibility:hidden"':''}>✕</button>
-  </div>`;
+  </div>
+  ${isDigital ? `<div class="hint" style="margin:-2px 0 8px">Buyers can pick a specific number in this range ("lucky number") or get any available one — both live-checked, same as physical.</div>` : ''}`;
 }
 function setBlockType(i,type) { draftBlocks[i].type = type; renderCampaignsTab(); }
 function addTierRow() { draftTiers.push({name:'',price:''}); renderCampaignsTab(); }
 function removeTierRow(i) { if (draftTiers.length<=1) return; draftTiers.splice(i,1); renderCampaignsTab(); }
-function addBlockRow() { draftBlocks.push({type:'physical', label:'', range_start:'', range_end:''}); renderCampaignsTab(); }
+function addBlockRow() { draftBlocks.push({type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}); renderCampaignsTab(); }
 function removeBlockRow(i) { if (draftBlocks.length<=1) return; draftBlocks.splice(i,1); renderCampaignsTab(); }
 
 async function createCampaign() {
   const resEl = document.getElementById('createResult');
   try {
     const tiers = draftTiers.filter(t=>t.name.trim()!=='' && t.price!=='').map(t=>({name:t.name.trim(), price:Number(t.price)}));
-    const blocks = draftBlocks.filter(b=>b.type==='digital' || (b.range_start!=='' && b.range_end!=='')).map(b =>
-      b.type==='digital' ? { type:'digital' } : { type:'physical', label:b.label.trim()||'Main', range_start:Number(b.range_start), range_end:Number(b.range_end) });
+    const blocks = draftBlocks.filter(b=>b.range_start!=='' && b.range_end!=='').map(b => ({
+      type:b.type, label:b.label.trim()||(b.type==='digital'?'Online':'Main'),
+      range_start:Number(b.range_start), range_end:Number(b.range_end),
+      number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
+    }));
     await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks });
     draftTiers = [{name:'',price:''},{name:'',price:''}];
-    draftBlocks = [{type:'physical', label:'', range_start:'', range_end:''}];
+    draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
     renderCampaignsTab();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
