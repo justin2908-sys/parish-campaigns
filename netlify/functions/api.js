@@ -617,7 +617,10 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
     body: JSON.stringify({
       checkout_reference: ref, amount: Number(amount), currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE,
       description: `${campaignName} — ticket${ticketNumbers.length > 1 ? 's' : ''} ${ticketNumbers.join(', ')}`,
-      return_url: `${baseUrl}/api/sumup_webhook`,
+      // Where the BUYER'S OWN BROWSER lands after paying — must be a real page, never the
+      // JSON webhook endpoint. Carries this sale's own id so the page knows what to show;
+      // that id is an unguessable UUID and the page it points to discloses nothing sensitive.
+      return_url: `${baseUrl}/ticket.html?payment_id=${payment_id}`,
       hosted_checkout: { enabled: true },
     }),
   });
@@ -627,6 +630,50 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
   }
   if (!data.hosted_checkout_url) return { ok: false, message: 'SumUp created the checkout but returned no payment link — check the SumUp account has hosted checkout enabled.' };
   return { ok: true, checkout_id: data.id, ref, pay_url: data.hosted_checkout_url };
+}
+
+// Public — deliberately no session required. This is what ticket.html calls after a buyer
+// pays a link, to show them their own confirmation. Safe to expose without login because:
+// (a) it's addressed only by the payment's own id, a random UUID that isn't guessable or
+// enumerable; (b) it discloses nothing sensitive — no seller identity, no other buyers, no
+// internal ids; (c) the paid/unpaid status always comes fresh from syncCheckout (SumUp
+// itself), never from anything the caller claims.
+async function publicPaymentStatus({ payment_id }) {
+  if (!payment_id) throw httpError(400, 'payment_id is required');
+  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(name, details_text, org_id)').eq('id', payment_id).maybeSingle();
+  if (!payment) throw httpError(404, 'Sale not found');
+  if (payment.method !== 'link') throw httpError(400, 'This sale was not paid by link');
+
+  // Fetched BEFORE syncCheckout deliberately: an expired/failed ONLINE sale gets its ticket
+  // rows released (cleared) by syncCheckout, so reading them first captures what the buyer
+  // was actually assigned — needed both to know physical-vs-online, and to still show them
+  // which number they had even if it's since been let go.
+  const { data: ticketRows } = await supabase.from('tickets').select('ticket_number, tier_id, block_id').eq('payment_id', payment_id);
+  const { data: tiers } = await supabase.from('tiers').select('id, name').eq('campaign_id', payment.campaign_id);
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, type, number_prefix').eq('campaign_id', payment.campaign_id);
+  const blockById = Object.fromEntries((blocks || []).map(b => [b.id, b]));
+  const tierNameById = Object.fromEntries((tiers || []).map(t => [t.id, t.name]));
+  const tickets = (ticketRows || []).map(t => ({
+    display_number: `${(blockById[t.block_id] || {}).number_prefix || ''}${t.ticket_number}`,
+    tier_name: tierNameById[t.tier_id] || 'Ticket',
+  }));
+  const isPhysical = ticketRows && ticketRows.length ? blockById[ticketRows[0].block_id].type === 'physical' : true;
+
+  const status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
+  const { data: org } = await supabase.from('organizations').select('name, address').eq('id', payment.campaigns.org_id).single();
+
+  return {
+    status, // 'paid' | 'pending' | 'failed' | 'void'
+    is_physical: isPhysical,
+    amount: Number(payment.amount),
+    buyer_name: payment.payer_name,
+    campaign_name: payment.campaigns.name,
+    campaign_details: payment.campaigns.details_text,
+    org_name: org ? org.name : '',
+    org_address: org ? org.address : '',
+    tickets,
+    sold_at: payment.created_at,
+  };
 }
 
 // Puts a sale's tickets back to unsold — physical and online alike, both are real
@@ -1097,6 +1144,7 @@ const actions = {
   check_ticket: (s, b) => checkTicket(s, b),
   record_sale: (s, b) => recordSale(s, b),
   checkout_status: (s, b) => checkoutStatus(s, b),
+  public_payment_status: (s, b) => publicPaymentStatus(b),
   log_link_shared: (s, b) => logLinkShared(s, b),
   sumup_check: (s) => sumupCheck(s),
   sumup_webhook: (s, b) => sumupWebhook(b),

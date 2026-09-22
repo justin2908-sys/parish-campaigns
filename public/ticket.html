@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your ticket</title>
+<style>
+  :root {
+    --ink: #1c1c1e; --paper: #fdfcf9; --line: #e4e0d8;
+    --accent: #8a3b2b; --accent-dim: #f2e4de;
+    --good: #3a6b4f; --good-dim: #e2efe6;
+    --warn: #b5651d; --warn-dim: #fbead9;
+    --bad: #a4342a; --bad-dim: #f6dedb;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--paper); color:var(--ink); }
+  header { padding: 18px 20px; border-bottom: 1px solid var(--line); text-align:center; }
+  header h1 { font-size: 17px; margin:0; }
+  main { max-width: 480px; margin: 0 auto; padding: 20px; }
+  .card { background:white; border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:16px; }
+  .center { text-align:center; }
+  .muted { color:#888; font-size:13px; }
+  .badge { display:inline-block; padding:4px 14px; border-radius:20px; font-size:13px; font-weight:700; }
+  .badge.ok { background:var(--good-dim); color:var(--good); }
+  .badge.warn { background:var(--warn-dim); color:var(--warn); }
+  .badge.bad { background:var(--bad-dim); color:var(--bad); }
+  .num { font-size:34px; font-weight:700; letter-spacing:0.5px; margin:10px 0; }
+  button.primary { width:100%; padding:15px; font-size:16px; font-weight:600; background:var(--accent); color:white; border:none; border-radius:12px; margin-top:14px; cursor:pointer; }
+  button.secondary { width:100%; padding:13px; font-size:14px; background:var(--accent-dim); color:var(--accent); border:none; border-radius:12px; margin-top:8px; cursor:pointer; }
+  #ticketCanvas { display:none; }
+  #ticketImg { width:100%; border-radius:12px; border:1px solid var(--line); margin-top:14px; }
+  .stat { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .stat:last-child { border:none; }
+  .details-text { white-space:pre-wrap; font-size:14px; color:#444; line-height:1.5; margin:10px 0; }
+</style>
+</head>
+<body>
+<header><h1>⛪ Parish Campaigns</h1></header>
+<main id="app">
+  <div class="card center"><p class="muted">Checking your payment…</p></div>
+</main>
+
+<script>
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+const params = new URLSearchParams(location.search);
+const paymentId = params.get('payment_id');
+let pollHandle = null;
+
+async function load() {
+  const app = document.getElementById('app');
+  if (!paymentId) { app.innerHTML = `<div class="card"><div class="badge bad">Link error</div><p>No payment reference found in this link.</p></div>`; return; }
+  try {
+    const res = await fetch('/api/public_payment_status', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ payment_id: paymentId }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Something went wrong');
+    render(data);
+  } catch (e) {
+    app.innerHTML = `<div class="card"><div class="badge bad">Couldn't check this</div><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function render(d) {
+  const app = document.getElementById('app');
+  const when = new Date(d.sold_at).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const numbers = d.tickets.map(t => t.display_number).join(', ');
+  const byTier = {};
+  d.tickets.forEach(t => byTier[t.tier_name] = (byTier[t.tier_name]||0)+1);
+  const denom = Object.entries(byTier).map(([n,c]) => `${c} x ${n}`).join(', ');
+
+  if (d.status === 'paid' && d.is_physical) {
+    // The physical ticket was already handed over at the point of sale — this is purely an
+    // acknowledgment that the payment for it has now come through, nothing more to collect.
+    app.innerHTML = `<div class="card center">
+      <div class="badge ok">✓ Payment received</div>
+      <p style="margin-top:14px">Thank you! Your payment for <b>${esc(d.campaign_name)}</b> ticket${d.tickets.length>1?'s':''} <b>${esc(numbers)}</b> has come through.</p>
+      <p class="muted">The ticket itself was already given to you — there's nothing else to do.</p>
+    </div>`;
+    return;
+  }
+
+  if (d.status === 'paid') {
+    // Online ticket: there's no physical object, so this page IS effectively the ticket.
+    app.innerHTML = `<div class="card center">
+      <div class="badge ok">✓ Payment received</div>
+      <div id="ticketCardHtml">
+        ${d.org_name ? `<p class="muted" style="margin:14px 0 0">${esc(d.org_name)}${d.org_address?`<br>${esc(d.org_address)}`:''}</p>` : ''}
+        <h2 style="margin:10px 0 0">${esc(d.campaign_name)}</h2>
+        <div class="num">${esc(numbers)}</div>
+        ${d.campaign_details ? `<div class="details-text" style="text-align:left">${esc(d.campaign_details)}</div>` : ''}
+        <div class="stat"><span>${esc(denom)}</span><b>£${d.amount.toFixed(2)}</b></div>
+        <div class="stat"><span>Buyer</span><b>${esc(d.buyer_name||'—')}</b></div>
+        <div class="stat"><span>Sold</span><b>${esc(when)}</b></div>
+      </div>
+      <img id="ticketImg" alt="Your ticket">
+      <a id="saveLink" download="ticket-${numbers.replace(/[^a-zA-Z0-9]/g,'')}.png"><button class="primary">💾 Save ticket image</button></a>
+      <p class="muted" style="margin-top:8px">On iPhone: press and hold the image above, then "Save to Photos".</p>
+    </div>
+    <canvas id="ticketCanvas" width="720" height="1000"></canvas>`;
+    drawTicketImage(d, numbers, denom, when);
+    return;
+  }
+
+  if (d.status === 'pending') {
+    app.innerHTML = `<div class="card center">
+      <div class="badge warn">⏳ Not received yet</div>
+      <p style="margin-top:14px">We haven't seen your payment come through yet. If you've just paid, this can take a few seconds.</p>
+      <button class="secondary" onclick="load()">Check again</button>
+    </div>`;
+    if (!pollHandle) pollHandle = setInterval(load, 6000);
+    return;
+  }
+
+  clearInterval(pollHandle); pollHandle = null;
+  app.innerHTML = `<div class="card center">
+    <div class="badge bad">Link expired</div>
+    <p style="margin-top:14px">This payment link for <b>${esc(d.campaign_name)}</b> ${d.tickets.length ? `(ticket${d.tickets.length>1?'s':''} ${esc(numbers)}) ` : ''}wasn't completed in time.</p>
+    <p class="muted">${d.is_physical ? 'Your physical ticket is still with you — please contact the seller about paying another way.' : 'That number has been released and may now belong to someone else. Please ask for a fresh link.'}</p>
+  </div>`;
+}
+
+// Renders a shareable/saveable ticket image client-side — no server-side image generation
+// needed. Drawn plainly rather than mimicking the physical ticket pixel-for-pixel; the
+// content (not the exact art) is what matters here.
+function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+  const paragraphs = String(text).split('\n');
+  for (const para of paragraphs) {
+    let line = '';
+    for (const word of para.split(' ')) {
+      const test = line ? line + ' ' + word : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, y); y += lineHeight; line = word;
+      } else line = test;
+    }
+    ctx.fillText(line, x, y); y += lineHeight;
+  }
+  return y;
+}
+function drawTicketImage(d, numbers, denom, when) {
+  const canvas = document.getElementById('ticketCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, pad = 50;
+  ctx.fillStyle = '#fdfcf9'; ctx.fillRect(0, 0, W, canvas.height);
+  ctx.strokeStyle = '#e4e0d8'; ctx.lineWidth = 3; ctx.strokeRect(10, 10, W-20, canvas.height-20);
+  let y = 70;
+  ctx.fillStyle = '#8a3b2b'; ctx.font = 'bold 30px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('⛪ ' + (d.org_name || 'Parish Campaigns'), pad, y);
+  if (d.org_address) { y += 30; ctx.fillStyle = '#888'; ctx.font = '18px sans-serif'; ctx.fillText(d.org_address, pad, y); }
+  y += 50; ctx.strokeStyle = '#e4e0d8'; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke();
+  y += 55; ctx.fillStyle = '#1c1c1e'; ctx.font = 'bold 36px sans-serif'; ctx.fillText(d.campaign_name, pad, y);
+  y += 20; ctx.fillStyle = '#888'; ctx.font = '18px sans-serif'; ctx.fillText('TICKET NO.', pad, y += 40);
+  ctx.fillStyle = '#8a3b2b'; ctx.font = 'bold 52px sans-serif'; ctx.fillText(numbers, pad, y += 55);
+  y += 50;
+  if (d.campaign_details) {
+    ctx.fillStyle = '#333'; ctx.font = '18px sans-serif';
+    y = wrapText(ctx, d.campaign_details, pad, y, W - pad*2, 26);
+    y += 20;
+  }
+  ctx.strokeStyle = '#e4e0d8'; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke(); y += 40;
+  ctx.font = '20px sans-serif';
+  const row = (label, value) => {
+    ctx.fillStyle = '#666'; ctx.textAlign = 'left'; ctx.fillText(label, pad, y);
+    ctx.fillStyle = '#1c1c1e'; ctx.textAlign = 'right'; ctx.fillText(value, W-pad, y);
+    ctx.textAlign = 'left'; y += 34;
+  };
+  row(denom, '£' + d.amount.toFixed(2));
+  row('Buyer', d.buyer_name || '—');
+  row('Sold', when);
+  y += 20;
+  ctx.fillStyle = '#e2efe6'; ctx.fillRect(pad, y, W - pad*2, 50);
+  ctx.fillStyle = '#3a6b4f'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('✓ PAID', W/2, y + 33);
+
+  const url = canvas.toDataURL('image/png');
+  document.getElementById('ticketImg').src = url;
+  document.getElementById('saveLink').href = url;
+}
+
+load();
+</script>
+</body>
+</html>

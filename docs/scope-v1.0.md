@@ -466,3 +466,38 @@ The "Share ticket" message (shown once a sale — physical or online, any paymen
 is confirmed) now includes: parish name and address, the campaign's own details_text (if
 any), the tier breakdown, ticket number(s) with their display prefix, price, buyer name, and
 sale date/time — matching the physical ticket's own content structure.
+
+---
+
+## 15. Post-payment confirmation page — built 2026-09-22
+
+Fixes the gap identified in §11 and refined by Justin: SumUp was redirecting a buyer's own
+browser to the JSON webhook endpoint after paying, not a real page. The content also needed
+to differ by ticket type, which Justin correctly identified as the key distinction: a
+**physical** ticket was already handed over at the point of sale, so payment confirming is
+just an acknowledgment ("thank you, payment received") — nothing to show or save, since the
+buyer already holds the real thing. An **online** ticket has no physical form, so its
+confirmation page IS effectively the ticket, and needs the full replica plus a way to keep it.
+
+**Built:**
+- `return_url` now points to `/ticket.html?payment_id=<id>` — a real, standalone page, not
+  the API endpoint. `/ticket.html` is public (no login), works entirely off that one
+  unguessable id, and calls a new public backend action for its content.
+- `public_payment_status` (no session required) — deliberately narrow: identified only by
+  the payment's own id, discloses nothing sensitive (no seller identity, no other buyers),
+  and its status always comes from a fresh `syncCheckout` call to SumUp, never trusted from
+  the request. Fetches the sale's ticket rows *before* calling `syncCheckout`, since an
+  expired online sale has those rows released (cleared) as a side effect of that call —
+  fetching after would wrongly show no tickets and default to "physical".
+- Four states on `/ticket.html`: **paid + physical** (thank-you only), **paid + online**
+  (full replica: parish name/address, campaign details, ticket number(s), tier breakdown,
+  price, buyer, date — plus a Save button), **pending** (auto-rechecks every 6s), **failed/
+  expired** (physical: ticket's still with you, pay another way; online: number's likely
+  gone to someone else, ask for a fresh link).
+- The "Save" experience is a client-side-generated PNG (HTML canvas, no server-side image
+  generation or library) — both a long-press-to-save `<img>` (for iOS) and a direct download
+  link (for Android/desktop).
+
+This also directly serves the future buyer-direct purchase flow (§10's open item): once that
+public purchase page exists, it will land the buyer on this same `/ticket.html` confirmation
+after paying, unchanged.
