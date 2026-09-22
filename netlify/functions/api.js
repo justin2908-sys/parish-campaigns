@@ -558,8 +558,16 @@ async function recordSale(session, { campaign_id, mode, block_id, tier_counts, t
 
 // Creates the SumUp hosted checkout for one sale. checkout_reference = this sale's id (plus a
 // resend suffix), and return_url is where SumUp notifies us when the status changes.
+//
+// The reference is cosmetic, not load-bearing: reconciliation matches on SumUp's own
+// checkout id (sumup_checkout_id), never on this string. So it's built purely to be
+// readable on SumUp's own side — CAMPAIGN-SHORTID — so scanning the SumUp dashboard or
+// export shows at a glance which campaign a payment belongs to, e.g. "RAFFLE2026-A1B2C3D4".
+function campaignSlug(name) {
+  return (name || 'CAMPAIGN').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 20) || 'CAMPAIGN';
+}
 async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName, ticketNumbers }) {
-  const ref = `PC-${payment_id}${refSuffix}`;
+  const ref = `${campaignSlug(campaignName)}-${payment_id.slice(0, 8).toUpperCase()}${refSuffix}`;
   const resp = await fetch('https://api.sumup.com/v0.1/checkouts', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${SUMUP_API_KEY}`, 'Content-Type': 'application/json' },

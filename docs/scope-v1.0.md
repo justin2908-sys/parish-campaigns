@@ -314,3 +314,10 @@ removed when its link expires — nothing exists until it's paid.
 *Open, to decide before building the buyer-facing side:* who starts an online purchase (a
 seller sending a link, or the buyer on a public page), and how the buyer receives the ticket
 after paying.
+
+**Refined 2026-09-22:** the SumUp `checkout_reference` shown on each payment link is
+cosmetic, not the mechanism — reconciliation always matches on SumUp's own internal
+checkout id, never on this string. So it's formatted purely to be readable to Justin on
+SumUp's own dashboard/exports: `<CAMPAIGN-SLUG>-<SHORT-ID>`, e.g. `RAFFLE2026-A1B2C3D4`,
+letting a scan of SumUp's own transaction list show at a glance which campaign a payment
+belongs to.
