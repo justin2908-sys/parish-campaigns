@@ -188,7 +188,33 @@ async function listUsers(session) {
   return { users: out };
 }
 
-// ---------- Campaigns, Tiers, Ticket Blocks ----------
+// ---------- Organization settings, Campaigns, Tiers, Ticket Blocks ----------
+
+// The parish's address, shown on every ticket message from any of its campaigns. Read by
+// any org-scoped role (a seller needs it to build a ticket confirmation), set by SuperAdmin.
+async function getOrgSettings(session) {
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  const { data } = await supabase.from('organizations').select('id, name, address').eq('id', session.org_id).single();
+  return { organization: data };
+}
+async function setOrgAddress(session, { address }) {
+  requireOrgRole(session, ['superadmin']);
+  const { error } = await supabase.from('organizations').update({ address: (address || '').trim() || null }).eq('id', session.org_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// Free-text, deliberately unstructured rather than rigid fields like "prizes" or
+// "draw_date": every campaign type needs different things on its ticket (a raffle has
+// prizes and a draw date, a dinner has neither) — a SuperAdmin writes whatever's relevant
+// once, and it's reused verbatim in every ticket message for that campaign.
+async function setCampaignDetails(session, { campaign_id, details_text }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const { error } = await supabase.from('campaigns').update({ details_text: (details_text || '').trim() || null }).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
 
 // tiers: [{ name, price }]
 // blocks: [{ type: 'physical'|'digital', label?, range_start, range_end, number_prefix? }]
@@ -196,7 +222,7 @@ async function listUsers(session) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks }) {
+async function createCampaign(session, { name, tiers, blocks, details_text }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
@@ -209,7 +235,7 @@ async function createCampaign(session, { name, tiers, blocks }) {
   }
 
   const { data: campaign, error: campErr } = await supabase.from('campaigns')
-    .insert({ org_id: session.org_id, name: name.trim(), created_by: session.uid })
+    .insert({ org_id: session.org_id, name: name.trim(), created_by: session.uid, details_text: (details_text || '').trim() || null })
     .select().single();
   if (campErr) throw httpError(400, campErr.message);
 
@@ -1055,7 +1081,10 @@ const actions = {
   reset_password: (s, b) => resetPassword(s, b),
   list_users: (s) => listUsers(s),
 
+  get_org_settings: (s) => getOrgSettings(s),
+  set_org_address: (s, b) => setOrgAddress(s, b),
   create_campaign: (s, b) => createCampaign(s, b),
+  set_campaign_details: (s, b) => setCampaignDetails(s, b),
   list_campaigns: (s, b) => listCampaigns(s, b),
   set_disabled_campaigns: (s, b) => setDisabledCampaigns(s, b),
   set_campaign_active: (s, b) => setCampaignActive(s, b),

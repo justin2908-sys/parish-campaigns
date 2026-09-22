@@ -42,6 +42,7 @@
   .stat { display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line); }
   .stat:last-child { border:none; }
   .badge { display:inline-block; padding:2px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .tiny-actions { display:flex; flex-wrap:wrap; gap:6px; }
   .badge.ok { background:var(--good-dim); color:var(--good); }
   .badge.warn { background:var(--warn-dim); color:var(--warn); }
   .badge.bad { background:var(--bad-dim); color:var(--bad); }
@@ -254,6 +255,7 @@ async function renderSeller() {
     document.getElementById('app').innerHTML = `<div class="card"><div class="error">No campaign is active yet — ask a SuperAdmin to create or activate one.</div></div>`;
     return;
   }
+  if (!state.org) { try { const { organization } = await call('get_org_settings'); state.org = organization; } catch {} }
 
   const camp = currentCampaign();
   const stats = await call('seller_state', { campaign_id: camp.id });
@@ -607,6 +609,9 @@ function renderFeed() {
 }
 
 function toggleShareMenu(id) { shareMenuOpenFor = shareMenuOpenFor === id ? null : id; renderFeed(); }
+// Replicates the physical ticket's own content — parish name/address, campaign-specific
+// details (prizes, draw date, tagline, whatever the SuperAdmin wrote for THIS campaign — see
+// campaigns.details_text), tier breakdown, ticket number(s), price, buyer, sale date/time.
 function shareMessageFor(a) {
   const camp = state.campaigns.find(c => c.id === a.campaignId);
   const byTier = {};
@@ -614,7 +619,13 @@ function shareMessageFor(a) {
   const denom = Object.entries(byTier).map(([name,n]) => `${n} x ${name}`).join(', ');
   const numbers = a.tickets.map(t => t.display_number || t.ticket_number).join(', ');
   const when = new Date(a.soldAt).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
-  return [camp.name, `${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Ticket number(s): ${numbers}`, `Total: £${a.amount.toFixed(2)}`, `Sold: ${when}`, `Thank you for your support!`].join('\n');
+  const lines = [];
+  if (state.org && state.org.name) lines.push(state.org.name);
+  if (state.org && state.org.address) lines.push(state.org.address);
+  lines.push('', `🎟️ ${camp.name} — Ticket No. ${numbers}`, '');
+  if (camp.details_text) { lines.push(camp.details_text, ''); }
+  lines.push(`${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Total: £${a.amount.toFixed(2)}`, `Buyer: ${a.buyerName||'—'}`, `Sold: ${when}`, '', `Thank you for your support!`);
+  return lines.join('\n');
 }
 // Reused for both a Cash/Machine sale (no known contact — three generic buttons) and a paid
 // Pay by Link sale (contact already on file, so it's pre-filled — but not tracked via
@@ -713,10 +724,23 @@ async function doAnonymize() {
 let draftTiers = [{name:'',price:''},{name:'',price:''}];
 let draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
 
+let campaignDetailsCache = {}; // campaign id -> details_text, so the edit prompt doesn't need
+                                // to embed arbitrary multi-line text inside an onclick attribute
 async function renderCampaignsTab() {
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
+  campaigns.forEach(c => { campaignDetailsCache[c.id] = c.details_text || ''; });
+  let org = null;
+  if (state.user.role === 'superadmin') { try { org = (await call('get_org_settings')).organization; } catch {} }
   const el = document.getElementById('adminContent');
   el.innerHTML = h`
+    ${org ? `<div class="card">
+      <h3 style="margin-top:0">Parish details</h3>
+      <p class="muted">Shown on every ticket message, for every campaign.</p>
+      <label>Address</label>
+      <input id="orgAddressInput" placeholder="e.g. 2 Witham Road, Osterley, TW7 4AJ" value="${esc(org.address||'')}">
+      <button class="small" style="margin-top:8px" onclick="doSaveOrgAddress()">Save</button>
+      <div id="orgAddressResult"></div>
+    </div>` : ''}
     ${state.user.role==='superadmin' ? `<div class="card">
       <h3 style="margin-top:0">SumUp connection</h3>
       <p class="muted">Checks that Pay by Link will work: creates a £0.01 test link and cancels it straight away. No money moves.</p>
@@ -732,8 +756,9 @@ async function renderCampaignsTab() {
           <td>${esc(tierSummary(c))}</td>
           <td>${esc(blockSummary(c))}</td>
           <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span></td>
-          <td>
+          <td class="tiny-actions">
             ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
+            <button class="small" onclick="doEditCampaignDetails('${c.id}')">${c.details_text ? 'Details ✓' : 'Add details'}</button>
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
             <button class="small" onclick="doBinCampaign('${c.id}','${esc(c.name).replace(/'/g,"\\'")}')">Bin</button>` : ''}
           </td>
@@ -751,10 +776,23 @@ async function renderCampaignsTab() {
       <label>Ticket blocks <span class="muted">— physical, digital, or a mix (hybrid)</span></label>
       <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i)).join('')}</div>
       <button class="ghost" onclick="addBlockRow()">+ Add another block</button>
+      <label>Campaign details <span class="muted">(optional — prizes, draw date, tagline, anything included in every ticket message for this campaign)</span></label>
+      <textarea id="cDetails" rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="e.g. 1st Prize — £1,200 · 2nd Prize — £500 · 3rd Prize — £300&#10;Draw Date: 20 December 2026&#10;&quot;Give a little, help a lot&quot; — every penny raised supports our church building fund.&#10;Winning numbers published on the parish website &amp; notice board; winners contacted via the parish office."></textarea>
       <button class="primary" onclick="createCampaign()">Create Campaign</button>
       <div id="createResult"></div>
     </div>` : ''}
   `;
+}
+async function doSaveOrgAddress() {
+  const resEl = document.getElementById('orgAddressResult');
+  try { await call('set_org_address', { address: document.getElementById('orgAddressInput').value }); resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; }
+  catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function doEditCampaignDetails(campaignId) {
+  const text = prompt("This campaign's details (shown on every ticket message) — leave empty to remove:", campaignDetailsCache[campaignId] || '');
+  if (text === null) return;
+  try { await call('set_campaign_details', { campaign_id: campaignId, details_text: text }); renderCampaignsTab(); }
+  catch (e) { alert(e.message); }
 }
 function blockSummary(c) { return c.blocks.map(b => {
   const range = `${b.number_prefix||''}${b.range_start}–${b.number_prefix||''}${b.range_end}`;
@@ -804,7 +842,7 @@ async function createCampaign() {
       range_start:Number(b.range_start), range_end:Number(b.range_end),
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
-    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks });
+    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks, details_text: document.getElementById('cDetails').value });
     draftTiers = [{name:'',price:''},{name:'',price:''}];
     draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
     renderCampaignsTab();

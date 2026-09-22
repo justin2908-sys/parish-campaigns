@@ -444,3 +444,25 @@ accountability (the buyer name required on every sale) is enough.
    section's *other* point stands on its own regardless: a proper post-payment confirmation
    page (with a Save button) is still wanted, and SumUp's redirect still shouldn't land a
    buyer on raw API output. That remains open, alongside the rest of the buyer-direct flow.
+
+---
+
+## 14. Online ticket replica: parish address + free-text campaign details — decided 2026-09-22
+
+Justin supplied the actual physical ticket design (Christmas Raffle 2026) to base the online
+"Share ticket" replica on. Two pieces of content on it weren't stored anywhere: the parish's
+address, and the raffle-specific content (prize structure, draw date, tagline, footer note,
+winner-notification policy).
+
+**Decided:** rather than rigid fields (`prizes`, `draw_date`, ...) that wouldn't generalize
+to other campaign types (a dinner has neither), added:
+- `organizations.address` — set once by a SuperAdmin, shown on every ticket message from
+  every campaign that Organization runs.
+- `campaigns.details_text` — free text, written once per campaign by a SuperAdmin, reused
+  verbatim in every ticket confirmation for that campaign. Deliberately unstructured so it
+  fits whatever a given campaign actually needs.
+
+The "Share ticket" message (shown once a sale — physical or online, any payment method —
+is confirmed) now includes: parish name and address, the campaign's own details_text (if
+any), the tier breakdown, ticket number(s) with their display prefix, price, buyer name, and
+sale date/time — matching the physical ticket's own content structure.
