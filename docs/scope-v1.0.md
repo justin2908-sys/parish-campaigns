@@ -501,3 +501,31 @@ confirmation page IS effectively the ticket, and needs the full replica plus a w
 This also directly serves the future buyer-direct purchase flow (§10's open item): once that
 public purchase page exists, it will land the buyer on this same `/ticket.html` confirmation
 after paying, unchanged.
+
+---
+
+## 16. Buyer-direct public purchase page — built 2026-09-22
+
+Closes §10's remaining open item. A buyer can now purchase an online ticket with no seller
+involved, sharing every principle already decided:
+
+- **Reachable only via a campaign-specific link** (`/buy.html?campaign_id=<id>`), copied from
+  the Campaigns tab ("Copy public link", shown only for a campaign with an online block) —
+  not a general marketplace browsing every campaign across the platform.
+- **Online tickets only.** A physical ticket needs an in-person handover that doesn't exist
+  here, so the public actions only ever touch digital blocks of an active, non-binned
+  campaign.
+- **Always Pay by Link.** No seller to vouch for cash or a machine tap.
+- **Lucky-number picking IS allowed here** — this is specifically the flow §13 reserved it
+  for. "Any available" (the same atomic lowest-numbered claim as the seller flow) is the
+  other option.
+- **Lands on the same `/ticket.html` confirmation page** built in §15, unchanged — the buyer
+  pays, SumUp redirects them there, they see their ticket and can save it.
+
+**Three new public (no-session) actions**, all narrowly scoped and never trusting the
+caller: `public_campaign_info` (what to show before paying), `public_check_ticket` (live
+lucky-number availability), `public_purchase` (creates the sale — capped at 20 tickets per
+transaction as a sanity limit, not a business rule). `payments.seller_id` is now nullable to
+represent "no seller involved" as a real case; every place a seller name is shown now reads
+"Online (self-service)" for a null seller_id rather than "Unknown", via a shared
+`sellerLabel()` helper.

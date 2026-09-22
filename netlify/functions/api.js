@@ -456,6 +456,15 @@ async function exportCampaignReport(session, { campaign_id }) {
 
 // ---------- Selling ----------
 
+// A payment's seller_id is null exactly when a buyer purchased directly with no seller
+// involved (see publicPurchase below) — a real, intentional case, distinct from "we have an
+// id but can't find that user" (which would be a genuine data problem).
+function sellerLabel(sellerId, users) {
+  if (!sellerId) return 'Online (self-service)';
+  const u = users.find(x => x.id === sellerId);
+  return u ? u.name : 'Unknown';
+}
+
 // Fetch a ticket to check it's unsold & find it, without locking it yet. Works the same for
 // a physical or online series now — both pre-populate real rows across a declared range.
 async function checkTicket(session, { campaign_id, ticket_number }) {
@@ -597,6 +606,130 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   }
   await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', payment.id);
   return { ok: true, payment_id: payment.id, amount, method: 'link', pay_url: created.pay_url, contact_value: contact.value, contact_kind: contact.kind, tickets: soldTickets };
+}
+
+// ---------- Public buyer-direct purchase (no session, no seller) ----------
+// Everything below is deliberately narrow: reachable only for a campaign that is active and
+// not binned, only against its DIGITAL blocks (a physical ticket needs an in-person handover
+// that doesn't exist in this flow), and always Pay by Link — there's no seller here to vouch
+// for cash. Unlike the seller-attended recordSale above, a buyer here MAY pick a specific
+// "lucky number" (see docs/scope-v1.0.md §13) — that restriction was about sellers, not
+// online tickets as such.
+const MAX_PUBLIC_PURCHASE_QTY = 20; // a sane per-transaction cap, not a business rule — guards
+                                     // against a single automated request grabbing a whole series
+
+// What a buyer sees before paying: campaign name/details, parish name/address, tiers, and
+// which online block(s) exist (with their range, so a lucky-number field can say what's valid).
+async function publicCampaignInfo({ campaign_id }) {
+  const { data: campaign } = await supabase.from('campaigns').select('id, name, details_text, org_id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+  const { data: org } = await supabase.from('organizations').select('name, address').eq('id', campaign.org_id).single();
+  const { data: tiers } = await supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order');
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital');
+  if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online tickets available.');
+  return {
+    campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text },
+    org: { name: org ? org.name : '', address: org ? org.address : '' },
+    tiers, blocks,
+  };
+}
+
+// Live "is this lucky number free" check for the public page — online tickets only.
+async function publicCheckTicket({ campaign_id, ticket_number }) {
+  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+  const { data } = await supabase.from('tickets').select('status, ticket_blocks!inner(type)')
+    .eq('campaign_id', campaign_id).eq('ticket_number', ticket_number).eq('ticket_blocks.type', 'digital').maybeSingle();
+  if (!data) throw httpError(404, `Ticket ${ticket_number} doesn't exist in this campaign`);
+  if (data.status !== 'unsold') throw httpError(409, `Ticket ${ticket_number} is already ${data.status}`);
+  return { ok: true };
+}
+
+// The purchase itself. block_id picks which online pool for "any available"; ticket_numbers
+// is a buyer's own lucky-number pick — exactly one of the two, same contract as recordSale.
+async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbers, buyer_name, contact_value }) {
+  const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+  const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
+  const { data: onlineBlocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id).eq('type', 'digital');
+  if (!onlineBlocks || !onlineBlocks.length) throw httpError(400, 'This campaign has no online tickets available.');
+
+  const counts = tiers.map(t => ({ tier: t, count: Number((tier_counts || {})[t.id]) || 0 }));
+  const totalCount = counts.reduce((s, c) => s + c.count, 0);
+  if (totalCount <= 0) throw httpError(400, 'Choose at least one ticket.');
+  if (totalCount > MAX_PUBLIC_PURCHASE_QTY) throw httpError(400, `You can buy at most ${MAX_PUBLIC_PURCHASE_QTY} tickets in one purchase — please make a separate purchase for more.`);
+  if (!Number.isInteger(totalCount) || counts.some(c => !Number.isInteger(c.count) || c.count < 0)) {
+    throw httpError(400, 'Ticket counts must be whole numbers, zero or more.');
+  }
+  if (!buyer_name || !buyer_name.trim()) throw httpError(400, 'Please enter your name.');
+  const contact = parseContact(contact_value);
+
+  const tierIdSequence = [];
+  counts.forEach(c => { for (let i = 0; i < c.count; i++) tierIdSequence.push(c.tier.id); });
+  const amount = counts.reduce((s, c) => s + c.count * Number(c.tier.price), 0);
+
+  const usingLuckyNumbers = !!(ticket_numbers && ticket_numbers.length);
+  let targetBlock = null;
+  if (!usingLuckyNumbers) {
+    targetBlock = block_id ? onlineBlocks.find(b => b.id === block_id) : (onlineBlocks.length === 1 ? onlineBlocks[0] : null);
+    if (!targetBlock) throw httpError(400, onlineBlocks.length > 1 ? 'Choose which ticket pool to buy from.' : 'That ticket pool is not available for this campaign.');
+  } else if (ticket_numbers.length !== totalCount) {
+    throw httpError(400, `Entered ${ticket_numbers.length} ticket number(s) but ${totalCount} were specified — these must match.`);
+  }
+
+  const { data: payment, error: payErr } = await supabase.from('payments')
+    .insert({ campaign_id, method: 'link', amount, status: 'pending', seller_id: null, payer_name: buyer_name.trim(), contact_value: contact.value })
+    .select().single();
+  if (payErr) throw httpError(500, payErr.message);
+
+  if (usingLuckyNumbers) {
+    const nums = ticket_numbers.map(Number);
+    const onlineBlockIds = new Set(onlineBlocks.map(b => b.id));
+    const { data: existingRows } = await supabase.from('tickets').select('ticket_number, block_id').eq('campaign_id', campaign_id).in('ticket_number', nums);
+    const allOnline = existingRows.length === nums.length && existingRows.every(r => onlineBlockIds.has(r.block_id));
+    if (!allOnline) {
+      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'requested number not a valid online ticket' }).eq('id', payment.id);
+      throw httpError(400, 'One or more of those numbers are not valid online tickets for this campaign — please recheck.');
+    }
+    const items = ticket_numbers.map((num, i) => ({ ticket_number: Number(num), tier_id: tierIdSequence[i] }));
+    const { error: claimErr } = await supabase.rpc('claim_specific_tickets', {
+      p_campaign_id: campaign_id, p_items: items, p_status: 'held', p_payment_id: payment.id, p_sold_by: null,
+    });
+    if (claimErr) {
+      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'ticket unavailable at claim time' }).eq('id', payment.id);
+      for (const num of nums) {
+        const { data: existing } = await supabase.from('tickets').select('status').eq('campaign_id', campaign_id).eq('ticket_number', num).maybeSingle();
+        if (!existing) throw httpError(404, `Ticket ${num} doesn't exist in this campaign.`);
+        if (existing.status !== 'unsold') throw httpError(409, `Ticket ${num} is already ${existing.status} — please choose another.`);
+      }
+      throw httpError(409, 'One or more of those numbers became unavailable — please recheck.');
+    }
+  } else {
+    const { error: claimErr } = await supabase.rpc('claim_lowest_available_tickets', {
+      p_block_id: targetBlock.id, p_tier_ids: tierIdSequence, p_status: 'held', p_payment_id: payment.id, p_sold_by: null,
+    });
+    if (claimErr) {
+      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'not enough tickets available' }).eq('id', payment.id);
+      throw httpError(409, `Not enough tickets are available right now — try a smaller quantity.`);
+    }
+  }
+
+  const { data: soldTicketRows } = await supabase.from('tickets').select('ticket_number, tier_id, block_id').eq('payment_id', payment.id).order('ticket_number');
+  const tierNameById = Object.fromEntries(tiers.map(t => [t.id, t.name]));
+  const blockById = Object.fromEntries(onlineBlocks.map(b => [b.id, b]));
+  const soldTickets = soldTicketRows.map(t => ({
+    ticket_number: t.ticket_number, tier_name: tierNameById[t.tier_id],
+    display_number: `${(blockById[t.block_id] || {}).number_prefix || ''}${t.ticket_number}`,
+  }));
+
+  const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: campaign.name, ticketNumbers: soldTickets.map(t => t.display_number) });
+  if (!created.ok) {
+    await releaseSaleTickets(payment.id);
+    await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'could not create SumUp payment link' }).eq('id', payment.id);
+    throw httpError(502, created.message);
+  }
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', payment.id);
+  return { ok: true, payment_id: payment.id, pay_url: created.pay_url, amount, tickets: soldTickets };
 }
 
 // Creates the SumUp hosted checkout for one sale. checkout_reference = this sale's id (plus a
@@ -901,8 +1034,7 @@ async function dashboardState(session, { campaign_id } = {}) {
   const sellerMap = {};
   for (const p of payments) {
     if (p.status === 'failed' || p.status === 'void') continue;
-    const seller = users.find(u => u.id === p.seller_id);
-    const key = seller ? seller.name : 'Unknown';
+    const key = sellerLabel(p.seller_id, users);
     sellerMap[key] = sellerMap[key] || { card: 0, cash_confirmed: 0, cash_pending: 0 };
     if ((p.method === 'link' && p.status === 'paid') || p.method === 'machine') sellerMap[key].card += Number(p.amount);
     if (p.method === 'cash' && p.status === 'paid') sellerMap[key].cash_confirmed += Number(p.amount);
@@ -955,7 +1087,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
   const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
   const out = payments.map(p => ({
     id: p.id,
-    seller: (users.find(u => u.id === p.seller_id) || {}).name || 'Unknown',
+    seller: sellerLabel(p.seller_id, users),
     method: p.method, amount: p.amount, status: p.status,
     payer_name: p.payer_name, contact_value: p.contact_value, contact_channel: p.contact_channel,
     created_at: p.created_at,
@@ -979,7 +1111,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
   const out = (payments || []).map(p => ({
     id: p.id,
-    seller: (users.find(u => u.id === p.seller_id) || {}).name || 'Unknown',
+    seller: sellerLabel(p.seller_id, users),
     payer_name: p.payer_name,
     contact_value: p.contact_value, contact_channel: p.contact_channel, link_url: p.link_url, link_shared_at: p.link_shared_at,
     amount: p.amount,
@@ -1145,6 +1277,9 @@ const actions = {
   record_sale: (s, b) => recordSale(s, b),
   checkout_status: (s, b) => checkoutStatus(s, b),
   public_payment_status: (s, b) => publicPaymentStatus(b),
+  public_campaign_info: (s, b) => publicCampaignInfo(b),
+  public_check_ticket: (s, b) => publicCheckTicket(b),
+  public_purchase: (s, b) => publicPurchase(b),
   log_link_shared: (s, b) => logLinkShared(s, b),
   sumup_check: (s) => sumupCheck(s),
   sumup_webhook: (s, b) => sumupWebhook(b),

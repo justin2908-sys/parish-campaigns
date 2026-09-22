@@ -763,6 +763,7 @@ async function renderCampaignsTab() {
           <td class="tiny-actions">
             ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
             <button class="small" onclick="doEditCampaignDetails('${c.id}')">${c.details_text ? 'Details ✓' : 'Add details'}</button>
+            ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="doCopyPublicLink('${c.id}')">Copy public link</button>` : ''}
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
             <button class="small" onclick="doBinCampaign('${c.id}','${esc(c.name).replace(/'/g,"\\'")}')">Bin</button>` : ''}
           </td>
@@ -791,6 +792,11 @@ async function doSaveOrgAddress() {
   const resEl = document.getElementById('orgAddressResult');
   try { await call('set_org_address', { address: document.getElementById('orgAddressInput').value }); resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; }
   catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function doCopyPublicLink(campaignId) {
+  const url = `${location.origin}/buy.html?campaign_id=${campaignId}`;
+  try { await navigator.clipboard.writeText(url); alert('Copied — share this link anywhere: ' + url); }
+  catch { prompt('Copy this link:', url); }
 }
 async function doEditCampaignDetails(campaignId) {
   const text = prompt("This campaign's details (shown on every ticket message) — leave empty to remove:", campaignDetailsCache[campaignId] || '');
