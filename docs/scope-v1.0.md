@@ -354,10 +354,9 @@ whether that's a real staff member acting for someone, versus a future buyer-ini
 is a distinction the data model needs to represent cleanly rather than forcing every online
 sale through a person. This is not yet built — see the open item below.
 
-*Open, before building the buyer-direct purchase flow:* (1) how the buyer receives their
-ticket with no seller present to hand it over — a confirmation/ticket page on the site itself
-(no new cost or vendor) versus an automated SMS/email service (a new third-party account and
-ongoing cost); (2) whether `payments.seller_id` becomes nullable to represent "no seller
-involved" cleanly, versus every sale requiring one. Until decided, the public buyer-facing
-purchase page itself has not been built — only the seller-initiated Sell screen supports
-online tickets today.
+**Decided (2026-09-22): ticket delivery is a confirmation page on the site itself** — after
+paying, the buyer lands on a page showing their ticket, which they can screenshot or
+bookmark. No SMS/email service, no new third-party account, no ongoing per-message cost.
+`payments.seller_id` will become nullable to represent "no seller involved" cleanly. Until
+the public buyer-facing purchase page itself is built, only the seller-initiated Sell screen
+supports online tickets today.
