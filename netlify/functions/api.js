@@ -717,12 +717,23 @@ async function logLinkShared(session, { payment_id, channel }) {
   return { ok: true };
 }
 
+// Void is for correcting a sale where no money has actually moved yet: a mistaken Cash or
+// Pay at Machine log (nothing electronic to unwind — any real refund happens by hand), or a
+// Pay by Link sale that hasn't been paid. Once SumUp confirms a link was PAID, the buyer's
+// money has genuinely moved, and voiding would silently return the ticket to the pool while
+// they'd already paid for it — that must never be allowed from here; a real refund happens
+// in SumUp directly. Re-checks with SumUp rather than trusting a possibly-stale DB status,
+// in case a notification was delayed.
 async function voidSale(session, { payment_id, reason }) {
   requireOrgRole(session, ['admin', 'superadmin']);
   if (!reason || !reason.trim()) throw httpError(400, 'A void reason is required');
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (payment.status === 'void') throw httpError(400, 'Already voided');
+  if (payment.method === 'link') {
+    const status = await syncCheckout(payment);
+    if (status === 'paid') throw httpError(400, "This has been paid via SumUp — a paid Pay by Link sale can't be voided here. Refund it directly in SumUp if needed.");
+  }
   await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null, attendee_name: null }).eq('payment_id', payment_id);
   await supabase.from('payments').update({ status: 'void', voided: true, voided_by: session.uid, voided_at: new Date().toISOString(), void_reason: reason }).eq('id', payment_id);
   return { ok: true };

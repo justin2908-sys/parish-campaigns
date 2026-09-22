@@ -832,7 +832,7 @@ async function renderSalesTab() {
       <td>${esc(p.payer_name||'—')}${p.contact_value ? `<br><span class="muted">${esc(p.contact_value)}${p.contact_channel ? ' · via ' + p.contact_channel : ''}</span>` : ''}</td>
       <td>${esc(p.seller)}</td><td>£${Number(p.amount).toFixed(2)}</td><td>${{cash:'Cash',machine:'Machine',link:'Link'}[p.method]||p.method}</td>
       <td><span class="badge ${p.status==='paid'?'ok':p.status==='pending'?'warn':'bad'}">${p.status}</span></td>
-      <td>${p.status!=='void' ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}
+      <td>${p.status!=='void' && !(p.method==='link' && p.status==='paid') ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}
       ${p.has_photo ? `<button class="small" onclick="viewPhoto('${p.id}')">Photo</button>` : ''}</td>
     </tr>`).join('')}
     </table></div>`;
