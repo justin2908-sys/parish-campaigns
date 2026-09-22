@@ -86,7 +86,7 @@ try {
 } catch {}
 
 function saveState() { localStorage.setItem('pc_session', JSON.stringify(state)); }
-function logout() { clearTimeout(autoLogoutTimer); state = { session: null, user: null, campaigns: [], org: null, lastCampaignId: null }; saveState(); render(); }
+function logout() { clearTimeout(autoLogoutTimer); state = { session: null, user: null, campaigns: [], org: null, lastCampaignId: null }; viewMode = 'admin'; saveState(); render(); }
 
 // The session token isn't encrypted, just signed — safe to read its expiry client-side
 // (we're not trusting it for auth, the server re-verifies the signature on every call).
@@ -118,11 +118,16 @@ async function call(action, body = {}) {
 function h(strings, ...vals) { return strings.reduce((a, s, i) => a + s + (vals[i] ?? ''), ''); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
+// Admin and SuperAdmin can sell too (they must — anyone who can sell has to show up in
+// Cash Recon and every other reconciliation screen, same as a Seller). viewMode is how
+// they switch between their Admin dashboard and the same Sell screen a Seller uses.
+let viewMode = 'admin';
 function render() {
   if (!state.session) { renderLogin(); return; }
   document.getElementById('headerRight').innerHTML = `<button onclick="logout()">Log out (${esc(state.user.name)})</button>`;
   if (state.user.role === 'platform_owner') renderPlatformOwner();
   else if (state.user.role === 'seller') renderSeller();
+  else if (viewMode === 'sell') renderSeller();
   else renderAdmin();
 }
 
@@ -264,6 +269,7 @@ async function renderSeller() {
   if (saleMode === 'digital' && !digitalBlocks.length) saleMode = 'physical';
 
   document.getElementById('app').innerHTML = h`
+    ${state.user.role!=='seller' ? `<button class="secondary" style="margin-bottom:14px" onclick="viewMode='admin'; render();">← Back to Admin</button>` : ''}
     <div class="card">
       <div class="stat"><span>Tickets sold by you</span><b>${stats.ticketsSoldCount}</b></div>
       <div class="stat"><span>Cash collected</span><b>£${stats.cashCollected.toFixed(2)}</b></div>
@@ -647,6 +653,7 @@ function resizeImageForUpload(file) {
 let adminTab = 'campaigns', campaignFilter = '';
 async function renderAdmin() {
   document.getElementById('app').innerHTML = h`
+    <button class="secondary" style="margin-bottom:14px" onclick="viewMode='sell'; render();">🎟️ Sell tickets</button>
     <div id="retentionBanner"></div>
     <div class="tabs">
       <button class="${adminTab==='campaigns'?'active':''}" onclick="setAdminTab('campaigns')">Campaigns</button>
