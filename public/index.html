@@ -729,10 +729,14 @@ let campaignDetailsCache = {}; // campaign id -> details_text, so the edit promp
 async function renderCampaignsTab() {
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
   campaigns.forEach(c => { campaignDetailsCache[c.id] = c.details_text || ''; });
-  let org = null;
-  if (state.user.role === 'superadmin') { try { org = (await call('get_org_settings')).organization; } catch {} }
+  let org = null, orgError = '';
+  if (state.user.role === 'superadmin') {
+    try { org = (await call('get_org_settings')).organization; }
+    catch (e) { orgError = e.message; }
+  }
   const el = document.getElementById('adminContent');
   el.innerHTML = h`
+    ${state.user.role==='superadmin' && !org ? `<div class="card"><div class="error">Could not load parish settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
     ${org ? `<div class="card">
       <h3 style="margin-top:0">Parish details</h3>
       <p class="muted">Shown on every ticket message, for every campaign.</p>

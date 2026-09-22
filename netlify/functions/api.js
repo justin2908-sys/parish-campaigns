@@ -194,7 +194,8 @@ async function listUsers(session) {
 // any org-scoped role (a seller needs it to build a ticket confirmation), set by SuperAdmin.
 async function getOrgSettings(session) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  const { data } = await supabase.from('organizations').select('id, name, address').eq('id', session.org_id).single();
+  const { data, error } = await supabase.from('organizations').select('id, name, address').eq('id', session.org_id).single();
+  if (error) throw httpError(500, error.message);
   return { organization: data };
 }
 async function setOrgAddress(session, { address }) {
