@@ -422,3 +422,25 @@ on the future public buyer-direct endpoint instead, not on this one.
 **Decided against:** flagging which online entries were electronically verified (via Link)
 vs. seller-vouched (Cash/Machine) in reporting, for raffle-draw optics. Justin: seller
 accountability (the buyer name required on every sale) is enough.
+
+---
+
+## 13. Three refinements to online tickets — decided 2026-09-22
+
+1. **Picking a specific "lucky number" is reserved for the public buyer page.** A
+   seller-initiated online sale (today's only working path) always gets the next available
+   number(s) — same as a physical seller working through their stack in order — rather than
+   choosing a specific one. Enforced server-side in `record_sale`, not just hidden in the UI:
+   the manual/exact-number path now rejects any ticket number that resolves to a digital
+   block. When the public buyer page is eventually built, lucky-number picking belongs there.
+2. **An online series' display prefix (e.g. "O") is genuinely optional, confirmed.** Leaving
+   it blank at campaign creation gives a plain numeric series — nothing forces a prefix; this
+   was already how it worked, just confirming it here.
+3. **No 24-hour hold window for online tickets — sticking with SumUp's native 30-minute
+   session, superseding §11's speculative 24-hour idea.** An unpaid online ticket is released
+   back to the pool once SumUp reports the link expired (the existing `STALE_MINUTES = 35`
+   sweep already does exactly this — no code change needed). This removes the need for the
+   "keep one link alive across a longer window" intermediary-page idea from §11 — but that
+   section's *other* point stands on its own regardless: a proper post-payment confirmation
+   page (with a Save button) is still wanted, and SumUp's redirect still shouldn't land a
+   buyer on raw API output. That remains open, alongside the rest of the buyer-direct flow.

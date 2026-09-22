@@ -237,7 +237,7 @@ async function doAddOrgAdmin() {
 }
 
 // ================= SELLER =================
-let sellCounts = {}, selectedBlockId = null, pickMode = 'manual', startNumValue = '', buyerNameValue = '', ticketNumbers = [];
+let sellCounts = {}, selectedBlockId = null, startNumValue = '', buyerNameValue = '', ticketNumbers = [];
 let pendingUndo = null, shareMenuOpenFor = null, tickHandle = null, linkPollHandle = null, activity = [];
 let contactValue = '';
 
@@ -261,13 +261,15 @@ async function renderSeller() {
     sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
     selectedBlockId = camp.blocks[0] ? camp.blocks[0].id : null;
-    pickMode = 'manual';
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
   }
   if (!camp.blocks.find(b => b.id === selectedBlockId)) selectedBlockId = camp.blocks[0] ? camp.blocks[0].id : null;
   const block = camp.blocks.find(b => b.id === selectedBlockId);
   const isOnline = !!block && block.type === 'digital';
-  const autoMode = isOnline && pickMode === 'auto';
+  // Picking a specific "lucky number" is reserved for the public buyer page (not built yet)
+  // — a seller selling an online ticket in person always gets the next available number(s),
+  // same as how a physical seller works through their stack in order.
+  const autoMode = isOnline;
 
   document.getElementById('app').innerHTML = h`
     ${state.user.role!=='seller' ? `<button class="secondary" style="margin-bottom:14px" onclick="viewMode='admin'; render();">← Back to Admin</button>` : ''}
@@ -291,13 +293,6 @@ async function renderSeller() {
         ${camp.blocks.map(b => `<option value="${b.id}" ${b.id===block.id?'selected':''}>${esc(b.label)}${b.type==='digital'?' (Online)':''}</option>`).join('')}
       </select>` : ''}
 
-      ${isOnline ? `
-      <label>Ticket numbers</label>
-      <div class="toggle">
-        <button type="button" class="${pickMode==='manual'?'active':''}" onclick="setPickMode('manual')">Pick a number</button>
-        <button type="button" class="${pickMode==='auto'?'active alt':''}" onclick="setPickMode('auto')">Any available</button>
-      </div>` : ''}
-
       <div class="row" style="margin-top:12px">
         ${camp.tiers.map(t => `
           <div><label>No. of ${esc(t.name)}</label>
@@ -305,11 +300,10 @@ async function renderSeller() {
       </div>
 
       ${autoMode ? `
-        <div class="hint">Any available number(s) in ${esc(block.label)} — assigned automatically the moment you record the sale.</div>
+        <div class="hint">Any available number(s) in ${esc(block.label)} — assigned automatically the moment you record the sale. Picking a specific number is for buyers on the public purchase page.</div>
       ` : `
-        <label>${isOnline ? "Your lucky number" : 'Starting ticket number'} <span class="muted">(rest fills in automatically — edit any that don't match)</span></label>
+        <label>Starting ticket number <span class="muted">(rest fills in automatically — edit any that don't match)</span></label>
         <input type="text" id="startNum" inputmode="numeric" placeholder="e.g. ${block.range_start}" value="${esc(startNumValue)}" oninput="startNumValue=this.value; regenerateTicketNumbers()">
-        ${block.number_prefix ? `<div class="hint">Shown to the buyer as ${esc(block.number_prefix)}${esc(startNumValue||'…')}</div>` : ''}
       `}
 
       <div id="ticketRows" style="margin-top:10px"></div>
@@ -331,8 +325,7 @@ async function renderSeller() {
 }
 
 function onCampaignChange(id) { state.lastCampaignId = id; saveState(); ticketNumbers = []; renderSeller(); }
-function onBlockChange(id) { selectedBlockId = id; pickMode = 'manual'; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
-function setPickMode(m) { pickMode = m; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
+function onBlockChange(id) { selectedBlockId = id; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
 // ---- Pay by Link: sending the link to the buyer's own mobile/email ----
 // The contact is pre-filled as the recipient, so the seller just taps send in their own
 // SMS/WhatsApp/Mail app; we record which channel was used and when.
@@ -389,7 +382,7 @@ function regenerateTicketNumbers() {
   const total = order.reduce((s, o) => s + o.count, 0);
   const seq = []; order.forEach(o => { for (let i=0;i<o.count;i++) seq.push(o.id); });
 
-  if (block && block.type === 'digital' && pickMode === 'auto') {
+  if (block && block.type === 'digital') {
     ticketNumbers = total ? seq.map(tierId => ({ tierId, auto: true })) : [];
   } else {
     const startEl = document.getElementById('startNum');
@@ -404,7 +397,7 @@ function renderTicketRows() {
   const wrap = document.getElementById('ticketRows'); if (!wrap) return;
   const camp = currentCampaign();
   const block = camp.blocks.find(b => b.id === selectedBlockId);
-  if (block && block.type === 'digital' && pickMode === 'auto') {
+  if (block && block.type === 'digital') {
     const byTier = {};
     ticketNumbers.forEach(tn => byTier[tn.tierId] = (byTier[tn.tierId]||0)+1);
     wrap.innerHTML = camp.tiers.filter(t => byTier[t.id]).map((t) => {
@@ -486,7 +479,7 @@ function updatePaymentButtons() { const el = document.getElementById('paymentBut
 async function submitSale(method) {
   const camp = currentCampaign();
   const block = camp.blocks.find(b => b.id === selectedBlockId);
-  const autoMode = block && block.type === 'digital' && pickMode === 'auto';
+  const autoMode = block && block.type === 'digital';
   const errEl = document.getElementById('submitError');
   if (!ticketNumbers.length) { errEl.innerHTML = `<div class="error">Enter at least one ticket count first.</div>`; return; }
   if (!autoMode) {
@@ -501,7 +494,7 @@ async function submitSale(method) {
   if (!buyerNameValue.trim()) { errEl.innerHTML = `<div class="error">Enter the buyer's name first.</div>`; return; }
   errEl.innerHTML = '';
   const tier_counts = Object.fromEntries(camp.tiers.map(t => [t.id, sellCounts[t.id]||0]));
-  const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, contactValue, selectedBlockId, pickMode, ticketNumbers: ticketNumbers.map(t=>({...t})) };
+  const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, contactValue, selectedBlockId, ticketNumbers: ticketNumbers.map(t=>({...t})) };
 
   try {
     const data = await call('record_sale', {
@@ -550,7 +543,6 @@ async function doUndo(activityId) {
     buyerNameValue = a.draft.buyerNameValue;
     contactValue = a.draft.contactValue || '';
     selectedBlockId = a.draft.selectedBlockId;
-    pickMode = a.draft.pickMode;
     ticketNumbers = a.draft.ticketNumbers.map(t=>({...t}));
     ticketNumbers.__campaignId = a.campaignId;
     renderSeller();
