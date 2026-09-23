@@ -529,3 +529,35 @@ transaction as a sanity limit, not a business rule). `payments.seller_id` is now
 represent "no seller involved" as a real case; every place a seller name is shown now reads
 "Online (self-service)" for a null seller_id rather than "Unknown", via a shared
 `sellerLabel()` helper.
+
+---
+
+## 17. Platform Owner account recovery — deliberately narrow — built 2026-09-23
+
+Question: what happens if a parish's only SuperAdmin is locked out (lost/changed phone,
+forgot password)? Two shapes were considered:
+
+- **Broad**: let the Platform Owner "enter" any parish as if they were its SuperAdmin —
+  full visibility into that parish's campaigns, sales, and users.
+- **Narrow (chosen)**: the Platform Owner can only *find* a SuperAdmin (by mobile number,
+  the one identifier they have) and *reset their password* or *enable/disable* their
+  account. No visibility into that parish's campaigns, sales, or other users at all.
+
+Narrow was chosen because the Platform Owner's job is running the platform, not seeing
+inside any one parish's affairs — the same boundary that already keeps `platform_owner`
+separate from `superadmin`/`admin`/`seller` elsewhere in the role model. Recovering a
+locked-out Admin or Seller stays the job of their own parish's SuperAdmin; this tool exists
+only for the case where the SuperAdmin themself is the one locked out.
+
+**Three new actions**, all `requireRole(['platform_owner'])`:
+- `platform_find_user` — looks up by mobile number, filtered to `role = 'superadmin'`;
+  returns just enough to confirm identity (name, parish name, active status) — nothing else
+  about that parish.
+- `platform_reset_superadmin_password` — sets a new password (same 8+ character strength
+  check as everywhere else). The new password is relayed to the SuperAdmin directly by the
+  Platform Owner, out of band — never emailed or texted by the system.
+- `platform_set_superadmin_active` — enable/disable toggle, for a departed or suspended
+  SuperAdmin, separate from resetting their password.
+
+Frontend: a fourth card on the Platform Owner's screen ("Recover a locked-out SuperAdmin"),
+alongside the existing Organizations / Add parish / Add first Admin cards.

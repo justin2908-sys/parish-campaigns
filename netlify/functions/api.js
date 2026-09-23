@@ -92,6 +92,38 @@ async function listOrganizations(session) {
   return { organizations: data };
 }
 
+// ---------- Platform Owner: narrow SuperAdmin account recovery ----------
+// Deliberately narrow: Platform Owner can find and recover a locked-out SuperAdmin (by
+// mobile number, since that's all a Platform Owner has to identify them with) — nothing
+// more. No visibility into any parish's campaigns, sales, or other users; a locked-out
+// Admin/Seller is recovered by their own parish's SuperAdmin, not escalated here.
+async function platformFindUser(session, { mobile }) {
+  requireRole(session, ['platform_owner']);
+  if (!mobile || !mobile.trim()) throw httpError(400, 'Enter a mobile number');
+  const { data: user } = await supabase.from('users').select('id, name, mobile, role, active, org_id').eq('mobile', mobile.trim()).eq('role', 'superadmin').maybeSingle();
+  if (!user) throw httpError(404, 'No SuperAdmin found with that mobile number');
+  const { data: org } = await supabase.from('organizations').select('name').eq('id', user.org_id).single();
+  return { user: { id: user.id, name: user.name, mobile: user.mobile, active: user.active, org_name: org ? org.name : '' } };
+}
+async function platformResetSuperadminPassword(session, { user_id, new_password }) {
+  requireRole(session, ['platform_owner']);
+  assertPasswordStrength(new_password);
+  const { data: user } = await supabase.from('users').select('id, role').eq('id', user_id).maybeSingle();
+  if (!user || user.role !== 'superadmin') throw httpError(404, 'SuperAdmin not found');
+  const hash = await bcrypt.hash(new_password, 10);
+  const { error } = await supabase.from('users').update({ password_hash: hash }).eq('id', user_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+async function platformSetSuperadminActive(session, { user_id, active }) {
+  requireRole(session, ['platform_owner']);
+  const { data: user } = await supabase.from('users').select('id, role').eq('id', user_id).maybeSingle();
+  if (!user || user.role !== 'superadmin') throw httpError(404, 'SuperAdmin not found');
+  const { error } = await supabase.from('users').update({ active }).eq('id', user_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
 // ---------- Auth & Users ----------
 
 async function login({ mobile, password }) {
@@ -1254,6 +1286,9 @@ const actions = {
   bootstrap_platform_owner: (s, b) => bootstrapPlatformOwner(b),
   create_organization: (s, b) => createOrganization(s, b),
   list_organizations: (s) => listOrganizations(s),
+  platform_find_user: (s, b) => platformFindUser(s, b),
+  platform_reset_superadmin_password: (s, b) => platformResetSuperadminPassword(s, b),
+  platform_set_superadmin_active: (s, b) => platformSetSuperadminActive(s, b),
 
   login: (s, b) => login(b),
   create_user: (s, b) => createUser(s, b),

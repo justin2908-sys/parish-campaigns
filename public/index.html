@@ -214,7 +214,44 @@ async function renderPlatformOwner() {
       <button class="primary" onclick="doAddOrgAdmin()">Create SuperAdmin for this parish</button>
       <div id="adminResult"></div>
     </div>
+    <div class="card">
+      <h3 style="margin-top:0">Recover a locked-out SuperAdmin</h3>
+      <p class="muted">Deliberately narrow: finds a SuperAdmin by their mobile number to reset their password or re-enable their account — nothing else about their parish is visible here. A locked-out Admin or Seller is recovered by their own parish's SuperAdmin instead.</p>
+      <label>Their mobile number</label>
+      <input id="recoverMobile" type="tel" placeholder="07…">
+      <button class="secondary" onclick="doFindSuperadmin()">Find</button>
+      <div id="recoverResult"></div>
+    </div>
   `;
+}
+let foundSuperadmin = null;
+async function doFindSuperadmin() {
+  const resEl = document.getElementById('recoverResult');
+  foundSuperadmin = null;
+  try {
+    const { user } = await call('platform_find_user', { mobile: document.getElementById('recoverMobile').value });
+    foundSuperadmin = user;
+    resEl.innerHTML = `
+      <div class="info" style="margin-top:10px">
+        <b>${esc(user.name)}</b> — ${esc(user.org_name)}<br>
+        <span class="badge ${user.active?'ok':'bad'}">${user.active?'Active':'Disabled'}</span>
+      </div>
+      <button class="small" style="margin-top:8px" onclick="doResetSuperadminPassword()">Reset password</button>
+      <button class="small" onclick="doToggleSuperadminActive()">${user.active?'Disable':'Enable'}</button>
+    `;
+  } catch (e) { resEl.innerHTML = `<div class="error" style="margin-top:10px">${esc(e.message)}</div>`; }
+}
+async function doResetSuperadminPassword() {
+  if (!foundSuperadmin) return;
+  const pw = prompt(`New password for ${foundSuperadmin.name} (8+ characters):`);
+  if (!pw) return;
+  try { await call('platform_reset_superadmin_password', { user_id: foundSuperadmin.id, new_password: pw }); alert('Password reset. Let them know their new password directly.'); }
+  catch (e) { alert(e.message); }
+}
+async function doToggleSuperadminActive() {
+  if (!foundSuperadmin) return;
+  try { await call('platform_set_superadmin_active', { user_id: foundSuperadmin.id, active: !foundSuperadmin.active }); doFindSuperadmin(); }
+  catch (e) { alert(e.message); }
 }
 async function doCreateOrg() {
   const resEl = document.getElementById('orgResult');
