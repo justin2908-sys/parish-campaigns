@@ -79,3 +79,7 @@ nothing more to configure.
 - This is v1.0. Known intentional scope limits: no ticket editing after a sale
   besides Void (admin-only, requires a reason), no receipt printing (SumUp's
   own receipt options work if the buyer wants one).
+- Deploys are automatic: this repo is linked to Netlify's continuous
+  deployment (Site settings → Build & deploy) — every push to `main` deploys
+  itself, no manual step needed. Set up 2026-09-24.
+
