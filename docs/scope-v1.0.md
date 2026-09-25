@@ -671,3 +671,47 @@ then "Pay £20.00 securely").
   note, and the lucky-number box's placeholder. With several online series it reads "A to B,
   or C to D". A typed number outside every online series is refused instantly with that same
   sentence, before any request is made.
+
+---
+
+## 22. Security hardening — built 2026-09-25
+
+Audit first (what was already sound: every non-Platform-Owner role tied to one parish by a DB
+constraint; bcrypt passwords; signed 2-hour tokens; every seller action parish-scoped; webhook
+and confirmation page trust nothing they're sent; all user text escaped on display), then closed
+the gaps found:
+
+**Public buy page**
+- **No unpaid-hold flooding.** Per visitor address: at most 200 tickets held unpaid at once, 60
+  purchases an hour; per mobile/email: at most 5 unpaid payments open. Ceilings are generous so a
+  whole congregation on the church wifi is fine; they only bite on a flood. Plus 1,500 public
+  requests per 5 minutes per address (scraping/floods). The address is Netlify's
+  `x-nf-client-connection-ip` (not client-settable) and is stored on public payments.
+- **Abandoned holds free themselves.** The public page now triggers the stale-hold sweep (at most
+  once a minute, whoever triggers it) instead of waiting for a seller/admin to open the app.
+- **Input caps and cleaning.** Names 80 chars, contact 254, `client_ref` `[A-Za-z0-9_-]{8,64}`;
+  control characters/line breaks flattened. Applied to sales, purchases and user creation.
+- **CSV formula guard.** A leading `= + - @` in a text cell is prefixed with `'` (phone numbers
+  and amounts left alone), so a hostile buyer name can't execute when the report opens in Excel.
+
+**Sign-in (seller/admin app — the public page has no login)**
+- **Lockout:** 5 wrong passwords per mobile number typed (or 30 per address) in 15 minutes locks
+  further attempts for the rest of the window — even with the right password. Counted per number
+  *typed*, existing or not, so lockouts reveal nothing. A good login clears the count.
+- **One message** for unknown number / wrong password / disabled account; unknown numbers cost the
+  same time as real ones (dummy bcrypt); token signature compared in constant time.
+- **Sessions end at once** when an account is disabled or its password reset: every authenticated
+  request re-checks the account is active and that the password fingerprint (`pf`) in the token
+  still matches. The app returns to the login screen on that response. (Re-enabling an account
+  without a password change lets its old token work again until its 2h expiry.)
+- Everyone's existing session ended once at deploy (old tokens have no fingerprint).
+
+**Browser protections** (netlify.toml): Content-Security-Policy (own site only — no outside
+scripts, no requests elsewhere, no framing), X-Frame-Options DENY, nosniff, Referrer-Policy
+strict-origin-when-cross-origin, Permissions-Policy (no camera/mic/location/payment).
+
+Tables/functions: `rate_limits`, `rate_hit/peek/reset/prune` (server-only), `payments.client_ip`.
+Not done / accepted: no CAPTCHA (a determined attacker with many addresses can still hold numbers
+30 minutes at a time — the caps make that expensive rather than impossible); no SumUp webhook
+rate limit (needs an unguessable checkout id to do anything).
+Recovery: a locked-out mobile clears itself in 15 minutes, or `delete from rate_limits where key like 'login:%'`.
