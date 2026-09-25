@@ -3,11 +3,11 @@
   publish = "public"
 
 # CREDIT GUARD. Every production deploy costs Netlify credits (deploy previews and branch deploys
-# are free). Production therefore only builds when the commit message contains [publish];
+# are free). Production therefore only builds when the commit message contains PUBLISH-NOW;
 # any other push to main is skipped. Day-to-day work goes on the `dev` branch and is tested on
 # its free deploy-preview address. Netlify skips the build when this command exits 0.
 [context.production]
-  ignore = "! git log -1 --pretty=%B | grep -qF '[publish]'"
+  ignore = "! git log -1 --pretty=%B | grep -qF 'PUBLISH-NOW'"
 
 [[redirects]]
   from = "/api/*"
