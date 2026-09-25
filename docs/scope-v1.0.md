@@ -715,3 +715,19 @@ Not done / accepted: no CAPTCHA (a determined attacker with many addresses can s
 30 minutes at a time — the caps make that expensive rather than impossible); no SumUp webhook
 rate limit (needs an unguessable checkout id to do anything).
 Recovery: a locked-out mobile clears itself in 15 minutes, or `delete from rate_limits where key like 'login:%'`.
+
+---
+
+## 23. One number, one series — enforced at creation — 2026-09-25
+
+Rule: every ticket number in a campaign belongs to exactly ONE series (physical or online).
+"Add a series to an existing campaign" already enforced this; **Create Campaign did not** — the
+database only forbade a repeat within a single series, so Physical 10001–15000 + Online
+10001–15000 would have been accepted, leaving every number twice.
+
+- `create_campaign` now checks all series against each other BEFORE creating anything (any order,
+  any mix of physical/online, contained or partial overlaps, even a single shared number) and
+  names both series and the clashing numbers. Same guards as add-series: whole numbers from 1 up,
+  last ≥ first, at most 50,000 per series. A refusal leaves nothing half-built.
+- The database now enforces it too: unique (campaign_id, ticket_number) on `tickets`, so no code
+  path — present or future — can create a duplicate.
