@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#2E4739">
 <title>Buy tickets</title>
+<script>
+// Ask for the campaign at once, while the styles and fonts are still downloading, instead of
+// waiting until the page code below has run — the two waits overlap. boot() picks up the answer.
+window.__infoP = (function () {
+  var id = new URLSearchParams(location.search).get('campaign_id');
+  if (!id || !window.fetch) return null;
+  var ctl = window.AbortController ? new AbortController() : null;
+  if (ctl) setTimeout(function () { ctl.abort(); }, 25000);   // never hang on a weak signal
+  return fetch('/api/public_campaign_info', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaign_id: id }), signal: ctl ? ctl.signal : undefined })
+    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+    .catch(function () { return null; });
+})();
+</script>
 <link rel="stylesheet" href="/theme.css">
 <style>
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -178,7 +191,10 @@ async function boot() {
   const app = $('app');
   if (!campaignId) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">This link is missing its campaign reference.</div></div></div>`; return; }
   try {
-    info = await call('public_campaign_info', { campaign_id: campaignId });
+    const early = window.__infoP ? await window.__infoP : null;   // already on its way since the top of the page
+    if (early && early.ok) info = early.d;
+    else if (early) throw new Error(early.d.error || 'Something went wrong');
+    else info = await call('public_campaign_info', { campaign_id: campaignId });   // no early answer (weak signal): ask again with the usual timeout
   } catch (e) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">${esc(e.message)}</div></div></div>`; return; }
   counts = Object.fromEntries(info.tiers.map(t => [t.id, 0]));
   blockId = info.blocks[0].id;
