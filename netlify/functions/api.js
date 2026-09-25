@@ -528,21 +528,26 @@ async function releaseStalePendingLinkPayments() {
 
 async function listCampaigns(session, { include_inactive } = {}) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  await releaseStalePendingLinkPayments();
+  // The database is an ocean away from the server, so every round trip counts: independent
+  // queries run side by side rather than one after another. The expired-link sweep doesn't change
+  // what this returns (campaigns, prices, series), so it overlaps the first query, and only runs
+  // at most once a minute (sweepIfDue) instead of on every screen load.
   let q = supabase.from('campaigns').select('*').eq('org_id', session.org_id).eq('binned', false).order('created_at');
   if (!(include_inactive && session.role !== 'seller')) q = q.eq('active', true);
-  const { data: campaigns } = await q;
+  const [{ data: campaigns }] = await Promise.all([q, sweepIfDue().catch(() => { /* housekeeping only */ })]);
 
   const campaignIds = campaigns.map(c => c.id);
-  const { data: tiers } = campaignIds.length ? await supabase.from('tiers').select('*').in('campaign_id', campaignIds).order('sort_order') : { data: [] };
-  const { data: blocks } = campaignIds.length ? await supabase.from('ticket_blocks').select('*').in('campaign_id', campaignIds) : { data: [] };
+  const [{ data: tiers }, { data: blocks }, disabledRes] = await Promise.all([
+    campaignIds.length ? supabase.from('tiers').select('*').in('campaign_id', campaignIds).order('sort_order') : { data: [] },
+    campaignIds.length ? supabase.from('ticket_blocks').select('*').in('campaign_id', campaignIds) : { data: [] },
+    // A row here means this specific campaign is explicitly DISABLED for this user —
+    // default is full access to every active campaign, unless a SuperAdmin switched one off.
+    session.role === 'seller' ? supabase.from('user_campaigns').select('campaign_id').eq('user_id', session.uid) : { data: [] },
+  ]);
 
   let visible = campaigns;
   if (session.role === 'seller') {
-    // A row here means this specific campaign is explicitly DISABLED for this user —
-    // default is full access to every active campaign, unless a SuperAdmin switched one off.
-    const { data: disabled } = await supabase.from('user_campaigns').select('campaign_id').eq('user_id', session.uid);
-    const disabledIds = new Set((disabled || []).map(a => a.campaign_id));
+    const disabledIds = new Set(((disabledRes && disabledRes.data) || []).map(a => a.campaign_id));
     visible = campaigns.filter(c => !disabledIds.has(c.id));
   }
 
@@ -1669,12 +1674,13 @@ async function anonymizeOldData(session) {
 async function sellerState(session, { campaign_id } = {}) {
   requireRole(session, ['seller', 'admin', 'superadmin']);
   let payQ = supabase.from('payments').select('*').eq('seller_id', session.uid).neq('status', 'void').neq('status', 'failed');
-  let tixQ = supabase.from('tickets').select('status').eq('sold_by', session.uid).neq('status', 'unsold');
+  // The ticket total is a COUNT (the database only returns 1,000 rows at a time, so counting rows
+  // would under-report a seller who has sold more than that). Both queries run side by side.
+  let tixQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('sold_by', session.uid).neq('status', 'unsold');
   if (campaign_id) { payQ = payQ.eq('campaign_id', campaign_id); tixQ = tixQ.eq('campaign_id', campaign_id); }
-  const { data: payments } = await payQ;
-  const { data: tickets } = await tixQ;
+  const [{ data: payments }, { count: ticketCount }] = await Promise.all([payQ, tixQ]);
 
-  const ticketsSoldCount = tickets.length;
+  const ticketsSoldCount = ticketCount || 0;
   const cashConfirmed = payments.filter(p => p.method === 'cash' && p.status === 'paid').reduce((s, p) => s + Number(p.amount), 0);
   const cashPending = payments.filter(p => p.method === 'cash' && p.status === 'pending').reduce((s, p) => s + Number(p.amount), 0);
   const cashCollected = cashConfirmed + cashPending; // all cash sold, reconciled or not
@@ -1689,12 +1695,17 @@ async function sellerState(session, { campaign_id } = {}) {
 // matters on a weak signal. campaign_id is the seller's last-used campaign; if it's no longer
 // available the first one is used, and the chosen id is returned so the phone stays in step.
 async function sellScreen(session, { campaign_id } = {}) {
-  const { campaigns } = await listCampaigns(session);
-  const chosen = campaigns.find(c => c.id === campaign_id) || campaigns[0] || null;
-  const [{ organization }, stats] = await Promise.all([
+  // Campaigns, church details and this seller's stats don't depend on each other, so they load
+  // side by side. The stats are fetched for the campaign the phone asked for; only if that
+  // campaign is no longer available (so a different one is chosen) do they need fetching again.
+  const [{ campaigns }, { organization }, guessedStats] = await Promise.all([
+    listCampaigns(session),
     getOrgSettings(session),
-    chosen ? sellerState(session, { campaign_id: chosen.id }) : Promise.resolve(null),
+    campaign_id ? sellerState(session, { campaign_id }) : Promise.resolve(null),
   ]);
+  const chosen = campaigns.find(c => c.id === campaign_id) || campaigns[0] || null;
+  let stats = null;
+  if (chosen) stats = (chosen.id === campaign_id && guessedStats) ? guessedStats : await sellerState(session, { campaign_id: chosen.id });
   return { campaigns, organization, campaign_id: chosen ? chosen.id : null, stats };
 }
 
