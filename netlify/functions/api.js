@@ -1437,10 +1437,12 @@ async function anonymizeOldData(session) {
 // convenient. Stored in a PRIVATE bucket; viewing always goes through a short-lived signed URL,
 // never a public link, since this is financial evidence and should stay access-controlled.
 async function uploadPaymentPhoto(session, { payment_id, image_base64 }) {
-  requireRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
   if (!image_base64) throw httpError(400, 'No image provided');
-  const { data: payment } = await supabase.from('payments').select('id').eq('id', payment_id).single();
-  if (!payment) throw httpError(404, 'Payment not found');
+  // Only a payment in the caller's own parish — and a seller only for their own sale.
+  const { data: payment } = await supabase.from('payments').select('id, seller_id, campaigns!inner(org_id)').eq('id', payment_id).single();
+  if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
+  if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only add a photo to your own sale');
 
   const buffer = Buffer.from(image_base64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
   if (buffer.length > 4 * 1024 * 1024) throw httpError(400, 'Image too large — please use a smaller photo');
