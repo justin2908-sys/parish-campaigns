@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Your ticket</title>
+<title>Your ticket — St.Vincent De Paul Church</title>
 <style>
   :root {
     --ink: #1c1c1e; --paper: #fdfcf9; --line: #e4e0d8;
@@ -31,11 +31,12 @@
   #ticketImg { width:100%; border-radius:12px; border:1px solid var(--line); margin-top:14px; }
   .stat { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
   .stat:last-child { border:none; }
+  .thanks { background:#fbefd4; color:#5a4321; border:1px solid #f0dcaa; border-radius:12px; padding:10px 12px; margin:14px 0 0; font-size:14px; line-height:1.45; text-align:left; }
   .details-text { white-space:pre-wrap; font-size:14px; color:#444; line-height:1.5; margin:10px 0; }
 </style>
 </head>
 <body>
-<header><h1>⛪ Parish Campaigns</h1></header>
+<header><h1 id="brand">⛪ St.Vincent De Paul Church</h1></header>
 <main id="app">
   <div class="card center"><p class="muted">Checking your payment…</p></div>
 </main>
@@ -59,8 +60,11 @@ async function load() {
   }
 }
 
+// The church's saved thank-you (says where the money goes); a plain one by name if it's blank.
+function thankYouText(d) { return d.thank_you || (d.org_name ? 'Thank you for supporting ' + d.org_name + '.' : 'Thank you for your support!'); }
 function render(d) {
   const app = document.getElementById('app');
+  if (d.org_name) document.getElementById('brand').textContent = '⛪ ' + d.org_name;
   const when = new Date(d.sold_at).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
   const numbers = d.tickets.map(t => t.display_number).join(', ');
   const byTier = {};
@@ -74,6 +78,7 @@ function render(d) {
       <div class="badge ok">✓ Payment received</div>
       <p style="margin-top:14px">Thank you! Your payment for <b>${esc(d.campaign_name)}</b> ticket${d.tickets.length>1?'s':''} <b>${esc(numbers)}</b> has come through.</p>
       <p class="muted">The ticket itself was already given to you — there's nothing else to do.</p>
+      <p class="thanks">💛 ${esc(thankYouText(d))}</p>
     </div>`;
     return;
   }
@@ -90,6 +95,7 @@ function render(d) {
         <div class="stat"><span>${esc(denom)}</span><b>£${d.amount.toFixed(2)}</b></div>
         <div class="stat"><span>Buyer</span><b>${esc(d.buyer_name||'—')}</b></div>
         <div class="stat"><span>Sold</span><b>${esc(when)}</b></div>
+        <p class="thanks">💛 ${esc(thankYouText(d))}</p>
       </div>
       <img id="ticketImg" alt="Your ticket">
       <a id="saveLink" download="ticket-${numbers.replace(/[^a-zA-Z0-9]/g,'')}.png"><button class="primary">💾 Save ticket image</button></a>
@@ -143,7 +149,7 @@ function drawTicketImage(d, numbers, denom, when) {
   ctx.strokeStyle = '#e4e0d8'; ctx.lineWidth = 3; ctx.strokeRect(10, 10, W-20, canvas.height-20);
   let y = 70;
   ctx.fillStyle = '#8a3b2b'; ctx.font = 'bold 30px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('⛪ ' + (d.org_name || 'Parish Campaigns'), pad, y);
+  ctx.fillText('⛪ ' + (d.org_name || 'St.Vincent De Paul Church'), pad, y);
   if (d.org_address) { y += 30; ctx.fillStyle = '#888'; ctx.font = '18px sans-serif'; ctx.fillText(d.org_address, pad, y); }
   y += 50; ctx.strokeStyle = '#e4e0d8'; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke();
   y += 55; ctx.fillStyle = '#1c1c1e'; ctx.font = 'bold 36px sans-serif'; ctx.fillText(d.campaign_name, pad, y);
@@ -166,6 +172,8 @@ function drawTicketImage(d, numbers, denom, when) {
   row('Buyer', d.buyer_name || '—');
   row('Sold', when);
   y += 20;
+  ctx.fillStyle = '#5a4321'; ctx.font = '18px sans-serif'; ctx.textAlign = 'left';
+  y = wrapText(ctx, thankYouText(d), pad, y + 6, W - pad*2, 26) + 14;
   ctx.fillStyle = '#e2efe6'; ctx.fillRect(pad, y, W - pad*2, 50);
   ctx.fillStyle = '#3a6b4f'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('✓ PAID', W/2, y + 33);

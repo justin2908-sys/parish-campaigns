@@ -1,4 +1,4 @@
-// Parish Campaigns — backend API (generalized from BBQ Ticketing v3.10)
+// Campaigns — backend API (generalized from BBQ Ticketing v3.10)
 // All requests: POST /api/:action  body: JSON { session?, ...payload }
 //
 // Role hierarchy: platform_owner (global, org_id null) creates Organizations and each
@@ -51,7 +51,7 @@ function requireRole(session, roles) {
   if (!roles.includes(session.role)) throw httpError(403, 'Not permitted for this action');
 }
 // Org-scoped roles must always act within their own org — this guards every handler
-// that takes a campaign/user id against reaching across into another parish's data.
+// that takes a campaign/user id against reaching across into another church's data.
 function requireOrgRole(session, roles) {
   requireRole(session, roles);
   if (!session.org_id) throw httpError(403, 'This action requires an Organization-scoped account');
@@ -140,8 +140,8 @@ async function listOrganizations(session) {
 // ---------- Platform Owner: narrow SuperAdmin account recovery ----------
 // Deliberately narrow: Platform Owner can find and recover a locked-out SuperAdmin (by
 // mobile number, since that's all a Platform Owner has to identify them with) — nothing
-// more. No visibility into any parish's campaigns, sales, or other users; a locked-out
-// Admin/Seller is recovered by their own parish's SuperAdmin, not escalated here.
+// more. No visibility into any church's campaigns, sales, or other users; a locked-out
+// Admin/Seller is recovered by their own church's SuperAdmin, not escalated here.
 async function platformFindUser(session, { mobile }) {
   requireRole(session, ['platform_owner']);
   if (!mobile || !mobile.trim()) throw httpError(400, 'Enter a mobile number');
@@ -210,7 +210,7 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
   // Platform Owner creates a new Organization's first SuperAdmin (org_id required, explicit).
   // A SuperAdmin creates Admins/Sellers/other SuperAdmins within their own org only —
   // org_id is never taken from the caller here, always the session's own, so a SuperAdmin
-  // can never plant a user into a different parish.
+  // can never plant a user into a different church.
   let targetOrgId;
   if (session && session.role === 'platform_owner') {
     if (role !== 'superadmin') throw httpError(400, 'Platform Owner can only create a SuperAdmin for a new Organization');
@@ -295,13 +295,23 @@ async function listUsers(session) {
 
 // ---------- Organization settings, Campaigns, Tiers, Ticket Blocks ----------
 
-// The parish's address, shown on every ticket message from any of its campaigns. Read by
-// any org-scoped role (a seller needs it to build a ticket confirmation), set by SuperAdmin.
+// The church's name, address and thank-you line, shown on every ticket message from any of its
+// campaigns. Read by any org-scoped role (a seller needs them to build a message), set by SuperAdmin.
 async function getOrgSettings(session) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  const { data, error } = await supabase.from('organizations').select('id, name, address').eq('id', session.org_id).single();
+  const { data, error } = await supabase.from('organizations').select('id, name, address, thank_you_text').eq('id', session.org_id).single();
   if (error) throw httpError(500, error.message);
   return { organization: data };
+}
+// The thank-you line added to the public page and to every payment-link / ticket message.
+const MAX_THANK_YOU_LENGTH = 400;
+async function setOrgThankYou(session, { thank_you_text }) {
+  requireOrgRole(session, ['superadmin']);
+  const text = String(thank_you_text == null ? '' : thank_you_text).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (text.length > MAX_THANK_YOU_LENGTH) throw httpError(400, `Keep the thank-you message under ${MAX_THANK_YOU_LENGTH} characters.`);
+  const { error } = await supabase.from('organizations').update({ thank_you_text: text || null }).eq('id', session.org_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
 }
 async function setOrgAddress(session, { address }) {
   requireOrgRole(session, ['superadmin']);
@@ -857,19 +867,19 @@ async function replaySale(client_ref, expectedSellerId) {
 const MAX_PUBLIC_PURCHASE_QTY = 20; // a sane per-transaction cap, not a business rule — guards
                                      // against a single automated request grabbing a whole series
 
-// What a buyer sees before paying: campaign name/details, parish name/address, tiers, and
+// What a buyer sees before paying: campaign name/details, church name/address, tiers, and
 // which online block(s) exist (with their range, so a lucky-number field can say what's valid).
 async function publicCampaignInfo({ campaign_id }) {
   await sweepIfDue(); // free holds from abandoned payments so their numbers show as available again
   const { data: campaign } = await supabase.from('campaigns').select('id, name, details_text, org_id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
-  const { data: org } = await supabase.from('organizations').select('name, address').eq('id', campaign.org_id).single();
+  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text').eq('id', campaign.org_id).single();
   const { data: tiers } = await supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order');
   const { data: blocks } = await supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital');
   if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online tickets available.');
   return {
     campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text },
-    org: { name: org ? org.name : '', address: org ? org.address : '' },
+    org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null },
     tiers, blocks,
   };
 }
@@ -1056,14 +1066,24 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
 function campaignSlug(name) {
   return (name || 'CAMPAIGN').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 20) || 'CAMPAIGN';
 }
+// The church's name, so SumUp's payment page (and the receipt) says who is being paid.
+async function orgNameForPayment(payment_id) {
+  const { data: p } = await supabase.from('payments').select('campaign_id').eq('id', payment_id).maybeSingle();
+  if (!p) return '';
+  const { data: c } = await supabase.from('campaigns').select('org_id').eq('id', p.campaign_id).maybeSingle();
+  if (!c) return '';
+  const { data: o } = await supabase.from('organizations').select('name').eq('id', c.org_id).maybeSingle();
+  return o ? o.name : '';
+}
 async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName, ticketNumbers }) {
   const ref = `${campaignSlug(campaignName)}-${payment_id.slice(0, 8).toUpperCase()}${refSuffix}`;
+  const orgName = await orgNameForPayment(payment_id);
   const resp = await fetch('https://api.sumup.com/v0.1/checkouts', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${SUMUP_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       checkout_reference: ref, amount: Number(amount), currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE,
-      description: `${campaignName} — ticket${ticketNumbers.length > 1 ? 's' : ''} ${ticketNumbers.join(', ')}`,
+      description: `${campaignName} — ticket${ticketNumbers.length > 1 ? 's' : ''} ${ticketNumbers.join(', ')}${orgName ? ` · ${orgName}` : ''}`,
       // Where the BUYER'S OWN BROWSER lands after paying — must be a real page, never the
       // JSON webhook endpoint. Carries this sale's own id so the page knows what to show;
       // that id is an unguessable UUID and the page it points to discloses nothing sensitive.
@@ -1107,7 +1127,7 @@ async function publicPaymentStatus({ payment_id }) {
   const isPhysical = ticketRows && ticketRows.length ? blockById[ticketRows[0].block_id].type === 'physical' : true;
 
   const status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
-  const { data: org } = await supabase.from('organizations').select('name, address').eq('id', payment.campaigns.org_id).single();
+  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text').eq('id', payment.campaigns.org_id).single();
 
   return {
     status, // 'paid' | 'pending' | 'failed' | 'void'
@@ -1118,6 +1138,7 @@ async function publicPaymentStatus({ payment_id }) {
     campaign_details: payment.campaigns.details_text,
     org_name: org ? org.name : '',
     org_address: org ? org.address : '',
+    thank_you: org ? org.thank_you_text : null,
     tickets,
     sold_at: payment.created_at,
   };
@@ -1210,7 +1231,7 @@ async function sumupCheck(session) {
   const co = await fetch('https://api.sumup.com/v0.1/checkouts', {
     method: 'POST',
     headers: { Authorization: `Bearer ${SUMUP_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ checkout_reference: ref, amount: 0.01, currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE, description: 'Parish Campaigns connection test', return_url: `${baseUrl}/api/sumup_webhook`, hosted_checkout: { enabled: true } }),
+    body: JSON.stringify({ checkout_reference: ref, amount: 0.01, currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE, description: 'Connection test', return_url: `${baseUrl}/api/sumup_webhook`, hosted_checkout: { enabled: true } }),
   });
   const coData = await co.json().catch(() => ({}));
   steps.push({ step: 'Can create a payment link', ok: co.ok, detail: co.ok ? 'Yes' : `HTTP ${co.status} — ${coData.message || coData.error_message || JSON.stringify(coData)}` });
@@ -1455,7 +1476,7 @@ async function cancelSumupCheckout(checkoutId) {
   } catch { return { ok: false, status: 0 }; }
 }
 
-// Who may resend: an Admin/SuperAdmin any link sale in their parish; a Seller only their OWN
+// Who may resend: an Admin/SuperAdmin any link sale in their church; a Seller only their OWN
 // sale of PHYSICAL tickets whose link is dead (expired/failed). Either way a new link is only
 // ever issued when the old one can no longer be paid — never two live links for one sale.
 async function resendPayment(session, { payment_id }) {
@@ -1564,7 +1585,7 @@ async function anonymizeOldData(session) {
 async function uploadPaymentPhoto(session, { payment_id, image_base64 }) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
   if (!image_base64) throw httpError(400, 'No image provided');
-  // Only a payment in the caller's own parish — and a seller only for their own sale.
+  // Only a payment in the caller's own church — and a seller only for their own sale.
   const { data: payment } = await supabase.from('payments').select('id, seller_id, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only add a photo to your own sale');
@@ -1637,6 +1658,7 @@ const actions = {
 
   get_org_settings: (s) => getOrgSettings(s),
   set_org_address: (s, b) => setOrgAddress(s, b),
+  set_org_thank_you: (s, b) => setOrgThankYou(s, b),
   create_campaign: (s, b) => createCampaign(s, b),
   set_campaign_details: (s, b) => setCampaignDetails(s, b),
   list_campaigns: (s, b) => listCampaigns(s, b),

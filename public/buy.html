@@ -22,9 +22,10 @@
     background:radial-gradient(120% 140% at 15% 0%, #c25a3f 0%, transparent 55%), radial-gradient(90% 120% at 100% 100%, #e8b04a55 0%, transparent 60%), linear-gradient(160deg,#7a2e22,#4d1a14); }
   .hero::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:18px; background:var(--paper); border-radius:18px 18px 0 0; }
   .hero .spark { position:absolute; font-size:18px; opacity:.55; animation:float 6s ease-in-out infinite; }
-  .hero .parish { position:relative; font-size:12px; letter-spacing:.14em; text-transform:uppercase; opacity:.85; }
+  .hero .church { position:relative; font-size:12px; letter-spacing:.14em; text-transform:uppercase; opacity:.85; }
   .hero h1 { position:relative; margin:4px 0 2px; font-size:27px; line-height:1.1; letter-spacing:-.01em; text-shadow:0 2px 12px rgba(0,0,0,.25); }
   .hero .each { position:relative; display:inline-block; margin-top:4px; padding:4px 12px; border-radius:20px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28); font-size:13px; font-weight:600; backdrop-filter:blur(2px); }
+  .thanks { position:relative; max-width:380px; margin:10px auto 0; padding:8px 12px; border-radius:12px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.22); font-size:13.5px; line-height:1.4; }
   .detailsBtn { position:relative; display:block; margin:6px auto 0; background:none; border:none; color:#fff; opacity:.9; font-size:13px; text-decoration:underline; text-underline-offset:3px; }
   .details { position:relative; margin:10px auto 0; max-width:420px; text-align:left; white-space:pre-wrap; font-size:13.5px; line-height:1.5; background:rgba(0,0,0,.22); border-radius:12px; padding:12px 14px; }
   @keyframes float { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-8px) rotate(8deg); } }
@@ -170,14 +171,19 @@ async function boot() {
   syncSlots(); renderQty(); renderMode(); renderPay();
 }
 
+// The church's saved thank-you (says where the money goes); a plain one by name if it's ever blank.
+function thankYouText() { return info.org.thank_you || (info.org.name ? 'Thank you for supporting ' + info.org.name + '.' : 'Thank you for your support!'); }
 function buildShell() {
+  const thank = thankYouText();
   const sparks = ['✨','🎟️','⭐','🎁','✨'].map((s, i) => `<span class="spark" style="left:${8 + i * 21}%;top:${14 + (i % 2) * 42}%;animation-delay:${i * .8}s">${s}</span>`).join('');
   const from = Math.min(...info.tiers.map(t => Number(t.price)));
+  document.title = info.campaign.name + (info.org.name ? ' — ' + info.org.name : '');
   $('app').innerHTML = `
     <div class="hero">${sparks}
-      ${info.org.name ? `<div class="parish">${esc(info.org.name)}</div>` : ''}
+      ${info.org.name ? `<div class="church">${esc(info.org.name)}</div>` : ''}
       <h1>${esc(info.campaign.name)}</h1>
       <span class="each">🎟️ ${info.tiers.length > 1 ? 'From ' : ''}${money(from)} a ticket</span>
+      <p class="thanks">💛 ${esc(thank)}</p>
       ${info.campaign.details_text ? `<button class="detailsBtn" id="detailsBtn" type="button">🎁 Prizes &amp; details ▾</button><div class="details" id="details" hidden>${esc(info.campaign.details_text)}</div>` : ''}
     </div>
     <div class="wrap">
@@ -213,6 +219,7 @@ function buildShell() {
         </div>
         <p class="tiny" style="margin:8px 0 0">We'll send your ticket confirmation here.</p>
       </div>
+      <p class="tiny" style="font-size:13px;color:#7a2e22;font-weight:600">💛 ${esc(thank)}</p>
       <p class="tiny">Secure payment by SumUp. Your payment link is valid for 30 minutes and your numbers are held for you meanwhile.${info.org.address ? `<br>${esc(info.org.name)} · ${esc(info.org.address)}` : ''}</p>
     </div>
     <div class="paybar"><div class="in">

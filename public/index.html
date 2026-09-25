@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Parish Campaigns</title>
+<title>St.Vincent De Paul Church — Campaigns</title>
 <style>
   :root {
     --ink: #1c1c1e; --paper: #fdfcf9; --line: #e4e0d8;
@@ -17,7 +17,8 @@
   body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--paper); color:var(--ink); }
   header { padding: 10px 14px; border-bottom: 1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:8px; }
   #headerRight { display:flex; gap:6px; }
-  header h1 { font-size: 17px; margin:0; }
+  header h1 { font-size: 16px; margin:0; }
+  header h1.brand { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:15px; }
   header button { background:none; border:1px solid var(--line); border-radius:8px; padding:8px 14px; font-size:14px; }
   main { max-width: 560px; margin: 0 auto; padding: 20px; }
   .card { background:white; border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:16px; }
@@ -102,7 +103,7 @@
 </head>
 <body>
 <header>
-  <h1>⛪ Parish Campaigns</h1>
+  <h1 class="brand">⛪ St.Vincent De Paul Church</h1>
   <div id="headerRight"></div>
 </header>
 <main id="app"></main>
@@ -213,7 +214,7 @@ function showBootstrap() {
   document.getElementById('app').innerHTML = h`
     <div class="card">
       <h2 style="margin-top:0">First-time Platform Owner Setup</h2>
-      <p class="muted">Creates the very first Platform Owner account — the global role that creates each parish (Organization) and its first Admin. Only works if no Platform Owner exists yet.</p>
+      <p class="muted">Creates the very first Platform Owner account — the global role that creates each church (Organization) and its first Admin. Only works if no Platform Owner exists yet.</p>
       <label>Your name</label><input id="bName">
       <label>Mobile number</label><input id="bMobile" type="tel">
       <label>Password (8+ characters, yours alone)</label><input id="bPassword" type="password">
@@ -240,32 +241,32 @@ async function renderPlatformOwner() {
   document.getElementById('app').innerHTML = h`
     <div class="card">
       <h2 style="margin-top:0">Organizations</h2>
-      <p class="muted">Each parish is its own Organization, with its own campaigns, sellers, and data — completely separate from any other.</p>
+      <p class="muted">Each church is its own Organization, with its own campaigns, sellers, and data — completely separate from any other.</p>
       <table>
         <tr><th>Name</th><th>Created</th></tr>
         ${organizations.map(o => `<tr><td>${esc(o.name)}</td><td>${new Date(o.created_at).toLocaleDateString('en-GB')}</td></tr>`).join('')}
       </table>
     </div>
     <div class="card">
-      <h3 style="margin-top:0">Add a new parish</h3>
+      <h3 style="margin-top:0">Add a new church</h3>
       <label>Organization name</label>
       <input id="orgName" placeholder="e.g. St. Vincent De Paul Church, Osterley">
       <button class="primary" onclick="doCreateOrg()">Create Organization</button>
       <div id="orgResult"></div>
     </div>
     <div class="card">
-      <h3 style="margin-top:0">Add that parish's first Admin</h3>
+      <h3 style="margin-top:0">Add that church's first Admin</h3>
       <label>Organization</label>
       <select id="orgForAdmin">${organizations.map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>
       <label>Name</label><input id="adminName">
       <label>Mobile number</label><input id="adminMobile" type="tel">
       <label>Password (8+ characters)</label><input id="adminPassword" type="password">
-      <button class="primary" onclick="doAddOrgAdmin()">Create SuperAdmin for this parish</button>
+      <button class="primary" onclick="doAddOrgAdmin()">Create SuperAdmin for this church</button>
       <div id="adminResult"></div>
     </div>
     <div class="card">
       <h3 style="margin-top:0">Recover a locked-out SuperAdmin</h3>
-      <p class="muted">Deliberately narrow: finds a SuperAdmin by their mobile number to reset their password or re-enable their account — nothing else about their parish is visible here. A locked-out Admin or Seller is recovered by their own parish's SuperAdmin instead.</p>
+      <p class="muted">Deliberately narrow: finds a SuperAdmin by their mobile number to reset their password or re-enable their account — nothing else about their church is visible here. A locked-out Admin or Seller is recovered by their own church's SuperAdmin instead.</p>
       <label>Their mobile number</label>
       <input id="recoverMobile" type="tel" placeholder="07…">
       <button class="secondary" onclick="doFindSuperadmin()">Find</button>
@@ -319,7 +320,7 @@ async function doAddOrgAdmin() {
       mobile: document.getElementById('adminMobile').value.trim(),
       password: document.getElementById('adminPassword').value,
     });
-    resEl.innerHTML = `<div class="info">SuperAdmin created for that parish.</div>`;
+    resEl.innerHTML = `<div class="info">SuperAdmin created for that church.</div>`;
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
@@ -332,7 +333,7 @@ function currentCampaign() { return state.campaigns.find(c => c.id === state.las
 function tierSummary(c) { return c.tiers.map(t => `${t.name} £${Number(t.price).toFixed(2)}`).join(' · '); }
 
 async function renderSeller() {
-  // One round trip for everything this screen needs (campaigns, parish details, this seller's
+  // One round trip for everything this screen needs (campaigns, church details, this seller's
   // stats) — three calls in a row is slow on a weak signal. Nothing typed so far is lost if it
   // fails: the half-filled sale lives in variables, not on screen, so Retry just redraws it.
   let screen;
@@ -471,12 +472,19 @@ function linkShareHtml(paymentId, contact, message, subject) {
 }
 // SumUp's hosted checkout is fixed at 30 minutes (not configurable), so every link message
 // says so. What happens after expiry differs: a physical ticket stays with the buyer and the
-// seller/parish issues a fresh link; an online ticket's number is released for someone else.
+// seller/church issues a fresh link; an online ticket's number is released for someone else.
+// The line that ends every message and the public page: the church's saved thank-you (which says
+// where the money goes). If a SuperAdmin ever blanks it, fall back to a plain thank-you by name.
+function thankYou() {
+  const o = state.org;
+  return (o && o.thank_you_text) || (o && o.name ? 'Thank you for supporting ' + o.name + '.' : 'Thank you for your support!');
+}
+function churchName() { return (state.org && state.org.name) || 'St.Vincent De Paul Church'; }
 function linkMessage(campaignName, amount, ticketNumbers, payUrl, isOnline) {
   const expiry = isOnline
     ? `This link is valid for 30 minutes — after that your ticket number is released and you would need to start again.`
     : `This link is valid for 30 minutes. If it expires, just ask us for a fresh link — your ticket is still yours.`;
-  return `Hello — please pay £${Number(amount).toFixed(2)} for your ${campaignName} ticket${ticketNumbers.length>1?'s':''} (no. ${ticketNumbers.join(', ')}):\n${payUrl}\n${expiry}\nThank you for your support!`;
+  return `Hello from ${churchName()} — please pay £${Number(amount).toFixed(2)} for your ${campaignName} ticket${ticketNumbers.length>1?'s':''} (no. ${ticketNumbers.join(', ')}):\n${payUrl}\n${expiry}\n\n${thankYou()}`;
 }
 async function logShared(paymentId, channel) {
   try {
@@ -894,7 +902,7 @@ async function doSellerResend(activityId) {
 }
 
 function toggleShareMenu(id) { shareMenuOpenFor = shareMenuOpenFor === id ? null : id; renderFeed(); }
-// Replicates the physical ticket's own content — parish name/address, campaign-specific
+// Replicates the physical ticket's own content — church name/address, campaign-specific
 // details (prizes, draw date, tagline, whatever the SuperAdmin wrote for THIS campaign — see
 // campaigns.details_text), tier breakdown, ticket number(s), price, buyer, sale date/time.
 function shareMessageFor(a) {
@@ -909,7 +917,7 @@ function shareMessageFor(a) {
   if (state.org && state.org.address) lines.push(state.org.address);
   lines.push('', `🎟️ ${camp.name} — Ticket No. ${numbers}`, '');
   if (camp.details_text) { lines.push(camp.details_text, ''); }
-  lines.push(`${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Total: £${a.amount.toFixed(2)}`, `Buyer: ${a.buyerName||'—'}`, `Sold: ${when}`, '', `Thank you for your support!`);
+  lines.push(`${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Total: £${a.amount.toFixed(2)}`, `Buyer: ${a.buyerName||'—'}`, `Sold: ${when}`, '', thankYou());
   return lines.join('\n');
 }
 // Reused for both a Cash/Machine sale (no known contact — three generic buttons) and a paid
@@ -1021,14 +1029,18 @@ async function renderCampaignsTab() {
   }
   const el = document.getElementById('adminContent');
   el.innerHTML = h`
-    ${state.user.role==='superadmin' && !org ? `<div class="card"><div class="error">Could not load parish settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
+    ${state.user.role==='superadmin' && !org ? `<div class="card"><div class="error">Could not load church settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
     ${org ? `<div class="card">
-      <h3 style="margin-top:0">Parish details</h3>
-      <p class="muted">Shown on every ticket message, for every campaign.</p>
+      <h3 style="margin-top:0">Church details</h3>
+      <p class="muted">Shown on every ticket message and on the public buy page, for every campaign.</p>
       <label>Address</label>
       <input id="orgAddressInput" placeholder="e.g. 2 Witham Road, Osterley, TW7 4AJ" value="${esc(org.address||'')}">
       <button class="small" style="margin-top:8px" onclick="doSaveOrgAddress()">Save</button>
       <div id="orgAddressResult"></div>
+      <label style="margin-top:14px">Thank-you message <span class="muted">(added to every payment link, every ticket message and the public buy page)</span></label>
+      <textarea id="orgThankYouInput" rows="3" maxlength="400" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="e.g. Thank you for supporting St.Vincent De Paul Church, Osterley. All funds collected go towards the Church building fund.">${esc(org.thank_you_text||'')}</textarea>
+      <button class="small" style="margin-top:8px" onclick="doSaveThankYou()">Save</button>
+      <div id="orgThankYouResult"></div>
     </div>` : ''}
     ${state.user.role==='superadmin' ? `<div class="card">
       <h3 style="margin-top:0">SumUp connection</h3>
@@ -1088,11 +1100,16 @@ async function renderCampaignsTab() {
       <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i)).join('')}</div>
       <button class="ghost" onclick="addBlockRow()">+ Add another block</button>
       <label>Campaign details <span class="muted">(optional — prizes, draw date, tagline, anything included in every ticket message for this campaign)</span></label>
-      <textarea id="cDetails" rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="e.g. 1st Prize — £1,200 · 2nd Prize — £500 · 3rd Prize — £300&#10;Draw Date: 20 December 2026&#10;&quot;Give a little, help a lot&quot; — every penny raised supports our church building fund.&#10;Winning numbers published on the parish website &amp; notice board; winners contacted via the parish office."></textarea>
+      <textarea id="cDetails" rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="e.g. 1st Prize — £1,200 · 2nd Prize — £500 · 3rd Prize — £300&#10;Draw Date: 20 December 2026&#10;&quot;Give a little, help a lot&quot; — every penny raised supports our church building fund.&#10;Winning numbers published on the church website &amp; notice board; winners contacted via the church office."></textarea>
       <button class="primary" onclick="createCampaign()">Create Campaign</button>
       <div id="createResult"></div>
     </div>` : ''}
   `;
+}
+async function doSaveThankYou() {
+  const resEl = document.getElementById('orgThankYouResult');
+  try { await call('set_org_thank_you', { thank_you_text: document.getElementById('orgThankYouInput').value }); resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; }
+  catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 async function doSaveOrgAddress() {
   const resEl = document.getElementById('orgAddressResult');
@@ -1283,12 +1300,13 @@ async function doCashRecon() {
 // ---- Needs Attention tab: Pay-by-Link sales not yet paid (or whose link expired) ----
 // Each row shows who the link was sent to, so an unpaid handed-over ticket can be chased.
 async function renderAttentionTab() {
+  if (!state.org) { try { state.org = (await call('get_org_settings')).organization; } catch {} } // for the church name + thank-you in reminders
   const { payments } = await call('list_incomplete_payments', { campaign_id: campaignFilter || undefined });
   const el = document.getElementById('adminContent');
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
     <p class="muted">Pay-by-Link sales that haven't been paid. The ticket is with the buyer — chase them on the contact below, or issue a fresh link if it expired.</p>
     ${!payments.length ? '<p class="muted">Nothing needs attention.</p>' : payments.map(p => {
-      const msg = `Hello — a reminder to please pay £${Number(p.amount).toFixed(2)} for your tickets (${p.tickets.join(' · ')}):\n${p.link_url}\nThis link is valid for 30 minutes from when it was sent — if it has expired, just ask us for a fresh one.\nThank you for your support!`;
+      const msg = `Hello from ${churchName()} — a reminder to please pay £${Number(p.amount).toFixed(2)} for your tickets (${p.tickets.join(' · ')}):\n${p.link_url}\nThis link is valid for 30 minutes from when it was sent — if it has expired, just ask us for a fresh one.\n\n${thankYou()}`;
       const sent = p.link_shared_at ? `Sent via ${p.contact_channel} on ${new Date(p.link_shared_at).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}` : 'Not recorded as sent';
       return `<div style="border-top:1px solid var(--line);padding:12px 0">
         <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.payer_name||'(name removed)')}</b>
