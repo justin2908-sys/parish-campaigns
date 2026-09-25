@@ -1,0 +1,40 @@
+/* St.Vincent De Paul Church — shared look for every page (seller/admin app, public buy page,
+   ticket page). Same palette and fonts as the Hall Booking site: deep pine green, pale sage,
+   brass accent; Marcellus (lettering), Spectral (headings/numbers), Hanken Grotesk (body).
+   Fonts are hosted here (not Google) so they load fast on a weak signal and work offline. */
+
+@font-face { font-family:'Hanken Grotesk'; font-style:normal; font-weight:400 700; font-display:swap; src:url('/fonts/HankenGrotesk-400-700.woff2') format('woff2'); }
+@font-face { font-family:'Marcellus'; font-style:normal; font-weight:400; font-display:swap; src:url('/fonts/Marcellus-400.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:400; font-display:swap; src:url('/fonts/Spectral-400.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:500; font-display:swap; src:url('/fonts/Spectral-500.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:600; font-display:swap; src:url('/fonts/Spectral-600.woff2') format('woff2'); }
+
+:root {
+  /* the palette */
+  --pine:#2E4739; --pine-deep:#22352A; --pine-soft:#3E5E4C; --pine-dim:#DCE4D9;
+  --brass:#A9822F; --brass-strong:#8B6A22; --brass-bright:#D2AE58; --brass-dim:#F0E7CC;
+  --ink:#1E241F; --paper:#E4E7DE; --surface:#FBFBF8; --stone:#C4C7BB; --line:#D3D6CA; --slate:#5C6159;
+  /* meanings: success / warning / error keep their own colours so they never read as "brand" */
+  --green:#3E7A4E; --green-dim:#DDEBDF;
+  --orange:#9A6116; --orange-dim:#F5E7D0;
+  --red:#B0453C; --red-dim:#F4DEDB;
+
+  /* names the pages already use, mapped onto the palette */
+  --accent:var(--pine); --accent-dim:var(--pine-dim);
+  --good:var(--green); --good-dim:var(--green-dim);
+  --warn:var(--orange); --warn-dim:var(--orange-dim);
+  --bad:var(--red); --bad-dim:var(--red-dim);
+  --tier-c:var(--brass-strong); --tier-c-dim:var(--brass-dim);
+  --wine:var(--pine); --wine2:var(--pine-soft);
+  --gold:var(--brass-bright); --gold-dim:var(--brass-dim);
+  --card:var(--surface); --muted:var(--slate);
+
+  --font-body:'Hanken Grotesk',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --font-head:'Spectral',Georgia,'Times New Roman',serif;
+  --font-caps:'Marcellus',Georgia,serif;
+}
+
+html { -webkit-text-size-adjust:100%; }
+body { font-family:var(--font-body); font-size:17px; line-height:1.45; color:var(--ink); background:var(--paper); -webkit-font-smoothing:antialiased; }
+h1, h2, h3 { font-family:var(--font-head); font-weight:500; }
+input, select, textarea, button { font-family:inherit; }
