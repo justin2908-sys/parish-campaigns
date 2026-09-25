@@ -32,6 +32,7 @@
   .mid.picking { min-height:150px; }
   .fine { flex:none; margin:0; padding:0 6px; text-align:center; color:var(--slate); font-size:12.5px; line-height:1.35; }
   .fine b { color:var(--pine); font-weight:600; }
+  .fine .linkbtn { display:block; margin:1px auto 0; padding:4px 8px; }
   .sheetbox { position:fixed; left:0; right:0; bottom:0; z-index:25; max-width:520px; margin:0 auto; max-height:82vh; max-height:82dvh; overflow-y:auto; background:var(--surface); border-radius:20px 20px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom)); box-shadow:0 -14px 40px rgba(0,0,0,.4); }
   .sheetbox h2 { margin:0 28px 10px 0; font-family:var(--font-caps); font-weight:400; font-size:15px; letter-spacing:.16em; color:var(--brass-strong); text-transform:uppercase; }
   .sheetbox .close { position:absolute; top:10px; right:12px; width:36px; height:36px; border:none; background:var(--pine-dim); color:var(--pine); border-radius:50%; font-size:16px; font-weight:700; }
@@ -47,9 +48,13 @@
   .stepper button:active { background:var(--stone); }
   .stepper input { width:54px; height:44px; text-align:center; border:none; background:#fff; font-family:var(--font-head); font-size:23px; font-weight:600; color:var(--ink); padding:0; -moz-appearance:textfield; }
   .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
-  .quick { display:flex; gap:6px; margin-bottom:6px; }
-  .quick button { flex:1; padding:6px 0; border:1px solid var(--stone); background:#fff; border-radius:11px; font-size:16px; font-weight:700; color:var(--pine); }
-  .quick button.on { background:var(--wine); color:#fff; border-color:var(--wine); }
+  .bundleHead { margin:8px 0 8px; font-size:15px; font-weight:700; color:var(--pine); }
+  .bundles { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+  .bundle { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:9px 2px 8px; border-radius:14px; border:1.5px solid #CDB673; background:linear-gradient(180deg,#FBFBF8,#F0E7CC); color:var(--pine); box-shadow:0 3px 0 #B8913A; }
+  .bundle:active { transform:translateY(2px); box-shadow:0 1px 0 #B8913A; }
+  .bundle b { font-family:var(--font-head); font-size:27px; font-weight:600; line-height:1.05; }
+  .bundle span { font-size:13px; font-weight:600; color:var(--slate); }
+  .bundle em { font-style:normal; font-size:14px; font-weight:800; color:var(--wine); margin-top:2px; }
 
   /* ---- mode ---- */
   .seg { display:flex; background:var(--pine-dim); border-radius:14px; padding:3px; margin:0 0 6px; }
@@ -115,7 +120,7 @@
   .linkbtn { background:none; border:none; color:var(--wine); text-decoration:underline; text-underline-offset:3px; font-size:13.5px; font-weight:600; padding:6px; }
   .found { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; margin-top:8px; border-radius:12px; background:var(--gold-dim); border:1px solid #DCCB98; color:var(--ink); text-decoration:none; font-size:15px; }
   .found span { color:var(--muted); font-size:12.5px; white-space:nowrap; }
-  @media (max-height:700px) { .quick { display:none; } .mid.picking { min-height:120px; } }
+  @media (max-height:700px) { .mid.picking { min-height:120px; } .bundleHead { margin:8px 0 6px; } .bundle { padding:7px 2px 6px; } .bundle b { font-size:23px; } }
   @media (max-height:600px) { .top .church { display:none; } .top h1 { font-size:21px; } .seg button { padding:7px 4px; } .fine { font-size:11.5px; } .thanks { font-size:12px; } .card { padding:8px; } .mid.picking { min-height:100px; } }
   .fatal { max-width:480px; margin:40px auto; padding:0 16px; }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .bit { display:none; } }
@@ -206,7 +211,7 @@ function buildShell() {
             <button type="button" data-mode="pick" role="tab">🎲 Pick my numbers</button>
           </div>
           <div class="mid">
-            <div id="autoPane"><p class="note" id="autoNote"></p></div>
+            <div id="autoPane"><p class="note" id="autoNote"></p><div id="bundles"></div></div>
             <div id="pickPane" hidden>
               <div class="range">🎟️ Online numbers run from <b>${esc(rangeWords())}</b>. Others aren't part of this draw.</div>
               <div class="slots" id="slots" aria-live="polite"></div>
@@ -254,6 +259,7 @@ function buildShell() {
   if ($('detailsBtn')) { $('detailsBtn').onclick = () => { $('details').hidden = false; }; $('detailsClose').onclick = () => { $('details').hidden = true; }; }
   $('seg').onclick = (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); };
   $('slots').onclick = onSlotClick;
+  $('bundles').onclick = (e) => { const b = e.target.closest('button[data-set]'); if (b) setCount(info.tiers[0].id, b.dataset.set); };
   $('shuffleBtn').onclick = () => shuffle(false);
   $('shuffleAllBtn').onclick = () => shuffle(true);
   $('luckyAdd').onclick = addLucky;
@@ -278,13 +284,11 @@ function setCount(tierId, v) {
   syncSlots(); renderQty(); renderMode(); renderPay();
 }
 function renderQty() {
-  const single = info.tiers.length === 1;
   $('qtyArea').innerHTML = info.tiers.map(t => `
     <div class="qty-row"><div class="qty-label">${esc(t.name)}<small>${money(t.price)} each</small></div>
       <div class="stepper"><button type="button" data-t="${t.id}" data-d="-1" aria-label="One fewer ${esc(t.name)}">−</button>
         <input type="number" min="0" max="${MAX_QTY}" inputmode="numeric" id="q-${t.id}" data-t="${t.id}" aria-label="Number of ${esc(t.name)}" value="${counts[t.id] || 0}">
-        <button type="button" data-t="${t.id}" data-d="1" aria-label="One more ${esc(t.name)}">+</button></div></div>`).join('')
-    + (single ? `<div class="quick">${[1, 5, 10, 20].map(n => `<button type="button" data-t="${info.tiers[0].id}" data-set="${n}" class="${(counts[info.tiers[0].id] || 0) === n ? 'on' : ''}">${n}</button>`).join('')}</div>` : '');
+        <button type="button" data-t="${t.id}" data-d="1" aria-label="One more ${esc(t.name)}">+</button></div></div>`).join('');
   $('qtyArea').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.set) setCount(b.dataset.t, b.dataset.set);
@@ -310,6 +314,14 @@ function renderMode() {
   $('autoNote').innerHTML = n
     ? `We'll pick <b>${n} number${n > 1 ? 's' : ''}</b> for you from the online series (${esc(rangeWords())}) the moment you pay. Prefer to choose? Tap <b>Pick my numbers</b>.`
     : `Choose how many tickets, and we'll pick the numbers for you — or choose your own.`;
+  // Nothing chosen yet: offer one-tap bundles to fill the empty space (single-price campaigns only).
+  const bd = $('bundles');
+  if (bd) {
+    const t = info.tiers[0];
+    bd.innerHTML = (!n && info.tiers.length === 1)
+      ? `<div class="bundleHead">👆 Buying several? Tap a bundle, or use − / +</div><div class="bundles">${[1, 5, 10, 20].filter(k => k <= MAX_QTY).map(k => `<button type="button" class="bundle" data-set="${k}" aria-label="Buy ${k} ticket${k > 1 ? 's' : ''} for ${money(t.price * k)}"><b>${k}</b><span>${k === 1 ? 'ticket' : 'tickets'}</span><em>${money(t.price * k)}</em></button>`).join('')}</div>`
+      : '';
+  }
   renderModeLabelsOnly();
 }
 function renderSlots() {
