@@ -753,3 +753,19 @@ database only forbade a repeat within a single series, so Physical 10001–15000
   text is ever blanked, a plain "Thank you for supporting <church name>." is used, so the message
   is never missing.
 - SumUp's payment page description now ends "· <church name>".
+
+---
+
+## 25. Deploying without burning credits — 2026-09-25
+
+Netlify's credit plan charges **15 credits per production deploy**; deploy previews and branch
+deploys are free (bandwidth/requests/compute are billed separately and are tiny here). Linking
+GitHub to production had made every `git push origin main` a paid deploy (22 in two days).
+
+- **Guard:** `netlify.toml` → `[context.production] ignore` — production builds only when the
+  commit message contains `[publish]`; any other push to `main` is skipped.
+- **Drafts:** all work happens on the `dev` branch. A pull request from `dev` to `main` gets a free
+  deploy-preview site (own address, same database and SumUp account) — live tests run against
+  that address, not production.
+- **Publishing:** merge the PR with a message ending `[publish]` — one production deploy, only when
+  Justin has said to publish.
