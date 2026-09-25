@@ -892,13 +892,17 @@ const MAX_PUBLIC_PURCHASE_QTY = 20; // a sane per-transaction cap, not a busines
 // What a buyer sees before paying: campaign name/details, church name/address, tiers, and
 // which online block(s) exist (with their range, so a lucky-number field can say what's valid).
 async function publicCampaignInfo({ campaign_id }) {
-  await sweepIfDue(); // free holds from abandoned payments so their numbers show as available again
-  const { data: campaign } = await supabase.from('campaigns').select('id, name, details_text, org_id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  // This is the first thing every visitor waits for, so the three lookups run side by side (the
+  // church details ride along with the campaign row) — one round trip to the database, not five.
+  // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
+  const [{ data: campaign }, { data: tiers }, { data: blocks }] = await Promise.all([
+    supabase.from('campaigns').select('id, name, details_text, org_id, organizations(name, address, thank_you_text)').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle(),
+    supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
+    supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
+  ]);
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
-  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text').eq('id', campaign.org_id).single();
-  const { data: tiers } = await supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order');
-  const { data: blocks } = await supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital');
   if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online tickets available.');
+  const org = campaign.organizations;
   return {
     campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text },
     org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null },
@@ -942,8 +946,10 @@ async function publicCheckTickets({ campaign_id, ticket_numbers }) {
 // the buyer already holds in their basket. These are suggestions only — nothing is reserved
 // until they pay, and the purchase itself re-checks every number atomically.
 async function publicRandomNumbers({ campaign_id, block_id, count, exclude }) {
-  await sweepIfDue();
-  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  const [{ data: campaign }] = await Promise.all([
+    supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle(),
+    sweepIfDue().catch(() => { /* housekeeping only */ }),
+  ]);
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const n = Number(count);
   if (!Number.isInteger(n) || n < 1 || n > MAX_PUBLIC_PURCHASE_QTY) throw httpError(400, `Ask for between 1 and ${MAX_PUBLIC_PURCHASE_QTY} numbers`);
@@ -1765,6 +1771,8 @@ const actions = {
   seller_state: (s, b) => sellerState(s, b),
 };
 
+const READ_ONLY_PUBLIC = new Set(['public_campaign_info', 'public_check_ticket', 'public_check_tickets']);
+
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'POST only' });
   // Where SumUp should send payment notifications — this deployment's own address.
@@ -1790,12 +1798,21 @@ exports.handler = async (event) => {
     const isPublic = action.startsWith('public_');
     // Public pages: a generous per-visitor ceiling on requests (a whole church on one wifi
     // still fits), there to stop scraping and floods rather than real buyers.
-    if (isPublic && (await rateHit(`pub:req:${clientIp}`, PUBLIC_REQ_WINDOW_SECONDS)) > PUBLIC_REQ_MAX) {
-      throw httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
-    }
+    const limited = () => httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
     // A logged-in request must still belong to an active account with the password the token was made for.
     if (session && !isPublic && action !== 'sumup_webhook') await assertSessionLive(session);
-    const result = await fn(session, body);
+    let result;
+    if (isPublic && READ_ONLY_PUBLIC.has(action)) {
+      // Pure look-ups change nothing, so the flood check and the look-up run at the same time
+      // (a flooder simply gets the 429 and the answer is thrown away) — saves a database round trip.
+      const [hits, r] = await Promise.all([rateHit(`pub:req:${clientIp}`, PUBLIC_REQ_WINDOW_SECONDS), fn(session, body).then(v => ({ v }), e => ({ e }))]);
+      if (hits > PUBLIC_REQ_MAX) throw limited();
+      if (r.e) throw r.e;
+      result = r.v;
+    } else {
+      if (isPublic && (await rateHit(`pub:req:${clientIp}`, PUBLIC_REQ_WINDOW_SECONDS)) > PUBLIC_REQ_MAX) throw limited();
+      result = await fn(session, body);
+    }
     return json(200, result);
   } catch (e) {
     return json(e.status || 500, { error: e.message || 'Server error' });
