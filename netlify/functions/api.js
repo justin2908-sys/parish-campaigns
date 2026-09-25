@@ -38,7 +38,8 @@ function verifySession(token) {
   const [body, sig] = token.split('.');
   if (!body || !sig) return null;
   const expected = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
-  if (sig !== expected) return null;
+  const a = Buffer.from(sig), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null; // constant-time compare
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
     if (payload.exp && Date.now() > payload.exp) return null;
@@ -56,6 +57,50 @@ function requireOrgRole(session, roles) {
   if (!session.org_id) throw httpError(403, 'This action requires an Organization-scoped account');
 }
 function httpError(status, message) { const e = new Error(message); e.status = status; return e; }
+
+// ---------- abuse limits ----------
+// The caller's address as Netlify's edge reports it (the client can't set this header).
+let clientIp = '';
+
+// Attempt counters live in the database (rate_limits) because each request may run on a
+// different server instance. If the counter itself is unreachable we let the request through
+// rather than lock everyone out.
+async function rateHit(key, windowSeconds) {
+  const { data, error } = await supabase.rpc('rate_hit', { p_key: key, p_window_seconds: windowSeconds });
+  return error ? 0 : Number(data);
+}
+async function ratePeek(key, windowSeconds) {
+  const { data, error } = await supabase.rpc('rate_peek', { p_key: key, p_window_seconds: windowSeconds });
+  return error ? 0 : Number(data);
+}
+async function rateReset(key) { await supabase.rpc('rate_reset', { p_key: key }); }
+
+// Runs the stale-hold sweep at most once a minute, whoever triggers it, so the public page can
+// free abandoned holds itself without every visitor causing SumUp lookups.
+async function sweepIfDue() {
+  if ((await rateHit('sweep', 60)) === 1) {
+    await releaseStalePendingLinkPayments();
+    await supabase.rpc('rate_prune');
+  }
+}
+
+// Free text from a person: control characters and line breaks flattened, length capped.
+const MAX_NAME_LENGTH = 80, MAX_CONTACT_LENGTH = 254;
+function cleanName(v, what) {
+  const s = String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (s.length > MAX_NAME_LENGTH) throw httpError(400, `${what || 'The name'} is too long (${MAX_NAME_LENGTH} characters at most).`);
+  return s;
+}
+function cleanClientRef(v) {
+  if (v == null || v === '') return null;
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(String(v))) throw httpError(400, 'Invalid request reference.');
+  return String(v);
+}
+// Fingerprint of a user's password hash, carried in their login token: resetting the password
+// changes it, which ends every session issued before the reset.
+const passwordFingerprint = (hash) => crypto.createHash('sha256').update(String(hash)).digest('base64url').slice(0, 16);
+// Used to spend the same time on an unknown mobile number as on a real one.
+const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 10);
 
 const json = (status, body) => ({
   statusCode: status,
@@ -126,13 +171,37 @@ async function platformSetSuperadminActive(session, { user_id, active }) {
 
 // ---------- Auth & Users ----------
 
+const PUBLIC_REQ_MAX = 1500, PUBLIC_REQ_WINDOW_SECONDS = 300;
+const LOGIN_MAX_FAILS = 5, LOGIN_IP_MAX_FAILS = 30, LOGIN_WINDOW_SECONDS = 15 * 60;
 async function login({ mobile, password }) {
-  const { data: user } = await supabase.from('users').select('*').eq('mobile', mobile).eq('active', true).maybeSingle();
-  if (!user) throw httpError(401, 'Unknown mobile number or account disabled');
-  const ok = await bcrypt.compare(password, user.password_hash);
-  if (!ok) throw httpError(401, 'Incorrect password');
-  const session = signSession({ uid: user.id, role: user.role, org_id: user.org_id, name: user.name, exp: Date.now() + 1000 * 60 * 60 * 2 });
+  const m = String(mobile == null ? '' : mobile).trim().slice(0, 32);
+  // Counted per mobile number TYPED (whether or not it exists, so an attacker learns nothing from
+  // who gets locked) and per address. Only wrong attempts count; a good login clears the count.
+  const keyMobile = 'login:m:' + m.replace(/[^\d+]/g, ''), keyIp = 'login:ip:' + clientIp;
+  const [fm, fi] = await Promise.all([ratePeek(keyMobile, LOGIN_WINDOW_SECONDS), ratePeek(keyIp, LOGIN_WINDOW_SECONDS)]);
+  if (fm >= LOGIN_MAX_FAILS || fi >= LOGIN_IP_MAX_FAILS) {
+    throw httpError(429, 'Too many failed attempts. Please wait 15 minutes and try again — or ask your SuperAdmin to reset your password.');
+  }
+  const { data: user } = await supabase.from('users').select('*').eq('mobile', m).eq('active', true).maybeSingle();
+  const ok = await bcrypt.compare(String(password == null ? '' : password), user ? user.password_hash : DUMMY_HASH);
+  if (!user || !ok) {
+    await Promise.all([rateHit(keyMobile, LOGIN_WINDOW_SECONDS), rateHit(keyIp, LOGIN_WINDOW_SECONDS)]);
+    // One message for unknown number, wrong password and disabled account alike.
+    throw httpError(401, 'Incorrect mobile number or password.');
+  }
+  await rateReset(keyMobile);
+  const session = signSession({ uid: user.id, role: user.role, org_id: user.org_id, name: user.name, pf: passwordFingerprint(user.password_hash), exp: Date.now() + 1000 * 60 * 60 * 2 });
   return { session, user: safeUser(user) };
+}
+
+// Every authenticated request re-checks that the account still exists, is still active, and
+// still has the password the token was issued for — so disabling someone or resetting their
+// password ends their session immediately instead of at the 2-hour expiry.
+async function assertSessionLive(session) {
+  const { data: u } = await supabase.from('users').select('active, password_hash').eq('id', session.uid).maybeSingle();
+  if (!u || !u.active || !session.pf || session.pf !== passwordFingerprint(u.password_hash)) {
+    throw httpError(401, 'Your session has ended — please log in again.');
+  }
 }
 
 function safeUser(u) { return { id: u.id, mobile: u.mobile, name: u.name, role: u.role, org_id: u.org_id }; }
@@ -153,9 +222,13 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
     targetOrgId = session.org_id;
   }
   assertPasswordStrength(password);
+  const cleanedName = cleanName(name, 'The name');
+  const cleanedMobile = String(mobile == null ? '' : mobile).trim();
+  if (!cleanedName || !cleanedMobile) throw httpError(400, 'A name and a mobile number are required.');
+  if (cleanedMobile.length > 32) throw httpError(400, 'That mobile number is too long.');
   const hash = await bcrypt.hash(password, 10);
   const { data, error } = await supabase.from('users')
-    .insert({ mobile, name, role, org_id: targetOrgId, password_hash: hash, created_by: session.uid })
+    .insert({ mobile: cleanedMobile, name: cleanedName, role, org_id: targetOrgId, password_hash: hash, created_by: session.uid })
     .select().single();
   if (error) throw httpError(400, error.message);
   if (disabled_campaign_ids && disabled_campaign_ids.length) {
@@ -476,8 +549,11 @@ async function listBinnedCampaigns(session) {
 
 function csvEscape(val) {
   if (val === null || val === undefined) return '';
-  const s = String(val);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  let s = String(val);
+  // A buyer's name comes from a public form. Spreadsheets treat a leading = + - @ as a formula,
+  // so defuse those (leaving ordinary phone numbers and amounts alone).
+  if (typeof val === 'string' && /^[=+\-@\t\r]/.test(s) && !/^[+-]?[0-9][0-9 ()-]*$/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 async function exportCampaignReport(session, { campaign_id }) {
@@ -594,6 +670,7 @@ async function checkTickets(session, { campaign_id, ticket_numbers }) {
 async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, auto_assign_block_id, method, payer_name, contact_value, client_ref }) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
+  client_ref = cleanClientRef(client_ref);
   if (client_ref) {
     const replay = await replaySale(client_ref, session.uid);
     if (replay) return replay;
@@ -614,7 +691,8 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   if (!Number.isInteger(totalCount) || counts.some(c => !Number.isInteger(c.count) || c.count < 0)) {
     throw httpError(400, 'Ticket counts must be whole numbers, zero or more.');
   }
-  if (!payer_name || !payer_name.trim()) throw httpError(400, 'Buyer name is required for every sale.');
+  const buyerName = cleanName(payer_name, 'The buyer name');
+  if (!buyerName) throw httpError(400, 'Buyer name is required for every sale.');
 
   const tierIdSequence = [];
   counts.forEach(c => { for (let i = 0; i < c.count; i++) tierIdSequence.push(c.tier.id); });
@@ -650,7 +728,7 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   const initialStatus = method === 'cash' ? 'cash_pending' : (method === 'machine' ? 'paid' : 'held');
 
   const { data: payment, error: payErr } = await supabase.from('payments')
-    .insert({ campaign_id, method, amount, status: 'pending', seller_id: session.uid, payer_name: payer_name.trim(), contact_value: contact ? contact.value : null, client_ref: client_ref || null })
+    .insert({ campaign_id, method, amount, status: 'pending', seller_id: session.uid, payer_name: buyerName, contact_value: contact ? contact.value : null, client_ref: client_ref || null })
     .select().single();
   if (payErr) {
     // Two copies of the same attempt raced each other: the unique client_ref let only one in.
@@ -766,6 +844,7 @@ const MAX_PUBLIC_PURCHASE_QTY = 20; // a sane per-transaction cap, not a busines
 // What a buyer sees before paying: campaign name/details, parish name/address, tiers, and
 // which online block(s) exist (with their range, so a lucky-number field can say what's valid).
 async function publicCampaignInfo({ campaign_id }) {
+  await sweepIfDue(); // free holds from abandoned payments so their numbers show as available again
   const { data: campaign } = await supabase.from('campaigns').select('id, name, details_text, org_id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const { data: org } = await supabase.from('organizations').select('name, address').eq('id', campaign.org_id).single();
@@ -815,6 +894,7 @@ async function publicCheckTickets({ campaign_id, ticket_numbers }) {
 // the buyer already holds in their basket. These are suggestions only — nothing is reserved
 // until they pay, and the purchase itself re-checks every number atomically.
 async function publicRandomNumbers({ campaign_id, block_id, count, exclude }) {
+  await sweepIfDue();
   const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const n = Number(count);
@@ -825,9 +905,34 @@ async function publicRandomNumbers({ campaign_id, block_id, count, exclude }) {
   return { numbers: (data || []).map(Number) };
 }
 
+// Stops one visitor from tying up a whole series with unpaid purchases (each holds its numbers
+// until the 30-minute payment link lapses). The ceilings are set so that a whole congregation
+// sharing the church wifi is fine; they only bite on a flood.
+const PUBLIC_MAX_HELD_PER_IP = 200, PUBLIC_MAX_PURCHASES_PER_IP_HOUR = 60, PUBLIC_MAX_OPEN_PER_CONTACT = 5;
+async function enforcePublicPurchaseLimits(contactValue, qty) {
+  if (clientIp) {
+    const { data: open } = await supabase.from('payments').select('id').eq('client_ip', clientIp).eq('status', 'pending').is('seller_id', null);
+    const ids = (open || []).map(p => p.id);
+    if (ids.length) {
+      const { count } = await supabase.from('tickets').select('id', { count: 'exact', head: true }).in('payment_id', ids);
+      if ((count || 0) + qty > PUBLIC_MAX_HELD_PER_IP) {
+        throw httpError(429, 'You already have several unpaid payments open. Please complete them, or wait for them to expire (30 minutes), before starting another.');
+      }
+    }
+    if ((await rateHit(`pub:buy:${clientIp}`, 3600)) > PUBLIC_MAX_PURCHASES_PER_IP_HOUR) {
+      throw httpError(429, 'Too many purchases from your connection just now — please wait a while and try again.');
+    }
+  }
+  const { count: openForContact } = await supabase.from('payments').select('id', { count: 'exact', head: true }).eq('contact_value', contactValue).eq('status', 'pending').is('seller_id', null);
+  if ((openForContact || 0) >= PUBLIC_MAX_OPEN_PER_CONTACT) {
+    throw httpError(429, 'This mobile number or email already has several unpaid payments open — please complete them, or wait for them to expire (30 minutes).');
+  }
+}
+
 // The purchase itself. block_id picks which online pool for "any available"; ticket_numbers
 // is a buyer's own lucky-number pick — exactly one of the two, same contract as recordSale.
 async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbers, buyer_name, contact_value, client_ref }) {
+  client_ref = cleanClientRef(client_ref);
   if (client_ref) {
     const replay = await replaySale(client_ref, null);
     if (replay) return replay;
@@ -845,8 +950,11 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   if (!Number.isInteger(totalCount) || counts.some(c => !Number.isInteger(c.count) || c.count < 0)) {
     throw httpError(400, 'Ticket counts must be whole numbers, zero or more.');
   }
-  if (!buyer_name || !buyer_name.trim()) throw httpError(400, 'Please enter your name.');
+  const buyerName = cleanName(buyer_name, 'Your name');
+  if (!buyerName) throw httpError(400, 'Please enter your name.');
   const contact = parseContact(contact_value);
+  await sweepIfDue();
+  await enforcePublicPurchaseLimits(contact.value, totalCount);
 
   const tierIdSequence = [];
   counts.forEach(c => { for (let i = 0; i < c.count; i++) tierIdSequence.push(c.tier.id); });
@@ -862,7 +970,7 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   }
 
   const { data: payment, error: payErr } = await supabase.from('payments')
-    .insert({ campaign_id, method: 'link', amount, status: 'pending', seller_id: null, payer_name: buyer_name.trim(), contact_value: contact.value, client_ref: client_ref || null })
+    .insert({ campaign_id, method: 'link', amount, status: 'pending', seller_id: null, payer_name: buyerName, contact_value: contact.value, client_ref: client_ref || null, client_ip: clientIp || null })
     .select().single();
   if (payErr) {
     if (payErr.code === '23505' && client_ref) {
@@ -1009,6 +1117,7 @@ async function releaseSaleTickets(payment_id) {
 // can be tied to their mobile/email and its paid status pinpointed.
 function parseContact(raw) {
   const v = String(raw || '').trim();
+  if (v.length > MAX_CONTACT_LENGTH) throw httpError(400, 'That mobile number or email is too long.');
   if (!v) throw httpError(400, "Enter the buyer's mobile number or email — that's how we know who the payment link was sent to.");
   if (v.includes('@')) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw httpError(400, "That email address doesn't look right.");
@@ -1555,6 +1664,7 @@ exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'POST only' });
   // Where SumUp should send payment notifications — this deployment's own address.
   baseUrl = process.env.URL || `https://${event.headers['x-forwarded-host'] || event.headers.host}`;
+  clientIp = String(event.headers['x-nf-client-connection-ip'] || String(event.headers['x-forwarded-for'] || '').split(',')[0] || '').trim().slice(0, 64);
   const action = event.path.split('/').pop();
   let body = {};
   try { body = JSON.parse(event.body || '{}'); } catch { return json(400, { error: 'Invalid JSON' }); }
@@ -1566,6 +1676,14 @@ exports.handler = async (event) => {
   if (!fn) return json(404, { error: `Unknown action: ${action}` });
 
   try {
+    const isPublic = action.startsWith('public_');
+    // Public pages: a generous per-visitor ceiling on requests (a whole church on one wifi
+    // still fits), there to stop scraping and floods rather than real buyers.
+    if (isPublic && (await rateHit(`pub:req:${clientIp}`, PUBLIC_REQ_WINDOW_SECONDS)) > PUBLIC_REQ_MAX) {
+      throw httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
+    }
+    // A logged-in request must still belong to an active account with the password the token was made for.
+    if (session && !isPublic && action !== 'sumup_webhook') await assertSessionLive(session);
     const result = await fn(session, body);
     return json(200, result);
   } catch (e) {

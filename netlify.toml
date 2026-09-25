@@ -6,3 +6,15 @@
   from = "/api/*"
   to = "/.netlify/functions/api"
   status = 200
+
+# Browser-side protections on every page. The pages use inline scripts and styles, so the
+# policy allows those but nothing from other sites: no outside scripts, no requests to anywhere
+# but this site, no framing by other sites, no plugins.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"

@@ -154,6 +154,9 @@ async function call(action, body = {}, timeoutMs = 20000) {
     err.network = true;
     throw err;
   } finally { clearTimeout(timer); }
+  // The server ends a session when the account is disabled or its password is reset. Go back to
+  // the login screen straight away instead of leaving a screen that can't do anything.
+  if (res.status === 401 && state.session && action !== 'login') { logout(); throw new Error('Your session has ended — please log in again.'); }
   if (!res.ok) throw new Error(data.error || 'Something went wrong');
   return data;
 }
