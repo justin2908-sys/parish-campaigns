@@ -469,8 +469,25 @@ async function syncCheckout(payment) {
   const resp = await fetch(`https://api.sumup.com/v0.1/checkouts/${payment.sumup_checkout_id}`, {
     headers: { 'Authorization': `Bearer ${SUMUP_API_KEY}` },
   });
-  const data = await resp.json().catch(() => ({}));
+  let data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw httpError(502, `SumUp status check failed (HTTP ${resp.status})`);
+
+  // SumUp never flips an unpaid hosted checkout to "expired" in its API: a link nobody paid stays
+  // PENDING forever, even though its payment page stops accepting payment after ~30 minutes
+  // (seen: still PENDING, no transactions, no expiry field, 87 minutes on). So an unpaid checkout
+  // older than STALE_MINUTES counts as expired — and is CANCELLED at SumUp first, so it can
+  // never be paid afterwards. If SumUp refuses to cancel (it may have been paid a moment ago) we
+  // look again before deciding anything.
+  const checkoutAgeMin = (Date.now() - Date.parse(data.date || payment.created_at)) / 60000;
+  if (data.status === 'PENDING' && payment.status === 'pending' && !(data.transactions || []).length && checkoutAgeMin > STALE_MINUTES) {
+    const cancelled = await cancelSumupCheckout(payment.sumup_checkout_id);
+    if (cancelled.ok) data = { ...data, status: 'EXPIRED' };
+    else {
+      const again = await fetch(`https://api.sumup.com/v0.1/checkouts/${payment.sumup_checkout_id}`, { headers: { 'Authorization': `Bearer ${SUMUP_API_KEY}` } });
+      const d2 = await again.json().catch(() => ({}));
+      if (again.ok) data = d2;
+    }
+  }
 
   if (data.status === 'PAID') {
     const tx = (data.transactions || [])[0] || {};
