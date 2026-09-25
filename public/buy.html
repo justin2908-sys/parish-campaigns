@@ -79,6 +79,7 @@
   .lucky { display:flex; gap:8px; margin-top:10px; }
   .lucky input { flex:1; min-width:0; padding:12px; font-size:17px; border:1.5px solid var(--line); border-radius:12px; letter-spacing:.06em; background:#fff; color:var(--ink); }
   .lucky button { padding:0 18px; border:none; border-radius:12px; background:var(--wine); color:#fff; font-size:15px; font-weight:700; }
+  .range { margin-bottom:10px; padding:8px 10px; border-radius:10px; background:var(--gold-dim); border:1px solid #f0dcaa; font-size:13px; line-height:1.4; color:#5a4321; }
   .msg { min-height:18px; margin-top:8px; font-size:13px; }
   .msg.bad { color:var(--bad); } .msg.good { color:var(--good); }
 
@@ -150,6 +151,12 @@ function digitBounds() {
   return { min: Math.min(...info.blocks.map(b => String(b.range_start).length)), max: Math.max(...info.blocks.map(b => String(b.range_end).length)) };
 }
 function fmt(n) { const b = info.blocks.find(b => n >= b.range_start && n <= b.range_end); return ((b && b.number_prefix) || '') + n; }
+// Which numbers exist online, in plain words — so nobody wastes time hunting for a number that
+// isn't part of the online series. Several series read "A to B, or C to D".
+function sortedBlocks() { return info.blocks.slice().sort((a, b) => a.range_start - b.range_start); }
+function rangeWords() { return sortedBlocks().map(b => `${b.number_prefix || ''}${b.range_start} to ${b.number_prefix || ''}${b.range_end}`).join(', or '); }
+function rangeShort() { return sortedBlocks().map(b => `${b.number_prefix || ''}${b.range_start}–${b.range_end}`).join(' / '); }
+function inOnlineRange(n) { return info.blocks.some(b => n >= b.range_start && n <= b.range_end); }
 
 async function boot() {
   const app = $('app');
@@ -183,6 +190,7 @@ function buildShell() {
         </div>
         <div id="autoPane"><p class="note" id="autoNote"></p></div>
         <div id="pickPane" hidden>
+          <div class="range">🎟️ Online numbers run from <b>${esc(rangeWords())}</b>. Numbers outside that aren't part of this draw.</div>
           <div class="slots" id="slots" aria-live="polite"></div>
           <div class="btnrow">
             <button type="button" class="shuf" id="shuffleBtn"><span class="dice">🎲</span> <span id="shuffleLabel">Shuffle</span></button>
@@ -190,7 +198,7 @@ function buildShell() {
           </div>
           <div class="lucky">
             <label class="sr" for="luckyIn">A lucky number</label>
-            <input id="luckyIn" inputmode="numeric" autocomplete="off" placeholder="Or type a lucky number">
+            <input id="luckyIn" inputmode="numeric" autocomplete="off" placeholder="${info.blocks.length === 1 ? `Or type your own (${esc(rangeShort())})` : 'Or type a lucky number'}">
             <button type="button" id="luckyAdd">Add</button>
           </div>
         </div>
@@ -263,7 +271,7 @@ function renderMode() {
   $('autoPane').hidden = mode !== 'auto';
   $('pickPane').hidden = mode !== 'pick';
   $('autoNote').innerHTML = n
-    ? `We'll pick <b>${n} number${n > 1 ? 's' : ''}</b> for you the moment you pay. Prefer to choose? Tap <b>Pick my numbers</b>.`
+    ? `We'll pick <b>${n} number${n > 1 ? 's' : ''}</b> for you from the online series (${esc(rangeWords())}) the moment you pay. Prefer to choose? Tap <b>Pick my numbers</b>.`
     : `Choose how many tickets, and we'll pick the numbers for you — or choose your own.`;
   renderModeLabelsOnly();
 }
@@ -337,6 +345,7 @@ async function addLucky() {
   const inp = $('luckyIn'); const v = inp.value.trim(); const { min, max } = digitBounds();
   if (v.length < min) { msg(`Type a full ${min === max ? min : min + '–' + max}-digit number.`, 'bad'); return; }
   const num = Number(v);
+  if (!inOnlineRange(num)) { msg(`${v} isn't an online number — online numbers run from ${rangeWords()}.`, 'bad'); return; }
   if (heldNumbers().includes(num)) { msg(`${fmt(num)} is already in your tickets.`, 'bad'); return; }
   let idx = slots.findIndex(x => x == null);
   if (idx < 0) {

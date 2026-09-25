@@ -666,3 +666,8 @@ then "Pay £20.00 securely").
   number and never internal status words.
 - Same weak-signal protections as the Sell screen: request timeout, retry-safe `client_ref`.
 - Respects `prefers-reduced-motion` (no tumble/confetti).
+- **The buy page states which numbers exist** (e.g. "Online numbers run from 15001 to 20000 —
+  numbers outside that aren't part of this draw"), in the number picker, the "Assign for me"
+  note, and the lucky-number box's placeholder. With several online series it reads "A to B,
+  or C to D". A typed number outside every online series is refused instantly with that same
+  sentence, before any request is made.
