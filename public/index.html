@@ -484,7 +484,10 @@ function linkMessage(campaignName, amount, ticketNumbers, payUrl, isOnline) {
   const expiry = isOnline
     ? `This link is valid for 30 minutes — after that your ticket number is released and you would need to start again.`
     : `This link is valid for 30 minutes. If it expires, just ask us for a fresh link — your ticket is still yours.`;
-  return `Hello from ${churchName()} — please pay £${Number(amount).toFixed(2)} for your ${campaignName} ticket${ticketNumbers.length>1?'s':''} (no. ${ticketNumbers.join(', ')}):\n${payUrl}\n${expiry}\n\n${thankYou()}`;
+  const after = isOnline
+    ? `After you pay, tap the button on the payment page to come back — that's where you'll see and save your ticket.`
+    : `After you pay, tap the button on the payment page to come back and save a digital receipt.`;
+  return `Hello from ${churchName()} — please pay £${Number(amount).toFixed(2)} for your ${campaignName} ticket${ticketNumbers.length>1?'s':''} (no. ${ticketNumbers.join(', ')}):\n${payUrl}\n${expiry}\n${after}\n\n${thankYou()}`;
 }
 async function logShared(paymentId, channel) {
   try {
@@ -917,7 +920,11 @@ function shareMessageFor(a) {
   if (state.org && state.org.address) lines.push(state.org.address);
   lines.push('', `🎟️ ${camp.name} — Ticket No. ${numbers}`, '');
   if (camp.details_text) { lines.push(camp.details_text, ''); }
-  lines.push(`${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Total: £${a.amount.toFixed(2)}`, `Buyer: ${a.buyerName||'—'}`, `Sold: ${when}`, '', thankYou());
+  lines.push(`${a.tickets.length} ticket${a.tickets.length>1?'s':''}: ${denom}`, `Total: £${a.amount.toFixed(2)}`, `Buyer: ${a.buyerName||'—'}`, `Sold: ${when}`, '');
+  // A permanent link to view/save the ticket (or a digital receipt for a physical ticket) on any device.
+  const online = (camp.blocks.find(b => b.id === (a.draft && a.draft.selectedBlockId)) || {}).type === 'digital';
+  if (a.paymentId) lines.push(`${online ? 'View or save your ticket any time' : 'Digital receipt (keep your physical ticket too)'}:`, `${location.origin}/ticket.html?payment_id=${a.paymentId}`, '');
+  lines.push(thankYou());
   return lines.join('\n');
 }
 // Reused for both a Cash/Machine sale (no known contact — three generic buttons) and a paid

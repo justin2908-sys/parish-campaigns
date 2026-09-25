@@ -107,13 +107,16 @@
   .veil .big { font-size:54px; animation:spin 1.2s linear infinite; }
   .bit { position:fixed; z-index:40; pointer-events:none; font-size:16px; animation:fly .9s ease-out forwards; }
   @keyframes fly { from { transform:translate(0,0) scale(1); opacity:1; } to { transform:translate(var(--dx),var(--dy)) rotate(var(--r)) scale(.6); opacity:0; } }
+  .linkbtn { background:none; border:none; color:var(--wine); text-decoration:underline; text-underline-offset:3px; font-size:13.5px; font-weight:600; padding:6px; }
+  .found { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; margin-top:8px; border-radius:12px; background:var(--gold-dim); border:1px solid #f0dcaa; color:var(--ink); text-decoration:none; font-size:15px; }
+  .found span { color:var(--muted); font-size:12.5px; white-space:nowrap; }
   .fatal { max-width:480px; margin:40px auto; padding:0 16px; }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .bit { display:none; } }
 </style>
 </head>
 <body>
 <div id="app"><div class="fatal"><div class="card"><p class="note">Loading…</p></div></div></div>
-<div class="veil" id="veil"><div class="big">🎟️</div><div>Taking you to SumUp's secure payment page…</div><div style="font-size:13px;font-weight:500;opacity:.8">Your numbers are held for you while you pay.</div></div>
+<div class="veil" id="veil"><div class="big">🎟️</div><div>Taking you to SumUp's secure payment page…</div><div style="font-size:13px;font-weight:500;opacity:.85;max-width:300px">Your numbers are held for you while you pay. <b>After paying, tap the button on SumUp's page to come back and save your ticket.</b></div></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -220,7 +223,18 @@ function buildShell() {
         <p class="tiny" style="margin:8px 0 0">We'll send your ticket confirmation here.</p>
       </div>
       <p class="tiny" style="font-size:13px;color:#7a2e22;font-weight:600">💛 ${esc(thank)}</p>
-      <p class="tiny">Secure payment by SumUp. Your payment link is valid for 30 minutes and your numbers are held for you meanwhile.${info.org.address ? `<br>${esc(info.org.name)} · ${esc(info.org.address)}` : ''}</p>
+      <p class="tiny">Secure payment by SumUp. Your payment link is valid for 30 minutes and your numbers are held for you meanwhile. <b>After you pay, tap the button on SumUp's page to come back — that's where you'll see and save your ticket.</b>${info.org.address ? `<br>${esc(info.org.name)} · ${esc(info.org.address)}` : ''}</p>
+      <p class="tiny" style="margin-top:0"><button type="button" class="linkbtn" id="findToggle">Already paid? Find your ticket</button></p>
+      <div class="card" id="findCard" hidden>
+        <h2>Find your ticket</h2>
+        <p class="note" style="margin:0 0 10px">Type your name and mobile or email exactly as you did when you bought.</p>
+        <div class="two">
+          <label class="sr" for="fName">Your name</label><input id="fName" placeholder="Your name" autocomplete="name">
+          <label class="sr" for="fContact">Mobile or email</label><input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email">
+        </div>
+        <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
+        <div id="findOut" role="status" aria-live="polite"></div>
+      </div>
     </div>
     <div class="paybar"><div class="in">
       <div class="sum"><span id="sumText">Choose your tickets</span><b id="sumPrice">£0.00</b></div>
@@ -238,6 +252,14 @@ function buildShell() {
   $('luckyIn').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, digitBounds().max); };
   if ($('seriesSel')) $('seriesSel').onchange = (e) => { blockId = e.target.value; if (mode === 'pick') { slots = slots.map(() => null); taken.clear(); renderSlots(); } renderMode(); renderPay(); };
   $('payBtn').onclick = pay;
+  $('findToggle').onclick = () => {
+    const open = $('findCard').hidden; $('findCard').hidden = !open;
+    if (open) { // carry over what they've already typed above, then bring the form into view
+      if (!$('fName').value) $('fName').value = $('buyerName').value; if (!$('fContact').value) $('fContact').value = $('contactInput').value;
+      $('findCard').scrollIntoView({ block: 'center' });
+    }
+  };
+  $('findBtn').onclick = findTicket;
   $('buyerName').oninput = renderPay; $('contactInput').oninput = renderPay;
 }
 
@@ -448,6 +470,24 @@ async function swapTaken() {
     idxs.forEach((i, k) => { if (numbers[k] != null) { slots[i] = numbers[k]; popping.add(i); } else slots[i] = null; });
     taken.clear(); $('payErr').innerHTML = ''; renderSlots(); renderPay(); setTimeout(() => popping.clear(), 600);
   } catch (e) { $('payErr').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+// A buyer who paid but closed SumUp's page before coming back can get their ticket page again.
+async function findTicket() {
+  const out = $('findOut'), btn = $('findBtn');
+  const buyer_name = $('fName').value.trim(), contact_value = $('fContact').value.trim();
+  if (!buyer_name || !contact_value) { out.innerHTML = `<div class="err">Please enter both your name and your mobile or email.</div>`; return; }
+  btn.disabled = true; out.innerHTML = `<p class="note" style="margin-top:10px">Looking…</p>`;
+  try {
+    const { purchases } = await call('public_find_tickets', { campaign_id: campaignId, buyer_name, contact_value });
+    if (!purchases.length) {
+      out.innerHTML = `<div class="err" style="margin-top:10px">We couldn't find a paid ticket for those details. Check the spelling is exactly as you entered it. If you paid just now, wait a minute and try again.</div>`;
+    } else {
+      out.innerHTML = `<p class="note" style="margin:12px 0 6px">Found — tap to open and save it:</p>` + purchases.map(p =>
+        `<a class="found" href="/ticket.html?payment_id=${encodeURIComponent(p.payment_id)}">🎟️ <b>${esc(p.tickets.join(', '))}</b><span>${money(p.amount)} · ${esc(new Date(p.sold_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }))}</span></a>`).join('');
+    }
+  } catch (e) { out.innerHTML = `<div class="err" style="margin-top:10px">${esc(e.message)}</div>`; }
+  finally { btn.disabled = false; }
 }
 
 boot();

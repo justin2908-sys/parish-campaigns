@@ -1084,10 +1084,15 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
     body: JSON.stringify({
       checkout_reference: ref, amount: Number(amount), currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE,
       description: `${campaignName} — ticket${ticketNumbers.length > 1 ? 's' : ''} ${ticketNumbers.join(', ')}${orgName ? ` · ${orgName}` : ''}`,
-      // Where the BUYER'S OWN BROWSER lands after paying — must be a real page, never the
-      // JSON webhook endpoint. Carries this sale's own id so the page knows what to show;
-      // that id is an unguessable UUID and the page it points to discloses nothing sensitive.
-      return_url: `${baseUrl}/ticket.html?payment_id=${payment_id}`,
+      // SumUp has TWO different addresses and they must not be mixed up:
+      //  - redirect_url: where the BUYER'S BROWSER is sent back to (SumUp's success page shows a
+      //    button to it). Our ticket page — carries this sale's own unguessable id, and the page
+      //    discloses nothing sensitive.
+      //  - return_url: a BACKEND callback; SumUp POSTs here when the payment's status changes.
+      // (Both were once wrongly the ticket page, so buyers ended on SumUp's page with no way back
+      // and SumUp's notifications went to a page that cannot receive them.)
+      redirect_url: `${baseUrl}/ticket.html?payment_id=${payment_id}`,
+      return_url: `${baseUrl}/api/sumup_webhook`,
       hosted_checkout: { enabled: true },
     }),
   });
@@ -1109,7 +1114,6 @@ async function publicPaymentStatus({ payment_id }) {
   if (!payment_id) throw httpError(400, 'payment_id is required');
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(name, details_text, org_id)').eq('id', payment_id).maybeSingle();
   if (!payment) throw httpError(404, 'Sale not found');
-  if (payment.method !== 'link') throw httpError(400, 'This sale was not paid by link');
 
   // Fetched BEFORE syncCheckout deliberately: an expired/failed ONLINE sale gets its ticket
   // rows released (cleared) by syncCheckout, so reading them first captures what the buyer
@@ -1126,7 +1130,12 @@ async function publicPaymentStatus({ payment_id }) {
   }));
   const isPhysical = ticketRows && ticketRows.length ? blockById[ticketRows[0].block_id].type === 'physical' : true;
 
-  const status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
+  // A link sale is only paid once SumUp says so. A seller-attended sale (cash / machine) has no
+  // link to check: the seller took the money in person, so its ticket page shows as issued
+  // unless the sale was voided — this is what lets an online ticket bought in person be kept too.
+  let status;
+  if (payment.method === 'link') status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
+  else status = payment.status === 'void' ? 'void' : 'paid';
   const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text').eq('id', payment.campaigns.org_id).single();
 
   return {
@@ -1142,6 +1151,44 @@ async function publicPaymentStatus({ payment_id }) {
     tickets,
     sold_at: payment.created_at,
   };
+}
+
+// "Find my ticket": a buyer who paid but closed SumUp's page before coming back can look their
+// ticket up again from the name and mobile/email they bought with. BOTH must match, it is limited
+// to the one campaign whose page they are on, only link purchases are searched, and it is
+// rate-limited per visitor and per contact — so it can't be used to browse other people's tickets.
+const FIND_MAX_PER_HOUR = 10;
+const sameName = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
+async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
+  if (clientIp && (await rateHit(`find:${clientIp}`, 3600)) > FIND_MAX_PER_HOUR) {
+    throw httpError(429, 'Too many searches from your connection — please wait a while and try again.');
+  }
+  const name = cleanName(buyer_name, 'Your name');
+  if (!name) throw httpError(400, 'Please enter your name.');
+  const contact = parseContact(contact_value);
+  if ((await rateHit(`find:c:${contact.value}`, 3600)) > FIND_MAX_PER_HOUR) {
+    throw httpError(429, 'Too many searches for those details — please wait a while and try again.');
+  }
+  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('binned', false).maybeSingle();
+  if (!campaign) throw httpError(404, 'This campaign is not available.');
+
+  const { data: rows } = await supabase.from('payments').select('id, amount, created_at, payer_name, status, method, sumup_checkout_id, campaign_id')
+    .eq('campaign_id', campaign_id).eq('method', 'link').eq('contact_value', contact.value).in('status', ['paid', 'pending'])
+    .order('created_at', { ascending: false }).limit(10);
+  const mine = (rows || []).filter(p => sameName(p.payer_name, name));
+  const purchases = [];
+  let checked = 0;
+  for (const p of mine) {
+    let status = p.status;
+    // Paid a moment ago and our records haven't caught up yet? Ask SumUp (a few at most).
+    if (status === 'pending' && checked < 3) { checked++; try { status = await syncCheckout(p); } catch { /* leave it out this time */ } }
+    if (status !== 'paid') continue;
+    const { data: tix } = await supabase.from('tickets').select('ticket_number, block_id').eq('payment_id', p.id).order('ticket_number');
+    const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', campaign_id);
+    const prefix = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
+    purchases.push({ payment_id: p.id, amount: Number(p.amount), sold_at: p.created_at, tickets: (tix || []).map(t => `${prefix[t.block_id] || ''}${t.ticket_number}`) });
+  }
+  return { purchases };
 }
 
 // Puts a sale's tickets back to unsold — physical and online alike, both are real
@@ -1205,9 +1252,13 @@ async function checkoutStatus(session, { payment_id }) {
 // session), so it trusts nothing in the request: it only reads WHICH checkout changed, then
 // re-fetches that checkout from SumUp with our own key and updates our records from that.
 async function sumupWebhook(body) {
-  const checkoutId = body.id || body.checkout_id || (body.payload && (body.payload.checkout_id || body.payload.id));
-  if (!checkoutId) return { ok: true, ignored: 'no checkout id' };
-  const { data: payment } = await supabase.from('payments').select('*').eq('sumup_checkout_id', String(checkoutId)).maybeSingle();
+  // SumUp's notification shapes differ between products; the checkout id may sit under any of
+  // these. Try each against OUR records — an id that isn't one of our checkouts simply matches
+  // nothing, so a wrong guess is harmless.
+  const candidates = [body.checkout_id, body.payload && body.payload.checkout_id, body.id, body.payload && body.payload.id]
+    .filter(v => typeof v === 'string' && v.length > 0 && v.length < 100);
+  if (!candidates.length) return { ok: true, ignored: 'no checkout id' };
+  const { data: payment } = await supabase.from('payments').select('*').in('sumup_checkout_id', candidates).limit(1).maybeSingle();
   if (!payment) return { ok: true, ignored: 'unknown checkout' };
   const status = await syncCheckout(payment);
   return { ok: true, status };
@@ -1231,12 +1282,19 @@ async function sumupCheck(session) {
   const co = await fetch('https://api.sumup.com/v0.1/checkouts', {
     method: 'POST',
     headers: { Authorization: `Bearer ${SUMUP_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ checkout_reference: ref, amount: 0.01, currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE, description: 'Connection test', return_url: `${baseUrl}/api/sumup_webhook`, hosted_checkout: { enabled: true } }),
+    body: JSON.stringify({ checkout_reference: ref, amount: 0.01, currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE, description: 'Connection test', redirect_url: `${baseUrl}/ticket.html`, return_url: `${baseUrl}/api/sumup_webhook`, hosted_checkout: { enabled: true } }),
   });
   const coData = await co.json().catch(() => ({}));
   steps.push({ step: 'Can create a payment link', ok: co.ok, detail: co.ok ? 'Yes' : `HTTP ${co.status} — ${coData.message || coData.error_message || JSON.stringify(coData)}` });
   steps.push({ step: 'Link is a shareable payment page', ok: !!coData.hosted_checkout_url, detail: coData.hosted_checkout_url ? 'Yes' : 'No hosted link returned — hosted checkout may not be enabled on the account.' });
   if (co.ok && coData.id) {
+    // Buyers only get back to our ticket page if SumUp holds our redirect address. Read the
+    // checkout back to see whether it does (SumUp may not repeat it, in which case only a real
+    // payment can prove it — say so rather than claim a certainty we don't have).
+    const back = await fetch(`https://api.sumup.com/v0.1/checkouts/${coData.id}`, { headers: { Authorization: `Bearer ${SUMUP_API_KEY}` } });
+    const backData = await back.json().catch(() => ({}));
+    const echoed = coData.redirect_url || backData.redirect_url;
+    steps.push({ step: 'Buyers are sent back to our ticket page after paying', ok: !echoed || String(echoed).includes('/ticket.html'), detail: echoed ? `Yes — SumUp holds ${echoed}` : 'Sent to SumUp (it does not repeat this back, so a real payment is the only proof)' });
     const del = await fetch(`https://api.sumup.com/v0.1/checkouts/${coData.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${SUMUP_API_KEY}` } });
     steps.push({ step: 'Test checkout cancelled', ok: del.ok, detail: del.ok ? 'Yes — nothing left behind' : `HTTP ${del.status} (harmless — it will simply expire)` });
   }
@@ -1680,6 +1738,7 @@ const actions = {
   public_check_ticket: (s, b) => publicCheckTicket(b),
   public_check_tickets: (s, b) => publicCheckTickets(b),
   public_random_numbers: (s, b) => publicRandomNumbers(b),
+  public_find_tickets: (s, b) => publicFindTickets(b),
   public_purchase: (s, b) => publicPurchase(b),
   log_link_shared: (s, b) => logLinkShared(s, b),
   sumup_check: (s) => sumupCheck(s),
