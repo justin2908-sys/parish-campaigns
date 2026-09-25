@@ -860,3 +860,22 @@ the campaign CSV report. This retires non-negotiable #6 (§2). Left in place, un
 `payments.photo_path` column and the private `payment-evidence` storage bucket (holding only two
 tiny test images from our own testing) — harmless, and removable later if wanted. The camera
 permission was never requested by the app (the photo input used the phone's own camera picker).
+
+---
+
+## 29. Unpaid links now expire in our records — found 2026-09-25
+
+Justin noticed a raffle payment unpaid for over 30 minutes still showing "awaiting payment".
+Cause: **SumUp never reports an unpaid hosted checkout as expired through its API** — checked directly:
+88 minutes on it still said `PENDING`, with no transactions and no expiry field. (The payment *page*
+stops accepting payment after ~30 minutes; the record just never says so.) Our sync only acted on
+`FAILED`/`EXPIRED`, so it waited for a word that never comes.
+
+Fix (`syncCheckout`): an unpaid checkout (status PENDING, no transactions) older than
+`STALE_MINUTES` (35, measured from SumUp's own checkout date, so a resent link gets a fresh window)
+is treated as expired — and first **cancelled at SumUp**, so it can never be paid afterwards. If
+SumUp refuses to cancel (it may have been paid a moment ago) we re-read the checkout before deciding.
+It then follows the existing expiry path: an online ticket's number is released; a physical ticket
+stays "held" (it is in someone's hand — only an Admin can free it) and Needs Attention offers a fresh
+link. The sync runs whenever Sales / Needs Attention / the dashboard / the public page load (a
+sweep at most once a minute for the public page).
