@@ -87,7 +87,7 @@ try {
 } catch {}
 
 function saveState() { localStorage.setItem('pc_session', JSON.stringify(state)); }
-function logout() { clearTimeout(autoLogoutTimer); state = { session: null, user: null, campaigns: [], org: null, lastCampaignId: null }; viewMode = 'admin'; saveState(); render(); }
+function logout() { clearTimeout(autoLogoutTimer); state = { session: null, user: null, campaigns: [], org: null, lastCampaignId: null }; viewMode = 'sell'; saveState(); render(); }
 
 // The session token isn't encrypted, just signed — safe to read its expiry client-side
 // (we're not trusting it for auth, the server re-verifies the signature on every call).
@@ -122,7 +122,7 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;',
 // Admin and SuperAdmin can sell too (they must — anyone who can sell has to show up in
 // Cash Recon and every other reconciliation screen, same as a Seller). viewMode is how
 // they switch between their Admin dashboard and the same Sell screen a Seller uses.
-let viewMode = 'admin';
+let viewMode = 'sell'; // Sell is everyone's landing page; admins reach the Admin area via a button there
 function render() {
   if (!state.session) { renderLogin(); return; }
   document.getElementById('headerRight').innerHTML = `<button onclick="logout()">Log out (${esc(state.user.name)})</button>`;
@@ -156,7 +156,7 @@ async function doLogin() {
   const password = document.getElementById('password').value;
   try {
     const data = await call('login', { mobile, password });
-    state.session = data.session; state.user = data.user;
+    state.session = data.session; state.user = data.user; viewMode = 'sell';
     saveState(); scheduleAutoLogout(); render();
   } catch (e) { renderLogin(e.message); }
 }
@@ -289,7 +289,9 @@ async function renderSeller() {
   saveState();
 
   if (!campaigns.length) {
-    document.getElementById('app').innerHTML = `<div class="card"><div class="error">No campaign is active yet — ask a SuperAdmin to create or activate one.</div></div>`;
+    const isAdminRole = state.user.role !== 'seller';
+    document.getElementById('app').innerHTML = `${isAdminRole ? `<button class="secondary" style="margin-bottom:14px" onclick="viewMode='admin'; render();">← Back to Admin</button>` : ''}
+      <div class="card"><div class="error">No campaign is active yet — ${isAdminRole ? 'create or activate one from the Campaigns tab in Admin.' : 'ask a SuperAdmin to create or activate one.'}</div></div>`;
     return;
   }
   if (!state.org) { try { const { organization } = await call('get_org_settings'); state.org = organization; } catch {} }
