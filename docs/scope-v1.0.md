@@ -629,3 +629,8 @@ buttons). Now ~470px typical, ~580px worst case (two campaigns, two tiers, two s
   there's no scrolling to find them; "Recent sales" is one slim bar that expands, and flags
   awaiting/expired links.
 - Admin/SuperAdmin get a small "← Admin" button in the header instead of a full-width one.
+- **Checks wait for a complete number.** The availability lookup used to fire on every keystroke
+  of the first ticket number, for every ticket in the run. Now nothing is looked up until the
+  number has all its digits (taken from the series itself — 10001–15000 means 5 — not
+  hard-coded), with a "Type all 5 digits…" hint meanwhile; Record refuses an incomplete
+  number. Measured: typing 1, 10, 100, 1000 fires 0 checks; the 5th digit fires one per ticket.

@@ -510,13 +510,22 @@ function regenerateTicketNumbers() {
   if (block && block.type === 'digital') {
     ticketNumbers = total ? seq.map(tierId => ({ tierId, auto: true })) : [];
   } else {
+    // Nothing is looked up until the first number has all its digits (a 10001–15000 series
+    // means 5) — typing "1", "10", "100"… must not fire a request per keystroke per ticket.
     const startEl = document.getElementById('startNum');
-    const start = Number(startEl ? startEl.value : '');
-    ticketNumbers = (!total || !startEl || !startEl.value || isNaN(start)) ? [] : seq.map((tierId, i) => ({ value: String(start+i), tierId }));
+    const raw = startEl ? startEl.value.trim() : '';
+    const start = Number(raw);
+    const complete = raw !== '' && !isNaN(start) && raw.length >= minDigits(block);
+    startHint = (total && raw && !complete) ? `Type all ${minDigits(block)} digits and the numbers will be checked.` : '';
+    ticketNumbers = (!total || !complete) ? [] : seq.map((tierId, i) => ({ value: String(start+i), tierId }));
   }
   ticketNumbers.__campaignId = camp.id;
   renderTicketRows(); updateTotal();
 }
+
+// How many digits a ticket number in this series has (its first number's length, e.g. 10001 → 5).
+let startHint = '';
+function minDigits(block) { return block ? String(block.range_start).length : 1; }
 
 function renderTicketRows() {
   const wrap = document.getElementById('ticketRows'); if (!wrap) return;
@@ -547,7 +556,7 @@ function renderTicketRows() {
       </div>
       <div id="tnStatus-${i}" style="font-size:12px;margin:-4px 0 8px 4px;color:#888"></div>`;
   }).join('') : '';
-  wrap.innerHTML = `<div class="chips" id="ticketChips"></div><div id="ticketErr"></div>${rows}`;
+  wrap.innerHTML = `${startHint ? `<div class="muted" style="margin-top:8px">${esc(startHint)}</div>` : ''}<div class="chips" id="ticketChips"></div><div id="ticketErr"></div>${rows}`;
   renderChips();
   ticketNumbers.forEach((tn, i) => checkTicketLive(i, tn.value));
 }
@@ -577,12 +586,14 @@ function setTicketValue(i, v) {
   ticketNumbers[i].value = v;
   setTicketNumberStatus(i, '');
   clearTimeout(ticketCheckTimers[i]);
-  if (String(v).trim().length < 1) return;
+  // Only look a number up once it has all its digits — an edit in progress isn't checked.
+  if (String(v).trim().length < minDigits(currentCampaign().blocks.find(b => b.id === selectedBlockId))) return;
   ticketCheckTimers[i] = setTimeout(() => checkTicketLive(i, v), 350);
 }
 async function checkTicketLive(i, v) {
   if (!v || String(v).trim() === '') return;
   const camp = currentCampaign();
+  if (String(v).trim().length < minDigits(camp.blocks.find(b => b.id === selectedBlockId))) return;
   setTicketNumberStatus(i, '⋯ checking', '#888');
   try {
     await call('check_ticket', { campaign_id: camp.id, ticket_number: Number(v) });
@@ -645,6 +656,10 @@ async function submitSale(method) {
   const errEl = document.getElementById('submitError');
   if (!ticketNumbers.length) { errEl.innerHTML = `<div class="error">Enter at least one ticket count first.</div>`; return; }
   if (!autoMode) {
+    const need = minDigits(block);
+    if (ticketNumbers.some(tn => String(tn.value).trim().length < need)) {
+      errEl.innerHTML = `<div class="error">Ticket numbers in this series have ${need} digits — one of them looks incomplete.</div>`; return;
+    }
     const statuses = ticketNumbers.map((tn,i)=>(ticketStatus[i] && ticketStatus[i].text) || '');
     if (statuses.some(s => s.includes('already') || s.includes("doesn't exist"))) {
       errEl.innerHTML = `<div class="error">Fix the flagged ticket number(s) before recording this sale.</div>`; return;
