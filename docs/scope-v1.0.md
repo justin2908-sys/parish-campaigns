@@ -830,3 +830,19 @@ Justin liked the Hall Booking site's palette and type and asked for it everywher
   totals. Applied to the seller/admin app (deep-green header with the church name in brass lettering),
   the public buy page (pine hero, brass shuffle button) and the ticket page (and the saved ticket picture,
   which waits for the fonts before it draws).
+
+**Single-view check (Justin asked to confirm no scrolling on Sell and the public page) — 2026-09-25.**
+Measured after the new look: the Sell screen was fine for a typical sale (~480px) but the public buy
+page was 950–1,560px tall — not a single view. Fixed:
+- **Buy page rebuilt as one screen** (`100dvh` shell): slim brand header with the thank-you always
+  visible, ticket card (quantity, Assign/Pick, number list), name + contact, one line of small print,
+  and a pay bar fixed at the bottom. **Only the number list scrolls, inside its own box**, when many
+  numbers are picked; nothing else moves. "Prizes & details" and "Find your ticket" are pop-up sheets.
+  The list has a zero flex basis + minimum height, so it takes only spare room and can never be
+  squeezed so far that cards overlap. Compaction kicks in at ≤700px and ≤600px screen heights.
+- **Sell screen compacted** for shorter phones (≤700px / ≤600px) and the stats bar is one line
+  ("12 sold · £24 cash · £10 card · ⏳ £6").
+- Result (measured in-page): fits with no page scrolling down to ~560px-tall screens in both modes
+  (an iPhone in Safari is ~664px). Sell: typical sale ends ~480px; worst case (two campaigns, two
+  ticket types, five tickets, an error showing) ends ~620px. Below ~560px, or with a Sell screen showing
+  its worst case plus the Recent-sales bar, a small scroll can appear.
