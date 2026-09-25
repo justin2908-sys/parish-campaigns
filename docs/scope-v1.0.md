@@ -860,3 +860,34 @@ the campaign CSV report. This retires non-negotiable #6 (§2). Left in place, un
 `payments.photo_path` column and the private `payment-evidence` storage bucket (holding only two
 tiny test images from our own testing) — harmless, and removable later if wanted. The camera
 permission was never requested by the app (the photo input used the phone's own camera picker).
+
+---
+
+## 29. Unpaid links now expire in our records — found 2026-09-25
+
+Justin noticed a raffle payment unpaid for over 30 minutes still showing "awaiting payment".
+Cause: **SumUp never reports an unpaid hosted checkout as expired through its API** — checked directly:
+88 minutes on it still said `PENDING`, with no transactions and no expiry field. (The payment *page*
+stops accepting payment after ~30 minutes; the record just never says so.) Our sync only acted on
+`FAILED`/`EXPIRED`, so it waited for a word that never comes.
+
+Fix (`syncCheckout`): an unpaid checkout (status PENDING, no transactions) older than
+`STALE_MINUTES` (35, measured from SumUp's own checkout date, so a resent link gets a fresh window)
+is treated as expired — and first **cancelled at SumUp**, so it can never be paid afterwards. If
+SumUp refuses to cancel (it may have been paid a moment ago) we re-read the checkout before deciding.
+It then follows the existing expiry path: an online ticket's number is released; a physical ticket
+stays "held" (it is in someone's hand — only an Admin can free it) and Needs Attention offers a fresh
+link. The sync runs whenever Sales / Needs Attention / the dashboard / the public page load (a
+sweep at most once a minute for the public page).
+
+## 30. Tab highlight and Raffle/Online speed — fixed 2026-09-25 (on dev; preview only)
+
+**Wrong tab highlighted.** Each admin tab loads its data from the server; a slow answer to an earlier
+click could arrive after a newer click and overwrite the page, leaving the old tab highlighted. Now the
+highlight moves the instant a tab is clicked (with a "Loading…" placeholder), and every tab load is
+numbered so a late answer to an earlier click is discarded.
+
+**Raffle ↔ Online delay.** Switching series used to re-ask the server for everything. Now it redraws
+from data already on the screen (no server call, instant). Switching campaign also redraws instantly and
+refreshes only that seller's totals in the background. The server call behind the Sell screen also runs
+its queries in parallel (median 1.47 s → about 1.1 s on the preview).

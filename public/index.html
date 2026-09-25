@@ -348,6 +348,14 @@ async function renderSeller() {
       <button class="primary" onclick="renderSeller()">Try again</button></div>`;
     return;
   }
+  lastScreen = screen;
+  drawSeller(screen);
+}
+
+// Draws the Sell screen from data ALREADY in hand — no network. Switching the series (Raffle ↔ Online)
+// changes nothing on the server, so it redraws instantly instead of asking for everything again.
+let lastScreen = null;
+function drawSeller(screen) {
   const campaigns = screen.campaigns;
   state.campaigns = campaigns;
   state.lastCampaignId = screen.campaign_id;
@@ -452,8 +460,20 @@ function renderStats() {
     </div>` : ''}`;
 }
 
-function onCampaignChange(id) { state.lastCampaignId = id; saveState(); ticketNumbers = []; renderSeller(); }
-function onBlockChange(id) { selectedBlockId = id; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; renderSeller(); }
+function onCampaignChange(id) {
+  state.lastCampaignId = id; saveState(); ticketNumbers = [];
+  if (!lastScreen) { renderSeller(); return; }
+  drawSeller({ ...lastScreen, campaign_id: id });   // instant: campaigns, prices and series are already here
+  refreshSellStats(id);                            // only this seller's totals for that campaign need the server
+}
+async function refreshSellStats(campaignId) {
+  try {
+    const s = await call('sell_screen', { campaign_id: campaignId });
+    lastScreen = s;
+    if (state.lastCampaignId === campaignId) { lastStats = s.stats; renderStats(); }
+  } catch { /* the totals simply stay as they were */ }
+}
+function onBlockChange(id) { selectedBlockId = id; startNumValue = ''; ticketNumbers = []; ticketNumbers.__campaignId = currentCampaign().id; if (lastScreen) drawSeller(lastScreen); else renderSeller(); }
 // ---- Pay by Link: sending the link to the buyer's own mobile/email ----
 // The contact is pre-filled as the recipient, so the seller just taps send in their own
 // SMS/WhatsApp/Mail app; we record which channel was used and when.
@@ -963,20 +983,30 @@ async function renderAdmin() {
     <button class="secondary" style="margin-bottom:14px" onclick="viewMode='sell'; render();">🎟️ Sell tickets</button>
     <div id="retentionBanner"></div>
     <div class="tabs">
-      <button class="${adminTab==='campaigns'?'active':''}" onclick="setAdminTab('campaigns')">Campaigns</button>
-      <button class="${adminTab==='sales'?'active':''}" onclick="setAdminTab('sales')">Sales</button>
-      <button class="${adminTab==='cash'?'active':''}" onclick="setAdminTab('cash')">Cash Recon</button>
-      <button class="${adminTab==='attention'?'active':''}" onclick="setAdminTab('attention')">Needs Attention</button>
-      ${state.user.role==='superadmin' ? `<button class="${adminTab==='users'?'active':''}" onclick="setAdminTab('users')">Users</button>` : ''}
-      ${state.user.role==='superadmin' ? `<button class="${adminTab==='bin'?'active':''}" onclick="setAdminTab('bin')">Recycle Bin</button>` : ''}
+      <button class="${adminTab==='campaigns'?'active':''}" data-tab="campaigns" onclick="setAdminTab('campaigns')">Campaigns</button>
+      <button class="${adminTab==='sales'?'active':''}" data-tab="sales" onclick="setAdminTab('sales')">Sales</button>
+      <button class="${adminTab==='cash'?'active':''}" data-tab="cash" onclick="setAdminTab('cash')">Cash Recon</button>
+      <button class="${adminTab==='attention'?'active':''}" data-tab="attention" onclick="setAdminTab('attention')">Needs Attention</button>
+      ${state.user.role==='superadmin' ? `<button class="${adminTab==='users'?'active':''}" data-tab="users" onclick="setAdminTab('users')">Users</button>` : ''}
+      ${state.user.role==='superadmin' ? `<button class="${adminTab==='bin'?'active':''}" data-tab="bin" onclick="setAdminTab('bin')">Recycle Bin</button>` : ''}
     </div>
     <div id="adminContent"></div>
   `;
   if (state.user.role === 'superadmin') renderRetentionBanner();
   dispatchAdminTab();
 }
+// The highlighted tab always matches the page shown: the click moves the highlight and clears the old
+// content at once (so there is instant feedback while the new tab loads), and each tab's render is
+// numbered — if the answer to an earlier click arrives late it is discarded instead of overwriting
+// the newer tab.
+let adminSeq = 0;
+function adminEl(seq) { return seq === adminSeq ? document.getElementById('adminContent') : null; }
 function setAdminTab(t) { adminTab = t; dispatchAdminTab(); }
 function dispatchAdminTab() {
+  adminSeq++;
+  document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
+  const box = document.getElementById('adminContent');
+  if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
   ({ campaigns: renderCampaignsTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, users: renderUsersTab, bin: renderRecycleBinTab })[adminTab]();
 }
 
@@ -1001,6 +1031,7 @@ let draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', num
 let campaignDetailsCache = {}; // campaign id -> details_text, so the edit prompt doesn't need
                                 // to embed arbitrary multi-line text inside an onclick attribute
 async function renderCampaignsTab() {
+  const seq = adminSeq;
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
   campaigns.forEach(c => { campaignDetailsCache[c.id] = c.details_text || ''; });
   let org = null, orgError = '';
@@ -1008,7 +1039,7 @@ async function renderCampaignsTab() {
     try { org = (await call('get_org_settings')).organization; }
     catch (e) { orgError = e.message; }
   }
-  const el = document.getElementById('adminContent');
+  const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = h`
     ${state.user.role==='superadmin' && !org ? `<div class="card"><div class="error">Could not load church settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
     ${org ? `<div class="card">
@@ -1204,8 +1235,9 @@ async function doBinCampaign(id, name) {
 }
 
 async function renderRecycleBinTab() {
+  const seq = adminSeq;
   const { campaigns } = await call('list_binned_campaigns');
-  const el = document.getElementById('adminContent');
+  const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = h`<div class="card"><h3 style="margin-top:0">Recycle Bin</h3>
     ${!campaigns.length ? '<p class="muted">Nothing in the bin.</p>' : `
     <table><tr><th>Name</th><th>Tiers</th><th></th></tr>
@@ -1219,9 +1251,10 @@ async function doRestoreCampaign(id) { try { await call('restore_campaign', { ca
 
 // ---- Sales tab ----
 async function renderSalesTab() {
+  const seq = adminSeq;
   const { campaigns } = await call('list_campaigns');
   const { payments } = await call('list_recent_payments', { campaign_id: campaignFilter || undefined });
-  const el = document.getElementById('adminContent');
+  const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><label>Viewing</label>
     <select onchange="campaignFilter=this.value; renderSalesTab();">
       <option value="">All Campaigns</option>
@@ -1246,10 +1279,11 @@ async function doVoid(paymentId) {
 
 // ---- Cash Recon tab ----
 async function renderCashTab() {
+  const seq = adminSeq;
   const { campaigns } = await call('list_campaigns');
   const { users } = await call('list_users');
   const sellers = users.filter(u => u.active); // anyone active can have cash to reconcile
-  const el = document.getElementById('adminContent');
+  const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Cash Reconciliation</h3>
     <label>Campaign</label><select id="reconCampaign">${campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
     <label>Seller</label><select id="reconSeller">${sellers.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
@@ -1277,9 +1311,10 @@ async function doCashRecon() {
 // ---- Needs Attention tab: Pay-by-Link sales not yet paid (or whose link expired) ----
 // Each row shows who the link was sent to, so an unpaid handed-over ticket can be chased.
 async function renderAttentionTab() {
+  const seq = adminSeq;
   if (!state.org) { try { state.org = (await call('get_org_settings')).organization; } catch {} } // for the church name + thank-you in reminders
   const { payments } = await call('list_incomplete_payments', { campaign_id: campaignFilter || undefined });
-  const el = document.getElementById('adminContent');
+  const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
     <p class="muted">Pay-by-Link sales that haven't been paid. The ticket is with the buyer — chase them on the contact below, or issue a fresh link if it expired.</p>
     ${!payments.length ? '<p class="muted">Nothing needs attention.</p>' : payments.map(p => {
@@ -1303,9 +1338,10 @@ async function doResend(paymentId) {
 
 // ---- Users tab (SuperAdmin only) ----
 async function renderUsersTab() {
+  const seq = adminSeq;
   const { users } = await call('list_users');
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
-  const el = document.getElementById('adminContent');
+  const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Users</h3>
     <table><tr><th>Name</th><th>Mobile</th><th>Role</th><th>Status</th><th></th></tr>
     ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${u.role}</td>
