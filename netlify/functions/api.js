@@ -557,9 +557,9 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
     throw httpError(400, `Entered ${ticket_numbers ? ticket_numbers.length : 0} ticket number(s) but ${totalCount} were specified — these must match.`);
   } else {
     // Picking a specific "lucky number" for an online ticket is reserved for the public
-    // buyer page (not built yet) — this action is only ever reachable by an authenticated
-    // seller/admin/superadmin, who always get the next available number(s) instead, same as
-    // a physical seller working through their stack.
+    // buyer page (/buy.html, via public_purchase) — this action is only ever reachable by an
+    // authenticated seller/admin/superadmin, who always get the next available number(s)
+    // instead, same as a physical seller working through their stack.
     const nums = ticket_numbers.map(Number);
     const { data: existingRows } = await supabase.from('tickets').select('block_id').eq('campaign_id', campaign_id).in('ticket_number', nums);
     const touchedBlockIds = new Set((existingRows || []).map(r => r.block_id));

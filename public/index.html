@@ -305,9 +305,9 @@ async function renderSeller() {
   if (!camp.blocks.find(b => b.id === selectedBlockId)) selectedBlockId = camp.blocks[0] ? camp.blocks[0].id : null;
   const block = camp.blocks.find(b => b.id === selectedBlockId);
   const isOnline = !!block && block.type === 'digital';
-  // Picking a specific "lucky number" is reserved for the public buyer page (not built yet)
-  // — a seller selling an online ticket in person always gets the next available number(s),
-  // same as how a physical seller works through their stack in order.
+  // Picking a specific "lucky number" is reserved for the public buyer page (buy.html) — a
+  // seller selling an online ticket in person always gets the next available number(s), same
+  // as how a physical seller works through their stack in order.
   const autoMode = isOnline;
 
   document.getElementById('app').innerHTML = h`
