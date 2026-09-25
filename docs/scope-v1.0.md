@@ -731,3 +731,25 @@ database only forbade a repeat within a single series, so Physical 10001–15000
   last ≥ first, at most 50,000 per series. A refusal leaves nothing half-built.
 - The database now enforces it too: unique (campaign_id, ticket_number) on `tickets`, so no code
   path — present or future — can create a duplicate.
+
+---
+
+## 24. Church wording + thank-you message everywhere — built 2026-09-25
+
+- **"Parish" is gone from everything a person sees** (and from the code). The church's record was
+  actually named "St.Vincent De Paul Parish, Osterley", which is what the public page and every
+  ticket message printed; it is now "St.Vincent De Paul Church, Osterley", and its address holds
+  just the street ("2 Witham Road, Osterley, TW7 4AJ") so the name isn't printed twice. Headings,
+  page titles, admin labels ("Church details", "Add a new church") and the SumUp test description
+  follow suit. The page header reads "⛪ St.Vincent De Paul Church" (a single default, since there
+  is one church today; the confirmation page and buy page show the church's own name).
+- **A saved thank-you message per church** (`organizations.thank_you_text`, edited by the SuperAdmin
+  in Campaigns → Church details, max 400 characters). Current text: "Thank you for supporting
+  St.Vincent De Paul Church, Osterley. All funds collected go towards the Church building fund."
+  It appears: on the public buy page (header banner and again above the payment note), on the
+  post-payment confirmation page (both physical and online) and in the saved ticket image, and at
+  the end of every payment-link message (physical and online), payment reminder, and ticket share
+  message (SMS / WhatsApp / email). Messages now also open "Hello from <church name> — …". If the
+  text is ever blanked, a plain "Thank you for supporting <church name>." is used, so the message
+  is never missing.
+- SumUp's payment page description now ends "· <church name>".
