@@ -59,8 +59,6 @@
   .muted { color:#888; font-size:13px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   td, th { padding:8px 4px; border-bottom:1px solid var(--line); text-align:left; }
-  .qr-wrap { text-align:center; }
-  .qr-wrap img { border:8px solid white; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,0.1); }
   .share-row { display:flex; gap:6px; }
   .share-link { flex:1; display:flex; align-items:center; justify-content:center; gap:4px; background:var(--accent-dim); color:var(--accent); border-radius:9px; padding:9px 4px; font-size:12px; font-weight:600; text-decoration:none; }
   .photo-label { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:8px; padding:9px; border:1px dashed var(--line); border-radius:9px; font-size:12.5px; color:#777; cursor:pointer; }
@@ -388,8 +386,14 @@ function linkShareHtml(paymentId, contact, message, subject) {
     <a class="share-link" href="https://wa.me/${waNumber(contact)}?text=${body}" target="_blank" rel="noopener" onclick="logShared('${paymentId}','whatsapp')">💬 WhatsApp</a>
   </div>`;
 }
-function linkMessage(campaignName, amount, ticketNumbers, payUrl) {
-  return `Hello — please pay £${Number(amount).toFixed(2)} for your ${campaignName} ticket${ticketNumbers.length>1?'s':''} (no. ${ticketNumbers.join(', ')}):\n${payUrl}\nThank you for your support!`;
+// SumUp's hosted checkout is fixed at 30 minutes (not configurable), so every link message
+// says so. What happens after expiry differs: a physical ticket stays with the buyer and the
+// seller/parish issues a fresh link; an online ticket's number is released for someone else.
+function linkMessage(campaignName, amount, ticketNumbers, payUrl, isOnline) {
+  const expiry = isOnline
+    ? `This link is valid for 30 minutes — after that your ticket number is released and you would need to start again.`
+    : `This link is valid for 30 minutes. If it expires, just ask us for a fresh link — your ticket is still yours.`;
+  return `Hello — please pay £${Number(amount).toFixed(2)} for your ${campaignName} ticket${ticketNumbers.length>1?'s':''} (no. ${ticketNumbers.join(', ')}):\n${payUrl}\n${expiry}\nThank you for your support!`;
 }
 async function logShared(paymentId, channel) {
   try {
@@ -626,9 +630,7 @@ function renderFeed() {
         <div class="${failed ? 'error' : 'hint'}" style="margin-top:0">${failed ? 'Link expired or failed' : '⏳ Awaiting payment'} — £${a.amount.toFixed(2)} for ${label}, ${esc(a.buyerName)}</div>
         <div style="font-size:12px;color:#777;margin:6px 0">${sentLine}</div>
         ${failed ? `<div class="muted">An Admin can issue a fresh link from Needs Attention. The ticket stays with ${esc(a.buyerName)} in the meantime.</div>` : `
-        ${linkShareHtml(a.paymentId, a.contact, linkMessage(currentCampaign().name, a.amount, nums, a.payUrl), currentCampaign().name + ' — payment link')}
-        <details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Or show a QR for them to scan</summary>
-          <div class="qr-wrap" style="margin-top:8px"><img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(a.payUrl)}" alt="Scan to pay"></div></details>`}
+        ${linkShareHtml(a.paymentId, a.contact, linkMessage(currentCampaign().name, a.amount, nums, a.payUrl, (currentCampaign().blocks.find(b => b.id === (a.draft && a.draft.selectedBlockId)) || {}).type === 'digital'), currentCampaign().name + ' — payment link')}`}
       </div>`;
     }
     if (a.status === 'undo') return `<div class="card">${label} for ${esc(a.buyerName||'(no name given)')} — ${a.method==='cash'?'Cash':'Machine'} £${a.amount.toFixed(2)} — logging… <span class="muted">(Undo is on the button above)</span></div>`;
@@ -1042,7 +1044,7 @@ async function renderAttentionTab() {
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
     <p class="muted">Pay-by-Link sales that haven't been paid. The ticket is with the buyer — chase them on the contact below, or issue a fresh link if it expired.</p>
     ${!payments.length ? '<p class="muted">Nothing needs attention.</p>' : payments.map(p => {
-      const msg = `Hello — a reminder to please pay £${Number(p.amount).toFixed(2)} for your tickets (${p.tickets.join(' · ')}):\n${p.link_url}\nThank you for your support!`;
+      const msg = `Hello — a reminder to please pay £${Number(p.amount).toFixed(2)} for your tickets (${p.tickets.join(' · ')}):\n${p.link_url}\nThis link is valid for 30 minutes from when it was sent — if it has expired, just ask us for a fresh one.\nThank you for your support!`;
       const sent = p.link_shared_at ? `Sent via ${p.contact_channel} on ${new Date(p.link_shared_at).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}` : 'Not recorded as sent';
       return `<div style="border-top:1px solid var(--line);padding:12px 0">
         <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.payer_name||'(name removed)')}</b>
