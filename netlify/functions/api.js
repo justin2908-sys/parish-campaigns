@@ -1760,7 +1760,13 @@ const actions = {
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'POST only' });
   // Where SumUp should send payment notifications — this deployment's own address.
-  baseUrl = process.env.URL || `https://${event.headers['x-forwarded-host'] || event.headers.host}`;
+  // Use the address the request actually came to, so a draft preview sends buyers back to the
+  // preview and the live site to the live site. Only our own Netlify addresses (or the site's
+  // configured address) are trusted; anything else falls back to the configured address.
+  const reqHost = String(event.headers['x-forwarded-host'] || event.headers.host || '').split(',')[0].trim().toLowerCase();
+  const configuredHost = process.env.URL ? new URL(process.env.URL).host.toLowerCase() : '';
+  baseUrl = (/^[a-z0-9.-]+$/.test(reqHost) && (reqHost.endsWith('.netlify.app') || reqHost === configuredHost))
+    ? `https://${reqHost}` : (process.env.URL || `https://${reqHost}`);
   clientIp = String(event.headers['x-nf-client-connection-ip'] || String(event.headers['x-forwarded-for'] || '').split(',')[0] || '').trim().slice(0, 64);
   const action = event.path.split('/').pop();
   let body = {};
