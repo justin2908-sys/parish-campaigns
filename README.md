@@ -79,7 +79,11 @@ nothing more to configure.
 - This is v1.0. Known intentional scope limits: no ticket editing after a sale
   besides Void (admin-only, requires a reason), no receipt printing (SumUp's
   own receipt options work if the buyer wants one).
-- Deploys are automatic: this repo is linked to Netlify's continuous
-  deployment (Site settings → Build & deploy) — every push to `main` deploys
-  itself, no manual step needed. Set up 2026-09-24.
+- **Deploying (credit-aware).** Each production deploy costs Netlify credits (15); deploy previews
+  and branch deploys are free. So:
+  - Work on the `dev` branch. A pull request from `dev` to `main` gets a **free deploy preview**
+    with its own web address — test there.
+  - Production only builds when a commit message contains `[publish]` (see the credit guard in
+    `netlify.toml`); any other push to `main` is skipped. To publish: merge the PR with a message
+    ending in `[publish]`.
 
