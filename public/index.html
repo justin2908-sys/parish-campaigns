@@ -103,13 +103,26 @@ function scheduleAutoLogout() {
   } catch {}
 }
 
-async function call(action, body = {}) {
-  const res = await fetch(API + action, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session: state.session, ...body }),
-  });
-  const data = await res.json();
+// A request that gets no reply (weak signal) gives up after timeoutMs instead of hanging, and
+// says so in plain words. err.network marks "we don't know whether the server got it" — as
+// opposed to a real answer from the server — so callers can tell those two cases apart.
+async function call(action, body = {}, timeoutMs = 20000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  let res, data;
+  try {
+    res = await fetch(API + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: state.session, ...body }),
+      signal: ctl.signal,
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    const err = new Error(e && e.name === 'AbortError' ? 'No reply from the server — the signal may be weak.' : "Can't reach the server — check your signal.");
+    err.network = true;
+    throw err;
+  } finally { clearTimeout(timer); }
   if (!res.ok) throw new Error(data.error || 'Something went wrong');
   return data;
 }
@@ -281,9 +294,22 @@ function currentCampaign() { return state.campaigns.find(c => c.id === state.las
 function tierSummary(c) { return c.tiers.map(t => `${t.name} £${Number(t.price).toFixed(2)}`).join(' · '); }
 
 async function renderSeller() {
-  const { campaigns } = await call('list_campaigns');
+  // One round trip for everything this screen needs (campaigns, parish details, this seller's
+  // stats) — three calls in a row is slow on a weak signal. Nothing typed so far is lost if it
+  // fails: the half-filled sale lives in variables, not on screen, so Retry just redraws it.
+  let screen;
+  try { screen = await call('sell_screen', { campaign_id: state.lastCampaignId || undefined }); }
+  catch (e) {
+    document.getElementById('app').innerHTML = `${state.user.role !== 'seller' ? `<button class="secondary" style="margin-bottom:14px" onclick="viewMode='admin'; render();">← Back to Admin</button>` : ''}
+      <div class="card"><div class="error">${esc(e.message)}</div>
+      <p class="muted">Nothing you've entered has been lost.</p>
+      <button class="primary" onclick="renderSeller()">Try again</button></div>`;
+    return;
+  }
+  const campaigns = screen.campaigns;
   state.campaigns = campaigns;
-  if (!state.lastCampaignId || !campaigns.find(c => c.id === state.lastCampaignId)) state.lastCampaignId = campaigns[0] ? campaigns[0].id : null;
+  state.lastCampaignId = screen.campaign_id;
+  state.org = screen.organization;
   saveState();
 
   if (!campaigns.length) {
@@ -292,10 +318,8 @@ async function renderSeller() {
       <div class="card"><div class="error">No campaign is active yet — ${isAdminRole ? 'create or activate one from the Campaigns tab in Admin.' : 'ask a SuperAdmin to create or activate one.'}</div></div>`;
     return;
   }
-  if (!state.org) { try { const { organization } = await call('get_org_settings'); state.org = organization; } catch {} }
-
   const camp = currentCampaign();
-  const stats = await call('seller_state', { campaign_id: camp.id });
+  const stats = screen.stats;
   if (ticketNumbers.__campaignId !== camp.id) {
     sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
@@ -509,18 +533,23 @@ function paymentButtonsHtml() {
   const remaining = a ? a.remaining : 0;
   const cashPending = scoped && pendingUndo.method === 'cash';
   const machinePending = scoped && pendingUndo.method === 'machine';
-  const linkBtn = `<button class="primary" style="background:var(--tier-c)" ${scoped ? 'disabled' : ''} onclick="submitSale('link')">Pay by Link — send to buyer</button>`;
+  const busy = saleInFlight; // a sale is being recorded right now — lock all three so nothing double-fires
+  const linkBtn = `<button class="primary" style="background:var(--tier-c)" ${scoped || busy ? 'disabled' : ''} onclick="submitSale('link')">Pay by Link — send to buyer</button>`;
   return `
-    <button class="primary" style="${cashPending?'background:var(--ink)':'background:var(--good)'}" ${scoped && !cashPending ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
+    <button class="primary" style="${cashPending?'background:var(--ink)':'background:var(--good)'}" ${(scoped && !cashPending) || busy ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
       ${cashPending ? `Undo (${remaining}s)` : 'Cash'}
     </button>
-    <button class="primary" style="${machinePending?'background:var(--ink)':'background:#555'}" ${scoped && !machinePending ? 'disabled' : ''} onclick="${machinePending?`doUndo(${pendingUndo.activityId})`:`submitSale('machine')`}">
+    <button class="primary" style="${machinePending?'background:var(--ink)':'background:#555'}" ${(scoped && !machinePending) || busy ? 'disabled' : ''} onclick="${machinePending?`doUndo(${pendingUndo.activityId})`:`submitSale('machine')`}">
       ${machinePending ? `Undo (${remaining}s)` : 'Pay at Machine — log it'}
     </button>
     ${linkBtn}`;
 }
 function updatePaymentButtons() { const el = document.getElementById('paymentButtons'); if (el) el.innerHTML = paymentButtonsHtml(); }
 
+let saleInFlight = false, saleAttempt = null;
+function newClientRef() {
+  return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+}
 async function submitSale(method) {
   const camp = currentCampaign();
   const block = camp.blocks.find(b => b.id === selectedBlockId);
@@ -537,9 +566,18 @@ async function submitSale(method) {
     errEl.innerHTML = `<div class="error">Enter the buyer's mobile number or email first — that's where the payment link goes, and how we tie the ticket to them.</div>`; return;
   }
   if (!buyerNameValue.trim()) { errEl.innerHTML = `<div class="error">Enter the buyer's name first.</div>`; return; }
+  if (saleInFlight) return; // a second tap while the first is still going must do nothing
   errEl.innerHTML = '';
   const tier_counts = Object.fromEntries(camp.tiers.map(t => [t.id, sellCounts[t.id]||0]));
   const draft = { sellCounts: {...sellCounts}, startNumValue, buyerNameValue, contactValue, selectedBlockId, ticketNumbers: ticketNumbers.map(t=>({...t})) };
+
+  // Retry-safe: the same sale details reuse the same reference, so if a reply was lost on a weak
+  // signal and the seller taps again, the server hands back the ORIGINAL sale instead of making
+  // a second one. Changing anything about the sale starts a fresh reference.
+  const sig = JSON.stringify([camp.id, tier_counts, autoMode ? selectedBlockId : ticketNumbers.map(t => t.value), method, buyerNameValue, method === 'link' ? contactValue : '']);
+  if (!saleAttempt || saleAttempt.sig !== sig) saleAttempt = { sig, ref: newClientRef() };
+  saleInFlight = true; updatePaymentButtons();
+  errEl.innerHTML = `<div class="hint">Recording the sale…</div>`;
 
   try {
     const data = await call('record_sale', {
@@ -547,7 +585,10 @@ async function submitSale(method) {
       ticket_numbers: autoMode ? undefined : ticketNumbers.map(t => t.value),
       auto_assign_block_id: autoMode ? selectedBlockId : undefined,
       method, payer_name: buyerNameValue, contact_value: method === 'link' ? contactValue : undefined,
+      client_ref: saleAttempt.ref,
     });
+    saleAttempt = null;
+    errEl.innerHTML = '';
     const newId = Date.now();
     const entry = {
       id: newId, paymentId: data.payment_id, campaignId: camp.id, method, amount: data.amount,
@@ -557,6 +598,10 @@ async function submitSale(method) {
     if (method === 'link') {
       // Not undoable: the link exists now. Track it until SumUp says it's paid.
       Object.assign(entry, { status: 'linkpending', payUrl: data.pay_url, contact: data.contact_value, sharedVia: null });
+    } else if (data.replayed) {
+      // An earlier tap already recorded this sale (its reply just never arrived). The 15-second
+      // undo window has long since passed, so don't offer an Undo that would be refused.
+      entry.status = 'final';
     } else {
       pendingUndo = { activityId: newId, method, campaignId: camp.id };
     }
@@ -565,9 +610,19 @@ async function submitSale(method) {
     sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
+    saleInFlight = false;
     renderSeller();
-    if (method === 'link') startLinkPoller(); else startTicker();
-  } catch (e) { errEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+    if (method === 'link') startLinkPoller(); else if (entry.status === 'undo') startTicker();
+  } catch (e) {
+    saleInFlight = false; updatePaymentButtons();
+    if (e.network) {
+      // We don't know whether the server got it — keep the same reference so a retry can't double-sell.
+      errEl.innerHTML = `<div class="error">${esc(e.message)} Nothing is lost — tap the same button again to retry; it can't sell twice.</div>`;
+    } else {
+      saleAttempt = null; // a real answer from the server: this attempt is finished, the next one is new
+      errEl.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    }
+  }
 }
 
 async function doUndo(activityId) {
@@ -629,7 +684,11 @@ function renderFeed() {
       return `<div class="card">
         <div class="${failed ? 'error' : 'hint'}" style="margin-top:0">${failed ? 'Link expired or failed' : '⏳ Awaiting payment'} — £${a.amount.toFixed(2)} for ${label}, ${esc(a.buyerName)}</div>
         <div style="font-size:12px;color:#777;margin:6px 0">${sentLine}</div>
-        ${failed ? `<div class="muted">An Admin can issue a fresh link from Needs Attention. The ticket stays with ${esc(a.buyerName)} in the meantime.</div>` : `
+        ${failed ? (((currentCampaign().blocks.find(b => b.id === (a.draft && a.draft.selectedBlockId)) || {}).type === 'digital')
+          ? `<div class="muted">This online ticket number has been released. Start a new sale for ${esc(a.buyerName)} if they still want it.</div>`
+          : `<div class="muted">The ticket stays with ${esc(a.buyerName)}. If they still want to pay, make them a fresh link.</div>
+             <button class="small" style="margin-top:8px" ${a.resending ? 'disabled' : ''} onclick="doSellerResend(${a.id})">${a.resending ? 'Please wait…' : 'Create a fresh link'}</button>
+             ${a.resendError ? `<div class="error" style="margin-top:8px">${esc(a.resendError)}</div>` : ''}`) : `
         ${linkShareHtml(a.paymentId, a.contact, linkMessage(currentCampaign().name, a.amount, nums, a.payUrl, (currentCampaign().blocks.find(b => b.id === (a.draft && a.draft.selectedBlockId)) || {}).type === 'digital'), currentCampaign().name + ' — payment link')}`}
       </div>`;
     }
@@ -647,6 +706,20 @@ function renderFeed() {
       ${shareMenuOpenFor===a.id ? shareMenuHtml(a) : ''}
     </div>`;
   }).join('');
+}
+
+// A seller may issue a fresh link for their own PHYSICAL sale once the old link is dead. The
+// server re-checks with SumUp first and refuses if it was actually paid or is still live, so
+// this can never leave two payable links behind.
+async function doSellerResend(activityId) {
+  const a = activity.find(x => x.id === activityId); if (!a || a.resending) return;
+  a.resending = true; a.resendError = null; renderFeed();
+  try {
+    const r = await call('resend_payment', { payment_id: a.paymentId });
+    Object.assign(a, { status: 'linkpending', payUrl: r.pay_url, sharedVia: null, sharedAt: null });
+    startLinkPoller();
+  } catch (e) { a.resendError = e.message; }
+  a.resending = false; renderFeed();
 }
 
 function toggleShareMenu(id) { shareMenuOpenFor = shareMenuOpenFor === id ? null : id; renderFeed(); }
@@ -701,7 +774,7 @@ async function attachPhoto(activityId, inputEl) {
   const entry = activity.find(a => a.id === activityId); if (!entry) return;
   try {
     const resizedBase64 = await resizeImageForUpload(file);
-    await call('upload_payment_photo', { payment_id: entry.paymentId, image_base64: resizedBase64 });
+    await call('upload_payment_photo', { payment_id: entry.paymentId, image_base64: resizedBase64 }, 45000);
     entry.photoAttached = resizedBase64;
   } catch (e) { alert('Photo upload failed — sale is still recorded fine: ' + e.message); }
   renderFeed();
@@ -757,7 +830,7 @@ async function renderRetentionBanner() {
   } catch { bannerEl.innerHTML = ''; }
 }
 async function doAnonymize() {
-  try { const r = await call('anonymize_old_data'); alert(`Cleared ${r.payments_cleared} payment name(s) and ${r.tickets_cleared} ticket name(s).`); renderRetentionBanner(); }
+  try { const r = await call('anonymize_old_data', {}, 60000); alert(`Cleared ${r.payments_cleared} payment name(s) and ${r.tickets_cleared} ticket name(s).`); renderRetentionBanner(); }
   catch (e) { alert(e.message); }
 }
 
@@ -914,7 +987,7 @@ async function createCampaign() {
       range_start:Number(b.range_start), range_end:Number(b.range_end),
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
-    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks, details_text: document.getElementById('cDetails').value });
+    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks, details_text: document.getElementById('cDetails').value }, 60000);
     draftTiers = [{name:'',price:''},{name:'',price:''}];
     draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
     renderCampaignsTab();
@@ -932,7 +1005,7 @@ async function doAddSeries() {
       range_start: document.getElementById('asStart').value,
       range_end: document.getElementById('asEnd').value,
       number_prefix: document.getElementById('asPrefix').value,
-    });
+    }, 60000);
     await renderCampaignsTab();
     document.getElementById('addSeriesResult').innerHTML = `<div class="info">Added "${esc(block.label)}" (${esc(block.number_prefix||'')}${block.range_start}–${esc(block.number_prefix||'')}${block.range_end}) to ${esc(campaignName)}.</div>`;
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
@@ -940,7 +1013,7 @@ async function doAddSeries() {
 async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function downloadCampaignReport(id) {
   try {
-    const { csv, filename } = await call('export_campaign_report', { campaign_id: id });
+    const { csv, filename } = await call('export_campaign_report', { campaign_id: id }, 60000);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = filename;
@@ -1104,6 +1177,8 @@ async function doResetPassword(id) {
 // ---------- boot ----------
 if (state.session) scheduleAutoLogout();
 render();
+// Lets the app open with no signal (see sw.js) — sales themselves always need the network.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
 </body>
 </html>

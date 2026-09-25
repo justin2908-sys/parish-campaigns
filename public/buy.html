@@ -48,12 +48,25 @@
 
 <script>
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+// No reply within 25s gives up with a plain message instead of hanging on a weak signal.
+// err.network = we don't know whether the server received it (vs. a real answer from it).
 async function call(action, body) {
-  const res = await fetch('/api/' + action, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body || {}) });
-  const data = await res.json();
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 25000);
+  let res, data;
+  try {
+    res = await fetch('/api/' + action, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body || {}), signal: ctl.signal });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    const err = new Error(e && e.name === 'AbortError' ? 'No reply from the server — the signal may be weak.' : "Can't reach the server — check your signal.");
+    err.network = true; throw err;
+  } finally { clearTimeout(timer); }
   if (!res.ok) throw new Error(data.error || 'Something went wrong');
   return data;
 }
+// Same purchase details reuse the same reference, so a retry after a lost reply can't create a
+// second purchase; changing anything starts a fresh one.
+let purchaseAttempt = null;
+function newClientRef() { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12); }
 const campaignId = new URLSearchParams(location.search).get('campaign_id');
 
 let info = null, counts = {}, pickMode = 'auto', blockId = null, luckyNumbers = [];
@@ -179,13 +192,16 @@ async function doPurchase() {
   errEl.innerHTML = '';
   const payBtn = document.getElementById('payBtn'); payBtn.disabled = true; payBtn.textContent = 'Please wait…';
   const tier_counts = { ...counts };
+  const sig = JSON.stringify([tier_counts, pickMode === 'manual' ? luckyNumbers.map(t => t.value) : blockId, buyer_name, contact_value]);
+  if (!purchaseAttempt || purchaseAttempt.sig !== sig) purchaseAttempt = { sig, ref: newClientRef() };
   try {
     const data = pickMode === 'manual'
-      ? await call('public_purchase', { campaign_id: campaignId, tier_counts, ticket_numbers: luckyNumbers.map(t => t.value), buyer_name, contact_value })
-      : await call('public_purchase', { campaign_id: campaignId, tier_counts, block_id: blockId, buyer_name, contact_value });
+      ? await call('public_purchase', { campaign_id: campaignId, tier_counts, ticket_numbers: luckyNumbers.map(t => t.value), buyer_name, contact_value, client_ref: purchaseAttempt.ref })
+      : await call('public_purchase', { campaign_id: campaignId, tier_counts, block_id: blockId, buyer_name, contact_value, client_ref: purchaseAttempt.ref });
     location.href = data.pay_url;
   } catch (e) {
-    errEl.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    if (!e.network) purchaseAttempt = null;
+    errEl.innerHTML = `<div class="error">${esc(e.message)}${e.network ? ' Nothing is lost — tap the button again to retry; you will not be charged twice.' : ''}</div>`;
     payBtn.disabled = false; payBtn.textContent = 'Pay by Link';
   }
 }

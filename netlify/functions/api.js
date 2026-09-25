@@ -566,9 +566,16 @@ async function checkTicket(session, { campaign_id, ticket_number }) {
 //                      that one specific block (needed here since a campaign could have more
 //                      than one pool to choose from).
 // One buyer name covers the whole transaction.
-async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, auto_assign_block_id, method, payer_name, contact_value }) {
+// client_ref: a random reference the phone generates per sale attempt. If the reply is lost
+// on a weak signal and the seller retries, the same reference makes this return the ORIGINAL
+// sale rather than creating a second one (see replaySale).
+async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, auto_assign_block_id, method, payer_name, contact_value, client_ref }) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
+  if (client_ref) {
+    const replay = await replaySale(client_ref, session.uid);
+    if (replay) return replay;
+  }
   if (!['cash', 'machine', 'link'].includes(method)) throw httpError(400, 'Payment method must be cash, machine or link');
   if (!!ticket_numbers === !!auto_assign_block_id) {
     throw httpError(400, 'Specify either exact ticket numbers or a block to auto-assign from, not both or neither.');
@@ -621,9 +628,16 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   const initialStatus = method === 'cash' ? 'cash_pending' : (method === 'machine' ? 'paid' : 'held');
 
   const { data: payment, error: payErr } = await supabase.from('payments')
-    .insert({ campaign_id, method, amount, status: 'pending', seller_id: session.uid, payer_name: payer_name.trim(), contact_value: contact ? contact.value : null })
+    .insert({ campaign_id, method, amount, status: 'pending', seller_id: session.uid, payer_name: payer_name.trim(), contact_value: contact ? contact.value : null, client_ref: client_ref || null })
     .select().single();
-  if (payErr) throw httpError(500, payErr.message);
+  if (payErr) {
+    // Two copies of the same attempt raced each other: the unique client_ref let only one in.
+    if (payErr.code === '23505' && client_ref) {
+      const replay = await replaySale(client_ref, session.uid);
+      if (replay) return replay;
+    }
+    throw httpError(500, payErr.message);
+  }
 
   if (auto_assign_block_id) {
     const { error: claimErr } = await supabase.rpc('claim_lowest_available_tickets', {
@@ -689,6 +703,34 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   return { ok: true, payment_id: payment.id, amount, method: 'link', pay_url: created.pay_url, contact_value: contact.value, contact_kind: contact.kind, tickets: soldTickets };
 }
 
+// Returns the response an earlier attempt with this client_ref produced, or null if there was
+// no such attempt. This is what makes a retry safe after a dropped connection: the sale either
+// already happened (we hand back the same result) or it didn't (null, so the caller proceeds).
+async function replaySale(client_ref, expectedSellerId) {
+  const { data: p } = await supabase.from('payments').select('*').eq('client_ref', client_ref).maybeSingle();
+  if (!p) return null;
+  if ((p.seller_id || null) !== (expectedSellerId || null)) throw httpError(409, 'That reference has already been used.');
+  if (p.status === 'void') {
+    throw httpError(409, `That earlier attempt didn't go through${p.void_reason ? ` (${p.void_reason})` : ''} — please try again.`);
+  }
+  const { data: rows } = await supabase.from('tickets').select('ticket_number, tier_id, block_id').eq('payment_id', p.id).order('ticket_number');
+  if (!rows || !rows.length || (p.method === 'link' && !p.link_url)) {
+    throw httpError(409, 'This sale is still being processed — give it a few seconds, then check Recent sales before trying again.');
+  }
+  const { data: tiers } = await supabase.from('tiers').select('id, name').eq('campaign_id', p.campaign_id);
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', p.campaign_id);
+  const tierNameById = Object.fromEntries((tiers || []).map(t => [t.id, t.name]));
+  const prefixByBlock = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
+  const tickets = rows.map(t => ({
+    ticket_number: t.ticket_number, tier_id: t.tier_id, tier_name: tierNameById[t.tier_id],
+    display_number: `${prefixByBlock[t.block_id] || ''}${t.ticket_number}`,
+  }));
+  const base = { ok: true, replayed: true, payment_id: p.id, amount: Number(p.amount), method: p.method, tickets };
+  if (p.method !== 'link') return base;
+  const contact = parseContact(p.contact_value);
+  return { ...base, pay_url: p.link_url, contact_value: contact.value, contact_kind: contact.kind };
+}
+
 // ---------- Public buyer-direct purchase (no session, no seller) ----------
 // Everything below is deliberately narrow: reachable only for a campaign that is active and
 // not binned, only against its DIGITAL blocks (a physical ticket needs an in-person handover
@@ -728,7 +770,11 @@ async function publicCheckTicket({ campaign_id, ticket_number }) {
 
 // The purchase itself. block_id picks which online pool for "any available"; ticket_numbers
 // is a buyer's own lucky-number pick — exactly one of the two, same contract as recordSale.
-async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbers, buyer_name, contact_value }) {
+async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbers, buyer_name, contact_value, client_ref }) {
+  if (client_ref) {
+    const replay = await replaySale(client_ref, null);
+    if (replay) return replay;
+  }
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
@@ -759,9 +805,15 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   }
 
   const { data: payment, error: payErr } = await supabase.from('payments')
-    .insert({ campaign_id, method: 'link', amount, status: 'pending', seller_id: null, payer_name: buyer_name.trim(), contact_value: contact.value })
+    .insert({ campaign_id, method: 'link', amount, status: 'pending', seller_id: null, payer_name: buyer_name.trim(), contact_value: contact.value, client_ref: client_ref || null })
     .select().single();
-  if (payErr) throw httpError(500, payErr.message);
+  if (payErr) {
+    if (payErr.code === '23505' && client_ref) {
+      const replay = await replaySale(client_ref, null);
+      if (replay) return replay;
+    }
+    throw httpError(500, payErr.message);
+  }
 
   if (usingLuckyNumbers) {
     const nums = ticket_numbers.map(Number);
@@ -1019,7 +1071,15 @@ async function voidSale(session, { payment_id, reason }) {
   if (payment.status === 'void') throw httpError(400, 'Already voided');
   if (payment.method === 'link') {
     const status = await syncCheckout(payment);
-    if (status === 'paid') throw httpError(400, "This has been paid via SumUp — a paid Pay by Link sale can't be voided here. Refund it directly in SumUp if needed.");
+    const paidMsg = "This has been paid via SumUp — a paid Pay by Link sale can't be voided here. Refund it directly in SumUp if needed.";
+    if (status === 'paid') throw httpError(400, paidMsg);
+    if (status === 'pending' && payment.sumup_checkout_id) {
+      // Still-open link: close it so the buyer can't pay for a sale that's being voided. If
+      // SumUp refuses because it was paid a moment ago, the re-check catches that; any other
+      // failure doesn't block the void (a late payment is flagged loudly by syncCheckout).
+      const cancelled = await cancelSumupCheckout(payment.sumup_checkout_id);
+      if (!cancelled.ok && (await syncCheckout(payment)) === 'paid') throw httpError(400, paidMsg);
+    }
   }
   await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null, attendee_name: null }).eq('payment_id', payment_id);
   await supabase.from('payments').update({ status: 'void', voided: true, voided_by: session.uid, voided_at: new Date().toISOString(), void_reason: reason }).eq('id', payment_id);
@@ -1204,10 +1264,24 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   return { payments: out };
 }
 
+// Cancels a still-open SumUp checkout so its link can no longer be paid. SumUp refuses (non-2xx)
+// if the checkout has already been paid, which is exactly the signal callers need.
+async function cancelSumupCheckout(checkoutId) {
+  try {
+    const r = await fetch(`https://api.sumup.com/v0.1/checkouts/${checkoutId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${SUMUP_API_KEY}` } });
+    return { ok: r.ok, status: r.status };
+  } catch { return { ok: false, status: 0 }; }
+}
+
+// Who may resend: an Admin/SuperAdmin any link sale in their parish; a Seller only their OWN
+// sale of PHYSICAL tickets whose link is dead (expired/failed). Either way a new link is only
+// ever issued when the old one can no longer be paid — never two live links for one sale.
 async function resendPayment(session, { payment_id }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  const isSeller = session.role === 'seller';
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id, name)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
+  if (isSeller && payment.seller_id !== session.uid) throw httpError(403, 'You can only resend a link for your own sale.');
   if (payment.method !== 'link') throw httpError(400, 'Only pay-by-link sales can have their link resent');
   if (payment.status === 'paid' || payment.status === 'void') throw httpError(400, `Cannot resend — this payment is already ${payment.status}`);
 
@@ -1224,6 +1298,25 @@ async function resendPayment(session, { payment_id }) {
   const { data: currentTickets } = await supabase.from('tickets').select('*').eq('payment_id', payment.id);
   if (!currentTickets || !currentTickets.length) {
     throw httpError(400, "These tickets have already been released back to the series (an unpaid online ticket frees up once its link expires) — start a new sale for this buyer instead.");
+  }
+
+  if (isSeller) {
+    const { data: blocksForType } = await supabase.from('ticket_blocks').select('id, type').eq('campaign_id', payment.campaign_id);
+    const typeById = Object.fromEntries((blocksForType || []).map(b => [b.id, b.type]));
+    if (currentTickets.some(t => typeById[t.block_id] === 'digital')) throw httpError(400, 'An online ticket can’t be resent — start a new sale for this buyer instead.');
+  }
+
+  // The old link is still open (unpaid, not yet expired). Issuing a second link now would leave
+  // two payable links for one sale. A seller just re-shares the existing link; an Admin
+  // deliberately replacing it has the old one cancelled first (SumUp refuses if it was just paid).
+  if (current === 'pending') {
+    if (isSeller) throw httpError(400, 'That link is still live — just send the same link again. A fresh one can be made once it expires.');
+    const cancelled = await cancelSumupCheckout(payment.sumup_checkout_id);
+    if (!cancelled.ok) {
+      const again = await syncCheckout(payment);
+      if (again === 'paid') throw httpError(400, 'That payment has just come through — no need to resend.');
+      throw httpError(502, `Couldn't cancel the old link at SumUp (HTTP ${cancelled.status}), so no new link was issued — try again in a moment.`);
+    }
   }
 
   for (const t of currentTickets) {
@@ -1330,6 +1423,19 @@ async function sellerState(session, { campaign_id } = {}) {
   return { ticketsSoldCount, cashCollected, cashReconciled: cashConfirmed, cardTotal, linkPending };
 }
 
+// Everything the Sell screen needs in ONE round trip (it used to be three in a row), which
+// matters on a weak signal. campaign_id is the seller's last-used campaign; if it's no longer
+// available the first one is used, and the chosen id is returned so the phone stays in step.
+async function sellScreen(session, { campaign_id } = {}) {
+  const { campaigns } = await listCampaigns(session);
+  const chosen = campaigns.find(c => c.id === campaign_id) || campaigns[0] || null;
+  const [{ organization }, stats] = await Promise.all([
+    getOrgSettings(session),
+    chosen ? sellerState(session, { campaign_id: chosen.id }) : Promise.resolve(null),
+  ]);
+  return { campaigns, organization, campaign_id: chosen ? chosen.id : null, stats };
+}
+
 // ---------- router ----------
 const actions = {
   bootstrap_platform_owner: (s, b) => bootstrapPlatformOwner(b),
@@ -1352,6 +1458,7 @@ const actions = {
   list_campaigns: (s, b) => listCampaigns(s, b),
   set_disabled_campaigns: (s, b) => setDisabledCampaigns(s, b),
   set_campaign_active: (s, b) => setCampaignActive(s, b),
+  sell_screen: (s, b) => sellScreen(s, b),
   add_block_to_campaign: (s, b) => addBlockToCampaign(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),
