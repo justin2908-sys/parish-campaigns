@@ -50,8 +50,9 @@ preserve every one of these, not "improve" them away:
    **campaign**, not to the parish as a whole — every campaign has its own.
    **Superseded 2026-09-21 by §9:** each sale now gets its own SumUp link (with the
    sale's id as its reference) instead of one fixed campaign link.
-6. **Optional, non-blocking photo evidence** for manually-logged payments —
-   never required, never blocks the next sale.
+6. ~~Optional, non-blocking photo evidence for manually-logged payments.~~
+   **Retired 2026-09-25 by §28** — never used at the BBQ; a machine payment is trust-based
+   (the seller has seen the tap on the reader).
 7. **Specific, accurate error messages.** "This ticket doesn't exist in this
    campaign" and "this ticket is already sold" are different problems and must
    never share one misleading message.
@@ -287,7 +288,7 @@ against, so that consistency is the digital equivalent of the same rule.
 
 1. **Cash** — logged by the seller, reconciled oldest-first as before.
 2. **Pay at Machine** — the buyer taps on the POS machine outside the church; the seller
-   logs it (optional photo evidence, as before).
+   logs it (trust-based: the seller has seen the payment; no photo — see §28).
 3. **Pay by Link** — a SumUp payment link is generated **for that sale** (not a shared
    campaign link) and sent to the buyer from the seller's own SMS / WhatsApp / Email.
 
@@ -846,3 +847,16 @@ page was 950–1,560px tall — not a single view. Fixed:
   (an iPhone in Safari is ~664px). Sell: typical sale ends ~480px; worst case (two campaigns, two
   ticket types, five tickets, an error showing) ends ~620px. Below ~560px, or with a Sell screen showing
   its worst case plus the Recent-sales bar, a small scroll can appear.
+
+---
+
+## 28. Photo evidence for machine payments — dropped — 2026-09-25
+
+At the BBQ nobody used the "photo of the payment" option on card-machine sales, and a Pay at
+Machine sale is trust-based anyway: the seller vouches that they saw the payment. Removed entirely:
+the "📷 Add photo" button on the Sell screen, the "Photo" button on the Sales tab, the two backend
+actions (`upload_payment_photo`, `get_payment_photo_url`) and the "Has Photo Evidence" column in
+the campaign CSV report. This retires non-negotiable #6 (§2). Left in place, unused: the
+`payments.photo_path` column and the private `payment-evidence` storage bucket (holding only two
+tiny test images from our own testing) — harmless, and removable later if wanted. The camera
+permission was never requested by the app (the photo input used the phone's own camera picker).

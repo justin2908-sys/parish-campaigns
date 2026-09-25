@@ -60,9 +60,6 @@
   td, th { padding:9px 5px; border-bottom:1px solid var(--line); text-align:left; }
   .share-row { display:flex; gap:6px; }
   .share-link { flex:1; display:flex; align-items:center; justify-content:center; gap:4px; background:var(--accent-dim); color:var(--accent); border-radius:10px; padding:11px 4px; font-size:14.5px; font-weight:600; text-decoration:none; }
-  .photo-label { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:8px; padding:9px; border:1px dashed var(--line); border-radius:9px; font-size:12.5px; color:var(--slate); cursor:pointer; }
-  .photo-label.attached { border-style:solid; border-color:var(--good); color:var(--good); }
-  .photo-thumb { width:28px; height:28px; border-radius:6px; object-fit:cover; vertical-align:middle; }
   .tier-row, .block-row { display:flex; gap:8px; align-items:flex-end; margin-bottom:8px; }
   .tier-row > div, .block-row > div { flex:1; }
   #app { padding-bottom: 60px; }
@@ -750,7 +747,7 @@ async function submitSale(method) {
     const entry = {
       id: newId, paymentId: data.payment_id, campaignId: camp.id, method, amount: data.amount,
       buyerName: buyerNameValue, tickets: data.tickets, soldAt: new Date().toISOString(),
-      status: 'undo', remaining: 8, photoAttached: false, draft,
+      status: 'undo', remaining: 8, draft,
     };
     if (method === 'link') {
       // Not undoable: the link exists now. Track it until SumUp says it's paid.
@@ -885,10 +882,6 @@ function feedCardsHtml(mine) {
     return `<div class="card">
       <div class="info">£${a.amount.toFixed(2)} ${a.method==='cash'?'cash':'paid at machine'} recorded for ${label} (${esc(a.buyerName||'no name given')}).</div>
       <div style="font-size:11px;color:var(--slate);margin-top:4px">Sold ${when}</div>
-      ${a.method==='machine' ? `
-        <label class="photo-label ${a.photoAttached?'attached':''}" for="photo-${a.id}">${a.photoAttached?`<img class="photo-thumb" src="${a.photoAttached}"> Photo attached`:'📷 Add photo of payment (optional)'}</label>
-        <input type="file" accept="image/*" capture="environment" id="photo-${a.id}" style="display:none" onchange="attachPhoto(${a.id}, this)">
-      ` : ''}
       <div style="margin-top:9px">
         <button class="link" onclick="toggleShareMenu(${a.id})">📤 Share ticket</button>
       </div>
@@ -962,33 +955,6 @@ function shareMenuHtml(a) {
     </div>
   </div>`;
 }
-
-async function attachPhoto(activityId, inputEl) {
-  const file = inputEl.files[0]; if (!file) return;
-  const entry = activity.find(a => a.id === activityId); if (!entry) return;
-  try {
-    const resizedBase64 = await resizeImageForUpload(file);
-    await call('upload_payment_photo', { payment_id: entry.paymentId, image_base64: resizedBase64 }, 45000);
-    entry.photoAttached = resizedBase64;
-  } catch (e) { alert('Photo upload failed — sale is still recorded fine: ' + e.message); }
-  renderFeed();
-}
-function resizeImageForUpload(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image(); const reader = new FileReader();
-    reader.onload = e => { img.src = e.target.result; };
-    reader.onerror = reject;
-    img.onload = () => {
-      const maxDim = 1000; const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width * scale; canvas.height = img.height * scale;
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.7));
-    };
-    img.onerror = reject; reader.readAsDataURL(file);
-  });
-}
-
 
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
@@ -1268,8 +1234,7 @@ async function renderSalesTab() {
       <td>${esc(p.payer_name||'—')}${p.contact_value ? `<br><span class="muted">${esc(p.contact_value)}${p.contact_channel ? ' · via ' + p.contact_channel : ''}</span>` : ''}</td>
       <td>${esc(p.seller)}</td><td>£${Number(p.amount).toFixed(2)}</td><td>${{cash:'Cash',machine:'Machine',link:'Link'}[p.method]||p.method}</td>
       <td><span class="badge ${p.status==='paid'?'ok':p.status==='pending'?'warn':'bad'}">${p.status==='pending' ? (p.method==='link' ? 'awaiting payment' : p.method==='cash' ? 'cash to reconcile' : 'pending') : p.status==='failed' ? 'link expired' : p.status}</span></td>
-      <td>${p.status!=='void' && !(p.method==='link' && p.status==='paid') ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}
-      ${p.has_photo ? `<button class="small" onclick="viewPhoto('${p.id}')">Photo</button>` : ''}</td>
+      <td>${p.status!=='void' && !(p.method==='link' && p.status==='paid') ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}</td>
     </tr>`).join('')}
     </table></div>`;
 }
@@ -1277,9 +1242,6 @@ async function doVoid(paymentId) {
   const reason = prompt('Reason for voiding this sale? (An unpaid payment link is cancelled too. A payment SumUp has already received can\'t be voided here.)');
   if (!reason) return;
   try { await call('void_sale', { payment_id: paymentId, reason }); renderSalesTab(); } catch (e) { alert(e.message); }
-}
-async function viewPhoto(paymentId) {
-  try { const { url } = await call('get_payment_photo_url', { payment_id: paymentId }); window.open(url, '_blank'); } catch (e) { alert(e.message); }
 }
 
 // ---- Cash Recon tab ----

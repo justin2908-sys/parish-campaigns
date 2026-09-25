@@ -603,7 +603,7 @@ async function exportCampaignReport(session, { campaign_id }) {
   const headers = [
     'Ticket Number', 'Display Number', 'Block', 'Tier', 'Ticket Status', 'Buyer Name', 'Method', 'Payment Amount',
     'Payment Status', 'Seller', 'Sold At', 'Cash Confirmed By', 'Cash Confirmed At',
-    'Voided', 'Void Reason', 'SumUp Reference', 'SumUp Transaction Code', 'Link Sent To', 'Link Sent Via', 'Link Sent At', 'Has Photo Evidence',
+    'Voided', 'Void Reason', 'SumUp Reference', 'SumUp Transaction Code', 'Link Sent To', 'Link Sent Via', 'Link Sent At',
   ];
   const rows = tickets.map(t => {
     const p = t.payment_id ? paymentById[t.payment_id] : null;
@@ -628,7 +628,6 @@ async function exportCampaignReport(session, { campaign_id }) {
       p ? p.contact_value || '' : '',
       p ? p.contact_channel || '' : '',
       p ? p.link_shared_at || '' : '',
-      p && p.photo_path ? 'Yes' : '',
     ];
   });
 
@@ -1507,7 +1506,6 @@ async function listRecentPayments(session, { campaign_id } = {}) {
     method: p.method, amount: p.amount, status: p.status,
     payer_name: p.payer_name, contact_value: p.contact_value, contact_channel: p.contact_channel,
     created_at: p.created_at,
-    has_photo: !!p.photo_path,
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
   return { payments: out };
@@ -1651,37 +1649,6 @@ async function anonymizeOldData(session) {
   return { ok: true, payments_cleared: (payments || []).length, tickets_cleared: (tickets || []).length };
 }
 
-// Optional supporting evidence for manual card sales (e.g. a photo of the reader showing
-// "Approved"). Never blocks the sale itself — this is attached after the fact, whenever
-// convenient. Stored in a PRIVATE bucket; viewing always goes through a short-lived signed URL,
-// never a public link, since this is financial evidence and should stay access-controlled.
-async function uploadPaymentPhoto(session, { payment_id, image_base64 }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  if (!image_base64) throw httpError(400, 'No image provided');
-  // Only a payment in the caller's own church — and a seller only for their own sale.
-  const { data: payment } = await supabase.from('payments').select('id, seller_id, campaigns!inner(org_id)').eq('id', payment_id).single();
-  if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
-  if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only add a photo to your own sale');
-
-  const buffer = Buffer.from(image_base64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-  if (buffer.length > 4 * 1024 * 1024) throw httpError(400, 'Image too large — please use a smaller photo');
-  const path = `${payment_id}-${Date.now()}.jpg`;
-  const { error } = await supabase.storage.from('payment-evidence').upload(path, buffer, { contentType: 'image/jpeg' });
-  if (error) throw httpError(500, 'Photo upload failed: ' + error.message);
-
-  await supabase.from('payments').update({ photo_path: path }).eq('id', payment_id);
-  return { ok: true };
-}
-
-async function getPaymentPhotoUrl(session, { payment_id }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
-  const { data: payment } = await supabase.from('payments').select('photo_path').eq('id', payment_id).single();
-  if (!payment || !payment.photo_path) throw httpError(404, 'No photo attached to this payment');
-  const { data, error } = await supabase.storage.from('payment-evidence').createSignedUrl(payment.photo_path, 300); // 5 min
-  if (error) throw httpError(500, error.message);
-  return { url: data.signedUrl };
-}
-
 async function sellerState(session, { campaign_id } = {}) {
   requireRole(session, ['seller', 'admin', 'superadmin']);
   let payQ = supabase.from('payments').select('*').eq('seller_id', session.uid).neq('status', 'void').neq('status', 'failed');
@@ -1768,8 +1735,6 @@ const actions = {
   retention_flags: (s) => retentionFlags(s),
   anonymize_old_data: (s) => anonymizeOldData(s),
   seller_state: (s, b) => sellerState(s, b),
-  upload_payment_photo: (s, b) => uploadPaymentPhoto(s, b),
-  get_payment_photo_url: (s, b) => getPaymentPhotoUrl(s, b),
 };
 
 exports.handler = async (event) => {
