@@ -801,3 +801,12 @@ paid messaging service; this needs none and no sign-up.
 get their ticket back by typing the name + mobile/email they bought with. BOTH must match, one
 campaign only, paid link purchases only, forgiving of case/spacing/phone formatting, and limited
 to 10 searches an hour per visitor and per contact.
+
+**Found by Justin's first real public purchase (£1, ticket 10):** SumUp had the money but our
+Sales tab still said "Pending" (with a Void button). Cause: the live site still had the old return
+path, so SumUp's "paid" notification never reached us, and nothing else asked. Fix, beyond the
+return-path repair above: **Sales, Needs Attention and the dashboard now ask SumUp about any
+still-pending link payment (newest 15) before building their lists/totals**, so paid money can't
+keep showing as Pending; status wording is clearer ("awaiting payment", "cash to reconcile",
+"link expired"). Void stays safe: it re-checks SumUp and refuses a payment that has arrived
+("refund it directly in SumUp"). Verified on the preview with Justin's real paid checkout.
