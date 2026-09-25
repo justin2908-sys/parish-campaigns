@@ -48,14 +48,13 @@
   .stepper button:active { background:var(--stone); }
   .stepper input { width:54px; height:44px; text-align:center; border:none; background:#fff; font-family:var(--font-head); font-size:23px; font-weight:600; color:var(--ink); padding:0; -moz-appearance:textfield; }
   .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
-  .bundleHead { margin:12px 0 8px; font-size:15px; font-weight:700; color:var(--pine); }
+  .bundleHead { margin:8px 0 8px; font-size:15px; font-weight:700; color:var(--pine); }
   .bundles { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
-  .bundle { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:10px 2px 9px; border-radius:14px; border:1.5px solid #CDB673; background:linear-gradient(180deg,#FBFBF8,#F0E7CC); color:var(--pine); box-shadow:0 3px 0 #B8913A; }
+  .bundle { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:9px 2px 8px; border-radius:14px; border:1.5px solid #CDB673; background:linear-gradient(180deg,#FBFBF8,#F0E7CC); color:var(--pine); box-shadow:0 3px 0 #B8913A; }
   .bundle:active { transform:translateY(2px); box-shadow:0 1px 0 #B8913A; }
   .bundle b { font-family:var(--font-head); font-size:27px; font-weight:600; line-height:1.05; }
   .bundle span { font-size:13px; font-weight:600; color:var(--slate); }
   .bundle em { font-style:normal; font-size:14px; font-weight:800; color:var(--wine); margin-top:2px; }
-  .bundleFoot { margin:8px 0 0; font-size:13.5px; color:var(--slate); }
 
   /* ---- mode ---- */
   .seg { display:flex; background:var(--pine-dim); border-radius:14px; padding:3px; margin:0 0 6px; }
@@ -320,7 +319,7 @@ function renderMode() {
   if (bd) {
     const t = info.tiers[0];
     bd.innerHTML = (!n && info.tiers.length === 1)
-      ? `<div class="bundleHead">👆 Buying several? Tap a bundle</div><div class="bundles">${[1, 5, 10, 20].filter(k => k <= MAX_QTY).map(k => `<button type="button" class="bundle" data-set="${k}" aria-label="Buy ${k} ticket${k > 1 ? 's' : ''} for ${money(t.price * k)}"><b>${k}</b><span>${k === 1 ? 'ticket' : 'tickets'}</span><em>${money(t.price * k)}</em></button>`).join('')}</div><p class="bundleFoot">Need a different number? Use the − / + above.</p>`
+      ? `<div class="bundleHead">👆 Buying several? Tap a bundle, or use − / +</div><div class="bundles">${[1, 5, 10, 20].filter(k => k <= MAX_QTY).map(k => `<button type="button" class="bundle" data-set="${k}" aria-label="Buy ${k} ticket${k > 1 ? 's' : ''} for ${money(t.price * k)}"><b>${k}</b><span>${k === 1 ? 'ticket' : 'tickets'}</span><em>${money(t.price * k)}</em></button>`).join('')}</div>`
       : '';
   }
   renderModeLabelsOnly();
