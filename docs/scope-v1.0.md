@@ -578,3 +578,33 @@ to an existing campaign" card on the Campaigns tab).
   (physical) or "Online N".
 - Shares block/ticket creation with `create_campaign`; a failed insert removes the
   half-built series. Sanity cap of 50,000 tickets per series (not a business rule).
+
+---
+
+## 19. Weak-signal resilience & safe link resend — built 2026-09-25
+
+Sellers stand in places in the church with poor reception. The pages were already tiny
+(index ~17 KB over the wire, no external libraries); the real risk was a **lost reply**:
+the sale saves, the confirmation never arrives, the seller taps again, and a second sale is
+made. Changes:
+
+- **Retry-safe sales.** Each sale attempt carries a random `client_ref` (unique index on
+  `payments.client_ref`). A retry with the same reference returns the ORIGINAL sale
+  (`replaySale`) — including under three simultaneous identical requests — instead of
+  creating another. Same for the public buy page. Changing anything about the sale starts a
+  fresh reference; a server-side failure ends the attempt so the next tap is a new one.
+- **Timeouts and plain messages.** Requests give up after 20s (60s for admin bulk actions)
+  with "signal may be weak" wording; buttons lock while a sale is recording.
+- **One round trip for the Sell screen** (`sell_screen`: campaigns + parish + stats, was
+  three sequential calls). A failure shows a Try-again card and loses nothing typed.
+- **App page cached on the phone** (`sw.js`, network-first with a 4s wait) so it opens with no
+  signal. Sales themselves always need the network — offline sale queueing was rejected
+  (two sellers could claim the same number while disconnected).
+- **QR code removed.** Payment links go by WhatsApp/SMS/email; every message now states the
+  30-minute validity (wording differs: physical = ask for a fresh link, online = number is
+  released).
+- **Seller resend.** A seller may issue a fresh link for their OWN sale of PHYSICAL tickets,
+  only once the old link is dead (expired/failed per SumUp). A still-live link is simply
+  re-shared. An Admin replacing a live link, and Void, now CANCEL the old SumUp checkout first
+  (SumUp refuses if it was just paid), so two payable links can never exist for one sale.
+- Rejected/not possible: choosing the Netlify function region is Pro-plan only.
