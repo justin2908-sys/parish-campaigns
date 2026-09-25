@@ -1263,6 +1263,17 @@ async function sumupWebhook(body) {
   return { ok: true, status };
 }
 
+// TEMPORARY read-only diagnostic (removed once the expiry question is settled): what does SumUp
+// itself say about one checkout of this church? Whitelisted fields only.
+async function sumupPeek(session, { payment_id }) {
+  requireOrgRole(session, ['superadmin']);
+  const { data: p } = await supabase.from('payments').select('sumup_checkout_id, created_at, campaigns!inner(org_id)').eq('id', payment_id).maybeSingle();
+  if (!p || p.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
+  const r = await fetch(`https://api.sumup.com/v0.1/checkouts/${p.sumup_checkout_id}`, { headers: { Authorization: `Bearer ${SUMUP_API_KEY}` } });
+  const d = await r.json().catch(() => ({}));
+  return { http: r.status, status: d.status, valid_until: d.valid_until, date: d.date, created_at_ours: p.created_at, now: new Date().toISOString(), transactions: (d.transactions || []).map(t => t.status), keys: Object.keys(d) };
+}
+
 // Diagnostic for SuperAdmins: proves the SumUp key can actually create payment links, so a
 // permissions problem shows up here, on purpose, rather than in the middle of a real sale.
 // Creates a £0.01 test checkout and immediately cancels it — no money moves.
@@ -1724,6 +1735,7 @@ const actions = {
   public_purchase: (s, b) => publicPurchase(b),
   log_link_shared: (s, b) => logLinkShared(s, b),
   sumup_check: (s) => sumupCheck(s),
+  sumup_peek: (s, b) => sumupPeek(s, b),
   sumup_webhook: (s, b) => sumupWebhook(b),
   undo_sale: (s, b) => undoSale(s, b),
   void_sale: (s, b) => voidSale(s, b),
