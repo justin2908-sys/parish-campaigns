@@ -634,3 +634,7 @@ buttons). Now ~470px typical, ~580px worst case (two campaigns, two tiers, two s
   number has all its digits (taken from the series itself — 10001–15000 means 5 — not
   hard-coded), with a "Type all 5 digits…" hint meanwhile; Record refuses an incomplete
   number. Measured: typing 1, 10, 100, 1000 fires 0 checks; the 5th digit fires one per ticket.
+- **One request for the whole run.** `check_tickets` checks every number in a sale in a single
+  call (max 200), returning one result per number in order, with the same wording as the
+  single `check_ticket` (which stays, for editing one number). Both are now scoped to the
+  caller's own parish — the single check previously didn't verify the campaign was theirs.
