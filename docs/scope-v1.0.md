@@ -608,3 +608,24 @@ made. Changes:
   re-shared. An Admin replacing a live link, and Void, now CANCEL the old SumUp checkout first
   (SumUp refuses if it was just paid), so two payable links can never exist for one sale.
 - Rejected/not possible: choosing the Netlify function region is Pro-plan only.
+
+---
+
+## 20. No-scroll Sell screen — built 2026-09-25
+
+Goal: a whole sale on one phone screen with no scrolling (sellers stand in the church, one
+hand). The old screen was ~1,100px tall (five-line dashboard, labelled fields, full-width
+buttons). Now ~470px typical, ~580px worst case (two campaigns, two tiers, two series):
+
+- **Stats** collapse to one line ("12 sold · cash £24 · card £10 · ⏳ £6"); tap for the detail.
+- **Quantity** is a − / + stepper per tier (still typeable) instead of a labelled keypad field.
+- **Campaign / series pickers** appear only when there is more than one; otherwise just a title.
+- **Ticket numbers** show as chips with live availability (a long run collapses to
+  "10001 … 10020 (20)"); "Edit numbers" opens the per-ticket editor for non-sequential tickets;
+  a problem number is called out in red directly under the chips.
+- **Buyer name + contact** side by side, placeholders instead of labels.
+- **Total + Cash | Machine | Link** in one row (Undo still lives on the button just used).
+- **Send-the-link** buttons pop up as a bottom sheet after a Link sale (and after a resend), so
+  there's no scrolling to find them; "Recent sales" is one slim bar that expands, and flags
+  awaiting/expired links.
+- Admin/SuperAdmin get a small "← Admin" button in the header instead of a full-width one.
