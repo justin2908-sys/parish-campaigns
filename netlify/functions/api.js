@@ -549,12 +549,34 @@ function sellerLabel(sellerId, users) {
 // Fetch a ticket to check it's unsold & find it, without locking it yet. Works the same for
 // a physical or online series now — both pre-populate real rows across a declared range.
 async function checkTicket(session, { campaign_id, ticket_number }) {
-  requireRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
   const { data } = await supabase.from('tickets').select('*')
     .eq('campaign_id', campaign_id).eq('ticket_number', ticket_number).maybeSingle();
   if (!data) throw httpError(404, `Ticket ${ticket_number} doesn't exist in this campaign`);
   if (data.status !== 'unsold') throw httpError(409, `Ticket ${ticket_number} is already ${data.status}`);
   return { ok: true };
+}
+
+// The same check for a whole run of numbers in ONE request (a seller selling 20 tickets used to
+// send 20). Returns one result per number, in the order asked: { ticket_number, ok } or
+// { ticket_number, ok: false, error } with the exact wording the single check uses.
+const MAX_BATCH_CHECK = 200;
+async function checkTickets(session, { campaign_id, ticket_numbers }) {
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  if (!Array.isArray(ticket_numbers) || !ticket_numbers.length) throw httpError(400, 'No ticket numbers to check');
+  if (ticket_numbers.length > MAX_BATCH_CHECK) throw httpError(400, `Check at most ${MAX_BATCH_CHECK} numbers at a time`);
+  const nums = ticket_numbers.map(Number);
+  if (nums.some(n => !Number.isInteger(n))) throw httpError(400, 'Ticket numbers must be whole numbers');
+  const { data: rows } = await supabase.from('tickets').select('ticket_number, status').eq('campaign_id', campaign_id).in('ticket_number', nums);
+  const statusByNum = Object.fromEntries((rows || []).map(r => [r.ticket_number, r.status]));
+  const results = nums.map(n => {
+    if (!(n in statusByNum)) return { ticket_number: n, ok: false, error: `Ticket ${n} doesn't exist in this campaign` };
+    if (statusByNum[n] !== 'unsold') return { ticket_number: n, ok: false, error: `Ticket ${n} is already ${statusByNum[n]}` };
+    return { ticket_number: n, ok: true };
+  });
+  return { results };
 }
 
 // tier_counts: { [tier_id]: count }. Exactly one of:
@@ -1466,6 +1488,7 @@ const actions = {
   export_campaign_report: (s, b) => exportCampaignReport(s, b),
 
   check_ticket: (s, b) => checkTicket(s, b),
+  check_tickets: (s, b) => checkTickets(s, b),
   record_sale: (s, b) => recordSale(s, b),
   checkout_status: (s, b) => checkoutStatus(s, b),
   public_payment_status: (s, b) => publicPaymentStatus(b),

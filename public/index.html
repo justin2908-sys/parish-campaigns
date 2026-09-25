@@ -421,7 +421,7 @@ async function renderSeller() {
 let lastStats = null, statsOpen = false, feedOpen = false, sheetId = null, numbersOpen = false, ticketStatus = {};
 function toggleStats() { statsOpen = !statsOpen; renderStats(); }
 function toggleFeed() { feedOpen = !feedOpen; renderFeed(); }
-function toggleNumbers() { numbersOpen = !numbersOpen; renderTicketRows(); }
+function toggleNumbers() { numbersOpen = !numbersOpen; renderTicketRows(true); }
 function closeSheet() { sheetId = null; renderSheet(); }
 function bumpQty(tierId, d) {
   sellCounts[tierId] = Math.max(0, (sellCounts[tierId] || 0) + d);
@@ -527,7 +527,8 @@ function regenerateTicketNumbers() {
 let startHint = '';
 function minDigits(block) { return block ? String(block.range_start).length : 1; }
 
-function renderTicketRows() {
+// keepStatus: just re-draw (e.g. opening the editor) without asking the server again.
+function renderTicketRows(keepStatus) {
   const wrap = document.getElementById('ticketRows'); if (!wrap) return;
   const camp = currentCampaign();
   const block = camp.blocks.find(b => b.id === selectedBlockId);
@@ -546,7 +547,7 @@ function renderTicketRows() {
   // Physical: the numbers show as a compact row of chips (with live availability). The full
   // per-ticket editor stays one tap away for tickets that aren't in sequence, and a problem
   // number is called out in red right under the chips.
-  ticketStatus = {};
+  if (!keepStatus) ticketStatus = {};
   const rows = numbersOpen ? ticketNumbers.map((tn, i) => {
     const tierIdx = camp.tiers.findIndex(t => t.id === tn.tierId);
     const tier = camp.tiers[tierIdx];
@@ -557,8 +558,39 @@ function renderTicketRows() {
       <div id="tnStatus-${i}" style="font-size:12px;margin:-4px 0 8px 4px;color:#888"></div>`;
   }).join('') : '';
   wrap.innerHTML = `${startHint ? `<div class="muted" style="margin-top:8px">${esc(startHint)}</div>` : ''}<div class="chips" id="ticketChips"></div><div id="ticketErr"></div>${rows}`;
-  renderChips();
-  ticketNumbers.forEach((tn, i) => checkTicketLive(i, tn.value));
+  if (keepStatus) {
+    ticketNumbers.forEach((_, i) => {
+      const st = ticketStatus[i], el = document.getElementById(`tnStatus-${i}`);
+      if (st && el) { el.textContent = st.text; el.style.color = st.kind === 'ok' ? 'var(--good)' : st.kind === 'bad' ? 'var(--bad)' : '#888'; }
+    });
+    renderChips();
+  } else {
+    renderChips();
+    checkAllTickets();
+  }
+}
+
+// One request for the whole run of numbers (not one per ticket). Only numbers that already have
+// all their digits are asked about; anything edited meanwhile is left alone when the answer lands.
+async function checkAllTickets() {
+  const camp = currentCampaign();
+  const need = minDigits(camp.blocks.find(b => b.id === selectedBlockId));
+  const snapshot = ticketNumbers.map(t => String(t.value));
+  const idxs = snapshot.map((_, i) => i).filter(i => snapshot[i].trim().length >= need && /^\d+$/.test(snapshot[i].trim()));
+  if (!idxs.length) return;
+  idxs.forEach(i => setTicketNumberStatus(i, '⋯ checking', '#888'));
+  const stillSame = (i) => ticketNumbers[i] && String(ticketNumbers[i].value) === snapshot[i];
+  try {
+    const { results } = await call('check_tickets', { campaign_id: camp.id, ticket_numbers: idxs.map(i => Number(snapshot[i])) });
+    idxs.forEach((i, k) => {
+      if (!stillSame(i)) return;
+      const r = results[k];
+      if (r && r.ok) setTicketNumberStatus(i, '✓ available', 'var(--good)');
+      else setTicketNumberStatus(i, (r && r.error) || 'Could not check this number', 'var(--bad)');
+    });
+  } catch (e) {
+    idxs.forEach(i => { if (stillSame(i)) setTicketNumberStatus(i, e.message, 'var(--bad)'); });
+  }
 }
 
 function renderChips() {
