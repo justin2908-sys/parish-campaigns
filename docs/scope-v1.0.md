@@ -50,8 +50,9 @@ preserve every one of these, not "improve" them away:
    **campaign**, not to the parish as a whole — every campaign has its own.
    **Superseded 2026-09-21 by §9:** each sale now gets its own SumUp link (with the
    sale's id as its reference) instead of one fixed campaign link.
-6. **Optional, non-blocking photo evidence** for manually-logged payments —
-   never required, never blocks the next sale.
+6. ~~Optional, non-blocking photo evidence for manually-logged payments.~~
+   **Retired 2026-09-25 by §28** — never used at the BBQ; a machine payment is trust-based
+   (the seller has seen the tap on the reader).
 7. **Specific, accurate error messages.** "This ticket doesn't exist in this
    campaign" and "this ticket is already sold" are different problems and must
    never share one misleading message.
@@ -287,7 +288,7 @@ against, so that consistency is the digital equivalent of the same rule.
 
 1. **Cash** — logged by the seller, reconciled oldest-first as before.
 2. **Pay at Machine** — the buyer taps on the POS machine outside the church; the seller
-   logs it (optional photo evidence, as before).
+   logs it (trust-based: the seller has seen the payment; no photo — see §28).
 3. **Pay by Link** — a SumUp payment link is generated **for that sale** (not a shared
    campaign link) and sent to the buyer from the seller's own SMS / WhatsApp / Email.
 
@@ -769,3 +770,93 @@ GitHub to production had made every `git push origin main` a paid deploy (22 in 
   that address, not production.
 - **Publishing:** merge the PR with a message ending `PUBLISH-NOW` — one production deploy, only when
   Justin has said to publish.
+
+---
+
+## 26. Getting buyers back from SumUp and keeping their ticket — built 2026-09-25 (on dev; preview only)
+
+**The bug.** SumUp has two different address fields: `redirect_url` (where the buyer's *browser* goes
+back to — the hosted success page shows a button to it) and `return_url` (a *backend* callback
+SumUp POSTs to when a payment changes). We had put the ticket page in `return_url` and never set
+`redirect_url`, so buyers finished on SumUp's page with nowhere to go, and SumUp's notifications
+were being sent to a static page that cannot receive them (status was only ever caught by polling).
+Fixed: `redirect_url` = the ticket page, `return_url` = the webhook. SumUp echoes the redirect
+back when read (verified via the SumUp connection test, which now checks this). The webhook now
+accepts the checkout id under any of SumUp's shapes (top-level `id`, `checkout_id`, or under
+`payload`). The return address is the site the buyer is on, so previews return to the preview.
+SumUp's success page shows a *button* back (not an automatic redirect) — we can't change that,
+so the buy page, the payment-link message and the overlay all tell buyers to tap it.
+
+**Keeping the ticket** (ticket page): one big "💾 Save or share my ticket" — on a phone the native
+share sheet (Save Image, Messages, WhatsApp, Mail, Files…), on a computer a download — plus
+"✉️ Email it to me", "💬 Text it to me" (each opens the buyer's own app pre-filled with the ticket
+numbers and a permanent link) and "🔗 Copy link". The page itself is the permanent ticket (the
+link never expires). Physical-ticket buyers get the same tools for a digital **receipt** ("keep your
+physical ticket — it is your entry"). We send nothing ourselves: automatic SMS/email would need a
+paid messaging service; this needs none and no sign-up.
+- Seller-attended sales (cash/machine) now have a ticket page too (an online ticket bought in
+  person is otherwise only a message); a voided one shows "Cancelled".
+- Ticket messages sent by sellers now include a permanent ticket/receipt link.
+
+**Find my ticket** (buy page: "Already paid? Find your ticket"): a buyer who closed SumUp's page can
+get their ticket back by typing the name + mobile/email they bought with. BOTH must match, one
+campaign only, paid link purchases only, forgiving of case/spacing/phone formatting, and limited
+to 10 searches an hour per visitor and per contact.
+
+**Found by Justin's first real public purchase (£1, ticket 10):** SumUp had the money but our
+Sales tab still said "Pending" (with a Void button). Cause: the live site still had the old return
+path, so SumUp's "paid" notification never reached us, and nothing else asked. Fix, beyond the
+return-path repair above: **Sales, Needs Attention and the dashboard now ask SumUp about any
+still-pending link payment (newest 15) before building their lists/totals**, so paid money can't
+keep showing as Pending; status wording is clearer ("awaiting payment", "cash to reconcile",
+"link expired"). Void stays safe: it re-checks SumUp and refuses a payment that has arrived
+("refund it directly in SumUp"). Verified on the preview with Justin's real paid checkout.
+
+---
+
+## 27. One look across the whole app — built 2026-09-25 (on dev; preview only)
+
+Justin liked the Hall Booking site's palette and type and asked for it everywhere, with bigger text.
+- **Palette** (from Hall Booking): deep pine `#2E4739` / `#22352A`, pale sage paper `#E4E7DE`,
+  surface `#FBFBF8`, brass `#A9822F`, ink `#1E241F`. Success / warning / error keep their own greens,
+  oranges and reds so they never read as "brand". Brass is used only for small caps lettering and accents
+  (too faint on sage for body text).
+- **Fonts**: Marcellus (small-caps lettering, header), Spectral (headings and numbers — totals,
+  steppers, ticket numbers), Hanken Grotesk (body). **Self-hosted** in `public/fonts` (≈117 KB,
+  Latin subset) rather than Google's servers, so they load fast on a weak signal, work offline
+  (service worker cache v2), and fit the site's own-origin-only security policy. Cached for a year.
+- **One shared file**, `public/theme.css`, defines the palette, font faces and base type; the old
+  variable names each page already used are mapped onto it, so retheming later is a one-file change.
+- **Bigger**: base text 17px (was 15–16), buttons/inputs 16.5–18px, larger stepper, chips, tables and
+  totals. Applied to the seller/admin app (deep-green header with the church name in brass lettering),
+  the public buy page (pine hero, brass shuffle button) and the ticket page (and the saved ticket picture,
+  which waits for the fonts before it draws).
+
+**Single-view check (Justin asked to confirm no scrolling on Sell and the public page) — 2026-09-25.**
+Measured after the new look: the Sell screen was fine for a typical sale (~480px) but the public buy
+page was 950–1,560px tall — not a single view. Fixed:
+- **Buy page rebuilt as one screen** (`100dvh` shell): slim brand header with the thank-you always
+  visible, ticket card (quantity, Assign/Pick, number list), name + contact, one line of small print,
+  and a pay bar fixed at the bottom. **Only the number list scrolls, inside its own box**, when many
+  numbers are picked; nothing else moves. "Prizes & details" and "Find your ticket" are pop-up sheets.
+  The list has a zero flex basis + minimum height, so it takes only spare room and can never be
+  squeezed so far that cards overlap. Compaction kicks in at ≤700px and ≤600px screen heights.
+- **Sell screen compacted** for shorter phones (≤700px / ≤600px) and the stats bar is one line
+  ("12 sold · £24 cash · £10 card · ⏳ £6").
+- Result (measured in-page): fits with no page scrolling down to ~560px-tall screens in both modes
+  (an iPhone in Safari is ~664px). Sell: typical sale ends ~480px; worst case (two campaigns, two
+  ticket types, five tickets, an error showing) ends ~620px. Below ~560px, or with a Sell screen showing
+  its worst case plus the Recent-sales bar, a small scroll can appear.
+
+---
+
+## 28. Photo evidence for machine payments — dropped — 2026-09-25
+
+At the BBQ nobody used the "photo of the payment" option on card-machine sales, and a Pay at
+Machine sale is trust-based anyway: the seller vouches that they saw the payment. Removed entirely:
+the "📷 Add photo" button on the Sell screen, the "Photo" button on the Sales tab, the two backend
+actions (`upload_payment_photo`, `get_payment_photo_url`) and the "Has Photo Evidence" column in
+the campaign CSV report. This retires non-negotiable #6 (§2). Left in place, unused: the
+`payments.photo_path` column and the private `payment-evidence` storage bucket (holding only two
+tiny test images from our own testing) — harmless, and removable later if wanted. The camera
+permission was never requested by the app (the photo input used the phone's own camera picker).

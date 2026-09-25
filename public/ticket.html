@@ -3,36 +3,36 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#2E4739">
 <title>Your ticket — St.Vincent De Paul Church</title>
+<link rel="stylesheet" href="/theme.css">
 <style>
-  :root {
-    --ink: #1c1c1e; --paper: #fdfcf9; --line: #e4e0d8;
-    --accent: #8a3b2b; --accent-dim: #f2e4de;
-    --good: #3a6b4f; --good-dim: #e2efe6;
-    --warn: #b5651d; --warn-dim: #fbead9;
-    --bad: #a4342a; --bad-dim: #f6dedb;
-  }
   * { box-sizing: border-box; }
-  body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--paper); color:var(--ink); }
-  header { padding: 18px 20px; border-bottom: 1px solid var(--line); text-align:center; }
-  header h1 { font-size: 17px; margin:0; }
+  body { margin:0; }
+  header { padding:14px 16px; background:var(--pine); color:#F1F0E7; text-align:center; }
+  header h1 { margin:0; font-family:var(--font-caps); font-weight:400; font-size:19px; letter-spacing:.04em; }
   main { max-width: 480px; margin: 0 auto; padding: 20px; }
-  .card { background:white; border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:16px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:16px; }
   .center { text-align:center; }
-  .muted { color:#888; font-size:13px; }
-  .badge { display:inline-block; padding:4px 14px; border-radius:20px; font-size:13px; font-weight:700; }
+  .muted { color:var(--slate); font-size:15px; }
+  .badge { display:inline-block; padding:5px 15px; border-radius:20px; font-size:15px; font-weight:700; }
   .badge.ok { background:var(--good-dim); color:var(--good); }
   .badge.warn { background:var(--warn-dim); color:var(--warn); }
   .badge.bad { background:var(--bad-dim); color:var(--bad); }
-  .num { font-size:34px; font-weight:700; letter-spacing:0.5px; margin:10px 0; }
-  button.primary { width:100%; padding:15px; font-size:16px; font-weight:600; background:var(--accent); color:white; border:none; border-radius:12px; margin-top:14px; cursor:pointer; }
-  button.secondary { width:100%; padding:13px; font-size:14px; background:var(--accent-dim); color:var(--accent); border:none; border-radius:12px; margin-top:8px; cursor:pointer; }
+  .num { font-family:var(--font-head); font-size:38px; font-weight:600; letter-spacing:0.5px; margin:10px 0; color:var(--pine); }
+  button.primary { width:100%; padding:16px; font-size:18px; font-weight:600; background:var(--accent); color:white; border:none; border-radius:12px; margin-top:14px; cursor:pointer; }
+  button.secondary { width:100%; padding:14px; font-size:16px; font-weight:600; background:var(--accent-dim); color:var(--accent); border:none; border-radius:12px; margin-top:8px; cursor:pointer; }
   #ticketCanvas { display:none; }
   #ticketImg { width:100%; border-radius:12px; border:1px solid var(--line); margin-top:14px; }
-  .stat { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .stat { display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line); font-size:16.5px; }
   .stat:last-child { border:none; }
-  .thanks { background:#fbefd4; color:#5a4321; border:1px solid #f0dcaa; border-radius:12px; padding:10px 12px; margin:14px 0 0; font-size:14px; line-height:1.45; text-align:left; }
-  .details-text { white-space:pre-wrap; font-size:14px; color:#444; line-height:1.5; margin:10px 0; }
+  .thanks { background:var(--brass-dim); color:var(--pine-deep); border:1px solid #DCCB98; border-radius:12px; padding:12px 14px; margin:14px 0 0; font-size:16px; line-height:1.5; text-align:left; }
+  .details-text { white-space:pre-wrap; font-size:16px; color:var(--slate); line-height:1.5; margin:10px 0; }
+  .keep { margin-top:18px; padding-top:16px; border-top:1px solid var(--line); text-align:left; }
+  .keep h3 { margin:0 0 4px; font-size:22px; }
+  .row3 { display:flex; gap:6px; }
+  .row3 .secondary { padding:12px 4px; font-size:14.5px; margin-top:8px; flex:1; }
+  #keepMsg { min-height:18px; margin-top:8px; text-align:center; color:var(--good); font-size:13px; font-weight:600; }
 </style>
 </head>
 <body>
@@ -65,6 +65,7 @@ function thankYouText(d) { return d.thank_you || (d.org_name ? 'Thank you for su
 function render(d) {
   const app = document.getElementById('app');
   if (d.org_name) document.getElementById('brand').textContent = '⛪ ' + d.org_name;
+  if (d.status !== 'pending') { clearInterval(pollHandle); pollHandle = null; } // final answer: stop re-checking
   const when = new Date(d.sold_at).toLocaleString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
   const numbers = d.tickets.map(t => t.display_number).join(', ');
   const byTier = {};
@@ -79,7 +80,10 @@ function render(d) {
       <p style="margin-top:14px">Thank you! Your payment for <b>${esc(d.campaign_name)}</b> ticket${d.tickets.length>1?'s':''} <b>${esc(numbers)}</b> has come through.</p>
       <p class="muted">The ticket itself was already given to you — there's nothing else to do.</p>
       <p class="thanks">💛 ${esc(thankYouText(d))}</p>
-    </div>`;
+      ${keepHtml(d, numbers)}
+    </div>
+    <canvas id="ticketCanvas" width="720" height="1000"></canvas>`;
+    drawWhenFontsReady(d, numbers, denom, when);
     return;
   }
 
@@ -97,12 +101,10 @@ function render(d) {
         <div class="stat"><span>Sold</span><b>${esc(when)}</b></div>
         <p class="thanks">💛 ${esc(thankYouText(d))}</p>
       </div>
-      <img id="ticketImg" alt="Your ticket">
-      <a id="saveLink" download="ticket-${numbers.replace(/[^a-zA-Z0-9]/g,'')}.png"><button class="primary">💾 Save ticket image</button></a>
-      <p class="muted" style="margin-top:8px">On iPhone: press and hold the image above, then "Save to Photos".</p>
+      ${keepHtml(d, numbers)}
     </div>
     <canvas id="ticketCanvas" width="720" height="1000"></canvas>`;
-    drawTicketImage(d, numbers, denom, when);
+    drawWhenFontsReady(d, numbers, denom, when);
     return;
   }
 
@@ -117,11 +119,67 @@ function render(d) {
   }
 
   clearInterval(pollHandle); pollHandle = null;
+  if (d.status === 'void') {
+    app.innerHTML = `<div class="card center">
+      <div class="badge bad">Cancelled</div>
+      <p style="margin-top:14px">This ticket for <b>${esc(d.campaign_name)}</b> was cancelled. If you think that's a mistake, please contact the person who sold it to you.</p>
+    </div>`;
+    return;
+  }
   app.innerHTML = `<div class="card center">
     <div class="badge bad">Link expired</div>
     <p style="margin-top:14px">This payment link for <b>${esc(d.campaign_name)}</b> ${d.tickets.length ? `(ticket${d.tickets.length>1?'s':''} ${esc(numbers)}) ` : ''}wasn't completed in time.</p>
     <p class="muted">${d.is_physical ? 'Your physical ticket is still with you — please contact the seller about paying another way.' : 'That number has been released and may now belong to someone else. Please ask for a fresh link.'}</p>
   </div>`;
+}
+
+// ---- Keep your ticket: save it to the device, or send it to yourself with the phone's own apps ----
+// (No text/email is sent by us — that would need a paid messaging service. The buyer taps a button
+// and their own Messages / Mail / WhatsApp does the sending, so it costs nothing and needs no signup.)
+function ticketUrl() { return location.origin + location.pathname + '?payment_id=' + encodeURIComponent(paymentId); }
+function ticketText(d, numbers) {
+  return `Your ${d.campaign_name} ${d.is_physical ? 'receipt' : 'ticket'} — no. ${numbers}.\nView or save it any time:\n${ticketUrl()}\n\n${thankYouText(d)}`;
+}
+function keepHtml(d, numbers) {
+  const phys = d.is_physical, what = phys ? 'receipt' : 'ticket';
+  return `<div class="keep">
+    <h3>${phys ? '🧾 Keep a receipt' : '🎟️ Keep your ticket'}</h3>
+    <p class="muted" style="margin:0 0 4px">${phys ? 'Your physical ticket is your entry — keep it safe. This is a digital receipt for your records.' : 'This page is your ticket, and it will always show it. Save it to your device or send it to yourself:'}</p>
+    <button class="primary" id="shareBtn" onclick="shareTicket()">💾 Save or share my ${what}</button>
+    <div class="row3">
+      <button class="secondary" onclick="emailIt()">✉️ Email it to me</button>
+      <button class="secondary" onclick="textIt()">💬 Text it to me</button>
+      <button class="secondary" onclick="copyLink()">🔗 Copy link</button>
+    </div>
+    <div id="keepMsg" role="status" aria-live="polite"></div>
+    <img id="ticketImg" alt="Your ${what}">
+    <p class="muted" style="margin-top:8px">On an iPhone you can also press and hold the picture, then choose "Save to Photos".</p>
+  </div>`;
+}
+let lastData = null, lastNumbers = '';
+function keepMsg(t) { const m = document.getElementById('keepMsg'); if (m) { m.textContent = t; setTimeout(() => { if (m.textContent === t) m.textContent = ''; }, 5000); } }
+async function shareTicket() {
+  const canvas = document.getElementById('ticketCanvas');
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+  const name = 'ticket-' + lastNumbers.replace(/[^a-zA-Z0-9]/g, '') + '.png';
+  const file = new File([blob], name, { type: 'image/png' });
+  // On a phone this opens the native share sheet (Save Image, Messages, WhatsApp, Mail, Files…).
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'My ticket', text: ticketText(lastData, lastNumbers) }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  // On a computer (or an older phone): save it straight to Downloads.
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  keepMsg('✓ Saved to your Downloads');
+}
+function emailIt() {
+  location.href = 'mailto:?subject=' + encodeURIComponent('My ' + lastData.campaign_name + ' ticket') + '&body=' + encodeURIComponent(ticketText(lastData, lastNumbers));
+}
+function textIt() { location.href = 'sms:?&body=' + encodeURIComponent(ticketText(lastData, lastNumbers)); }
+async function copyLink() {
+  try { await navigator.clipboard.writeText(ticketUrl()); keepMsg('✓ Link copied — paste it anywhere to keep it'); }
+  catch { prompt('Copy this link:', ticketUrl()); }
 }
 
 // Renders a shareable/saveable ticket image client-side — no server-side image generation
@@ -141,46 +199,53 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
   }
   return y;
 }
+// The saved picture uses the same fonts as the page; a canvas only draws a font that has loaded,
+// so wait for them (and draw regardless if they can't load, using the fallbacks).
+function drawWhenFontsReady(d, numbers, denom, when) {
+  const go = () => drawTicketImage(d, numbers, denom, when);
+  if (!document.fonts || !document.fonts.load) { go(); return; }
+  Promise.all([document.fonts.load('30px Marcellus'), document.fonts.load('600 40px Spectral'), document.fonts.load("18px 'Hanken Grotesk'"), document.fonts.load("bold 22px 'Hanken Grotesk'")]).then(go, go);
+}
 function drawTicketImage(d, numbers, denom, when) {
+  lastData = d; lastNumbers = numbers;
   const canvas = document.getElementById('ticketCanvas');
   const ctx = canvas.getContext('2d');
   const W = canvas.width, pad = 50;
-  ctx.fillStyle = '#fdfcf9'; ctx.fillRect(0, 0, W, canvas.height);
-  ctx.strokeStyle = '#e4e0d8'; ctx.lineWidth = 3; ctx.strokeRect(10, 10, W-20, canvas.height-20);
+  ctx.fillStyle = '#FBFBF8'; ctx.fillRect(0, 0, W, canvas.height);
+  ctx.strokeStyle = '#A9822F'; ctx.lineWidth = 3; ctx.strokeRect(10, 10, W-20, canvas.height-20);
   let y = 70;
-  ctx.fillStyle = '#8a3b2b'; ctx.font = 'bold 30px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#2E4739'; ctx.font = "30px Marcellus, Georgia, serif"; ctx.textAlign = 'left';
   ctx.fillText('⛪ ' + (d.org_name || 'St.Vincent De Paul Church'), pad, y);
-  if (d.org_address) { y += 30; ctx.fillStyle = '#888'; ctx.font = '18px sans-serif'; ctx.fillText(d.org_address, pad, y); }
-  y += 50; ctx.strokeStyle = '#e4e0d8'; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke();
-  y += 55; ctx.fillStyle = '#1c1c1e'; ctx.font = 'bold 36px sans-serif'; ctx.fillText(d.campaign_name, pad, y);
-  y += 20; ctx.fillStyle = '#888'; ctx.font = '18px sans-serif'; ctx.fillText('TICKET NO.', pad, y += 40);
-  ctx.fillStyle = '#8a3b2b'; ctx.font = 'bold 52px sans-serif'; ctx.fillText(numbers, pad, y += 55);
+  if (d.org_address) { y += 30; ctx.fillStyle = '#5C6159'; ctx.font = "18px 'Hanken Grotesk', system-ui, sans-serif"; ctx.fillText(d.org_address, pad, y); }
+  y += 50; ctx.strokeStyle = '#D3D6CA'; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke();
+  y += 55; ctx.fillStyle = '#1E241F'; ctx.font = "600 40px Spectral, Georgia, serif"; ctx.fillText(d.campaign_name, pad, y);
+  y += 20; ctx.fillStyle = '#5C6159'; ctx.font = "18px 'Hanken Grotesk', system-ui, sans-serif"; ctx.fillText(d.is_physical ? 'PAYMENT RECEIPT — TICKET NO.' : 'TICKET NO.', pad, y += 40);
+  ctx.fillStyle = '#2E4739'; ctx.font = "600 58px Spectral, Georgia, serif"; ctx.fillText(numbers, pad, y += 55);
   y += 50;
   if (d.campaign_details) {
-    ctx.fillStyle = '#333'; ctx.font = '18px sans-serif';
+    ctx.fillStyle = '#333'; ctx.font = "18px 'Hanken Grotesk', system-ui, sans-serif";
     y = wrapText(ctx, d.campaign_details, pad, y, W - pad*2, 26);
     y += 20;
   }
-  ctx.strokeStyle = '#e4e0d8'; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke(); y += 40;
-  ctx.font = '20px sans-serif';
+  ctx.strokeStyle = '#D3D6CA'; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W-pad, y); ctx.stroke(); y += 40;
+  ctx.font = "20px 'Hanken Grotesk', system-ui, sans-serif";
   const row = (label, value) => {
     ctx.fillStyle = '#666'; ctx.textAlign = 'left'; ctx.fillText(label, pad, y);
-    ctx.fillStyle = '#1c1c1e'; ctx.textAlign = 'right'; ctx.fillText(value, W-pad, y);
+    ctx.fillStyle = '#1E241F'; ctx.textAlign = 'right'; ctx.fillText(value, W-pad, y);
     ctx.textAlign = 'left'; y += 34;
   };
   row(denom, '£' + d.amount.toFixed(2));
   row('Buyer', d.buyer_name || '—');
   row('Sold', when);
   y += 20;
-  ctx.fillStyle = '#5a4321'; ctx.font = '18px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#22352A'; ctx.font = "18px 'Hanken Grotesk', system-ui, sans-serif"; ctx.textAlign = 'left';
   y = wrapText(ctx, thankYouText(d), pad, y + 6, W - pad*2, 26) + 14;
-  ctx.fillStyle = '#e2efe6'; ctx.fillRect(pad, y, W - pad*2, 50);
-  ctx.fillStyle = '#3a6b4f'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#DDEBDF'; ctx.fillRect(pad, y, W - pad*2, 50);
+  ctx.fillStyle = '#3E7A4E'; ctx.font = "bold 22px 'Hanken Grotesk', system-ui, sans-serif"; ctx.textAlign = 'center';
   ctx.fillText('✓ PAID', W/2, y + 33);
 
   const url = canvas.toDataURL('image/png');
   document.getElementById('ticketImg').src = url;
-  document.getElementById('saveLink').href = url;
 }
 
 load();

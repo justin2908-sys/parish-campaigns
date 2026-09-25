@@ -603,7 +603,7 @@ async function exportCampaignReport(session, { campaign_id }) {
   const headers = [
     'Ticket Number', 'Display Number', 'Block', 'Tier', 'Ticket Status', 'Buyer Name', 'Method', 'Payment Amount',
     'Payment Status', 'Seller', 'Sold At', 'Cash Confirmed By', 'Cash Confirmed At',
-    'Voided', 'Void Reason', 'SumUp Reference', 'SumUp Transaction Code', 'Link Sent To', 'Link Sent Via', 'Link Sent At', 'Has Photo Evidence',
+    'Voided', 'Void Reason', 'SumUp Reference', 'SumUp Transaction Code', 'Link Sent To', 'Link Sent Via', 'Link Sent At',
   ];
   const rows = tickets.map(t => {
     const p = t.payment_id ? paymentById[t.payment_id] : null;
@@ -628,7 +628,6 @@ async function exportCampaignReport(session, { campaign_id }) {
       p ? p.contact_value || '' : '',
       p ? p.contact_channel || '' : '',
       p ? p.link_shared_at || '' : '',
-      p && p.photo_path ? 'Yes' : '',
     ];
   });
 
@@ -1084,10 +1083,15 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
     body: JSON.stringify({
       checkout_reference: ref, amount: Number(amount), currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE,
       description: `${campaignName} — ticket${ticketNumbers.length > 1 ? 's' : ''} ${ticketNumbers.join(', ')}${orgName ? ` · ${orgName}` : ''}`,
-      // Where the BUYER'S OWN BROWSER lands after paying — must be a real page, never the
-      // JSON webhook endpoint. Carries this sale's own id so the page knows what to show;
-      // that id is an unguessable UUID and the page it points to discloses nothing sensitive.
-      return_url: `${baseUrl}/ticket.html?payment_id=${payment_id}`,
+      // SumUp has TWO different addresses and they must not be mixed up:
+      //  - redirect_url: where the BUYER'S BROWSER is sent back to (SumUp's success page shows a
+      //    button to it). Our ticket page — carries this sale's own unguessable id, and the page
+      //    discloses nothing sensitive.
+      //  - return_url: a BACKEND callback; SumUp POSTs here when the payment's status changes.
+      // (Both were once wrongly the ticket page, so buyers ended on SumUp's page with no way back
+      // and SumUp's notifications went to a page that cannot receive them.)
+      redirect_url: `${baseUrl}/ticket.html?payment_id=${payment_id}`,
+      return_url: `${baseUrl}/api/sumup_webhook`,
       hosted_checkout: { enabled: true },
     }),
   });
@@ -1109,7 +1113,6 @@ async function publicPaymentStatus({ payment_id }) {
   if (!payment_id) throw httpError(400, 'payment_id is required');
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(name, details_text, org_id)').eq('id', payment_id).maybeSingle();
   if (!payment) throw httpError(404, 'Sale not found');
-  if (payment.method !== 'link') throw httpError(400, 'This sale was not paid by link');
 
   // Fetched BEFORE syncCheckout deliberately: an expired/failed ONLINE sale gets its ticket
   // rows released (cleared) by syncCheckout, so reading them first captures what the buyer
@@ -1126,7 +1129,12 @@ async function publicPaymentStatus({ payment_id }) {
   }));
   const isPhysical = ticketRows && ticketRows.length ? blockById[ticketRows[0].block_id].type === 'physical' : true;
 
-  const status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
+  // A link sale is only paid once SumUp says so. A seller-attended sale (cash / machine) has no
+  // link to check: the seller took the money in person, so its ticket page shows as issued
+  // unless the sale was voided — this is what lets an online ticket bought in person be kept too.
+  let status;
+  if (payment.method === 'link') status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
+  else status = payment.status === 'void' ? 'void' : 'paid';
   const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text').eq('id', payment.campaigns.org_id).single();
 
   return {
@@ -1142,6 +1150,44 @@ async function publicPaymentStatus({ payment_id }) {
     tickets,
     sold_at: payment.created_at,
   };
+}
+
+// "Find my ticket": a buyer who paid but closed SumUp's page before coming back can look their
+// ticket up again from the name and mobile/email they bought with. BOTH must match, it is limited
+// to the one campaign whose page they are on, only link purchases are searched, and it is
+// rate-limited per visitor and per contact — so it can't be used to browse other people's tickets.
+const FIND_MAX_PER_HOUR = 10;
+const sameName = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
+async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
+  if (clientIp && (await rateHit(`find:${clientIp}`, 3600)) > FIND_MAX_PER_HOUR) {
+    throw httpError(429, 'Too many searches from your connection — please wait a while and try again.');
+  }
+  const name = cleanName(buyer_name, 'Your name');
+  if (!name) throw httpError(400, 'Please enter your name.');
+  const contact = parseContact(contact_value);
+  if ((await rateHit(`find:c:${contact.value}`, 3600)) > FIND_MAX_PER_HOUR) {
+    throw httpError(429, 'Too many searches for those details — please wait a while and try again.');
+  }
+  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('binned', false).maybeSingle();
+  if (!campaign) throw httpError(404, 'This campaign is not available.');
+
+  const { data: rows } = await supabase.from('payments').select('id, amount, created_at, payer_name, status, method, sumup_checkout_id, campaign_id')
+    .eq('campaign_id', campaign_id).eq('method', 'link').eq('contact_value', contact.value).in('status', ['paid', 'pending'])
+    .order('created_at', { ascending: false }).limit(10);
+  const mine = (rows || []).filter(p => sameName(p.payer_name, name));
+  const purchases = [];
+  let checked = 0;
+  for (const p of mine) {
+    let status = p.status;
+    // Paid a moment ago and our records haven't caught up yet? Ask SumUp (a few at most).
+    if (status === 'pending' && checked < 3) { checked++; try { status = await syncCheckout(p); } catch { /* leave it out this time */ } }
+    if (status !== 'paid') continue;
+    const { data: tix } = await supabase.from('tickets').select('ticket_number, block_id').eq('payment_id', p.id).order('ticket_number');
+    const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', campaign_id);
+    const prefix = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
+    purchases.push({ payment_id: p.id, amount: Number(p.amount), sold_at: p.created_at, tickets: (tix || []).map(t => `${prefix[t.block_id] || ''}${t.ticket_number}`) });
+  }
+  return { purchases };
 }
 
 // Puts a sale's tickets back to unsold — physical and online alike, both are real
@@ -1205,9 +1251,13 @@ async function checkoutStatus(session, { payment_id }) {
 // session), so it trusts nothing in the request: it only reads WHICH checkout changed, then
 // re-fetches that checkout from SumUp with our own key and updates our records from that.
 async function sumupWebhook(body) {
-  const checkoutId = body.id || body.checkout_id || (body.payload && (body.payload.checkout_id || body.payload.id));
-  if (!checkoutId) return { ok: true, ignored: 'no checkout id' };
-  const { data: payment } = await supabase.from('payments').select('*').eq('sumup_checkout_id', String(checkoutId)).maybeSingle();
+  // SumUp's notification shapes differ between products; the checkout id may sit under any of
+  // these. Try each against OUR records — an id that isn't one of our checkouts simply matches
+  // nothing, so a wrong guess is harmless.
+  const candidates = [body.checkout_id, body.payload && body.payload.checkout_id, body.id, body.payload && body.payload.id]
+    .filter(v => typeof v === 'string' && v.length > 0 && v.length < 100);
+  if (!candidates.length) return { ok: true, ignored: 'no checkout id' };
+  const { data: payment } = await supabase.from('payments').select('*').in('sumup_checkout_id', candidates).limit(1).maybeSingle();
   if (!payment) return { ok: true, ignored: 'unknown checkout' };
   const status = await syncCheckout(payment);
   return { ok: true, status };
@@ -1231,12 +1281,19 @@ async function sumupCheck(session) {
   const co = await fetch('https://api.sumup.com/v0.1/checkouts', {
     method: 'POST',
     headers: { Authorization: `Bearer ${SUMUP_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ checkout_reference: ref, amount: 0.01, currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE, description: 'Connection test', return_url: `${baseUrl}/api/sumup_webhook`, hosted_checkout: { enabled: true } }),
+    body: JSON.stringify({ checkout_reference: ref, amount: 0.01, currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE, description: 'Connection test', redirect_url: `${baseUrl}/ticket.html`, return_url: `${baseUrl}/api/sumup_webhook`, hosted_checkout: { enabled: true } }),
   });
   const coData = await co.json().catch(() => ({}));
   steps.push({ step: 'Can create a payment link', ok: co.ok, detail: co.ok ? 'Yes' : `HTTP ${co.status} — ${coData.message || coData.error_message || JSON.stringify(coData)}` });
   steps.push({ step: 'Link is a shareable payment page', ok: !!coData.hosted_checkout_url, detail: coData.hosted_checkout_url ? 'Yes' : 'No hosted link returned — hosted checkout may not be enabled on the account.' });
   if (co.ok && coData.id) {
+    // Buyers only get back to our ticket page if SumUp holds our redirect address. Read the
+    // checkout back to see whether it does (SumUp may not repeat it, in which case only a real
+    // payment can prove it — say so rather than claim a certainty we don't have).
+    const back = await fetch(`https://api.sumup.com/v0.1/checkouts/${coData.id}`, { headers: { Authorization: `Bearer ${SUMUP_API_KEY}` } });
+    const backData = await back.json().catch(() => ({}));
+    const echoed = coData.redirect_url || backData.redirect_url;
+    steps.push({ step: 'Buyers are sent back to our ticket page after paying', ok: !echoed || String(echoed).includes('/ticket.html'), detail: echoed ? `Yes — SumUp holds ${echoed}` : 'Sent to SumUp (it does not repeat this back, so a real payment is the only proof)' });
     const del = await fetch(`https://api.sumup.com/v0.1/checkouts/${coData.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${SUMUP_API_KEY}` } });
     steps.push({ step: 'Test checkout cancelled', ok: del.ok, detail: del.ok ? 'Yes — nothing left behind' : `HTTP ${del.status} (harmless — it will simply expire)` });
   }
@@ -1337,12 +1394,25 @@ async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
   };
 }
 
+// Any Pay-by-Link payment still marked pending is asked about at SumUp before a list or total is
+// built, so money that has actually arrived never keeps showing as "Pending" (SumUp's notification
+// can be late, or missed). Bounded — newest 15, and paid/failed ones are never re-asked — so
+// opening a screen can't fan out into a flood of SumUp calls.
+async function syncOpenLinkPayments(campaignIds) {
+  if (!campaignIds || !campaignIds.length) return;
+  const { data: open } = await supabase.from('payments').select('*').in('campaign_id', campaignIds)
+    .eq('method', 'link').eq('status', 'pending').not('sumup_checkout_id', 'is', null)
+    .order('created_at', { ascending: false }).limit(15);
+  await Promise.all((open || []).map(p => syncCheckout(p).catch(() => { /* leave it pending; the next look will try again */ })));
+}
+
 async function dashboardState(session, { campaign_id } = {}) {
   requireOrgRole(session, ['admin', 'superadmin']);
   await releaseStalePendingLinkPayments();
 
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
+  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
   const scopedIds = campaign_id ? [campaign_id] : orgCampaignIds;
   if (campaign_id && !orgCampaignIds.includes(campaign_id)) throw httpError(404, 'Campaign not found');
 
@@ -1422,6 +1492,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
   requireOrgRole(session, ['admin', 'superadmin']);
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
+  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
   let q = supabase.from('payments').select('*').order('created_at', { ascending: false }).limit(75);
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
@@ -1435,7 +1506,6 @@ async function listRecentPayments(session, { campaign_id } = {}) {
     method: p.method, amount: p.amount, status: p.status,
     payer_name: p.payer_name, contact_value: p.contact_value, contact_channel: p.contact_channel,
     created_at: p.created_at,
-    has_photo: !!p.photo_path,
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
   return { payments: out };
@@ -1446,6 +1516,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   await releaseStalePendingLinkPayments();
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
+  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
   let q = supabase.from('payments').select('*').eq('method', 'link').in('status', ['pending', 'failed']).order('created_at', { ascending: false });
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
@@ -1578,37 +1649,6 @@ async function anonymizeOldData(session) {
   return { ok: true, payments_cleared: (payments || []).length, tickets_cleared: (tickets || []).length };
 }
 
-// Optional supporting evidence for manual card sales (e.g. a photo of the reader showing
-// "Approved"). Never blocks the sale itself — this is attached after the fact, whenever
-// convenient. Stored in a PRIVATE bucket; viewing always goes through a short-lived signed URL,
-// never a public link, since this is financial evidence and should stay access-controlled.
-async function uploadPaymentPhoto(session, { payment_id, image_base64 }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  if (!image_base64) throw httpError(400, 'No image provided');
-  // Only a payment in the caller's own church — and a seller only for their own sale.
-  const { data: payment } = await supabase.from('payments').select('id, seller_id, campaigns!inner(org_id)').eq('id', payment_id).single();
-  if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
-  if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only add a photo to your own sale');
-
-  const buffer = Buffer.from(image_base64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-  if (buffer.length > 4 * 1024 * 1024) throw httpError(400, 'Image too large — please use a smaller photo');
-  const path = `${payment_id}-${Date.now()}.jpg`;
-  const { error } = await supabase.storage.from('payment-evidence').upload(path, buffer, { contentType: 'image/jpeg' });
-  if (error) throw httpError(500, 'Photo upload failed: ' + error.message);
-
-  await supabase.from('payments').update({ photo_path: path }).eq('id', payment_id);
-  return { ok: true };
-}
-
-async function getPaymentPhotoUrl(session, { payment_id }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
-  const { data: payment } = await supabase.from('payments').select('photo_path').eq('id', payment_id).single();
-  if (!payment || !payment.photo_path) throw httpError(404, 'No photo attached to this payment');
-  const { data, error } = await supabase.storage.from('payment-evidence').createSignedUrl(payment.photo_path, 300); // 5 min
-  if (error) throw httpError(500, error.message);
-  return { url: data.signedUrl };
-}
-
 async function sellerState(session, { campaign_id } = {}) {
   requireRole(session, ['seller', 'admin', 'superadmin']);
   let payQ = supabase.from('payments').select('*').eq('seller_id', session.uid).neq('status', 'void').neq('status', 'failed');
@@ -1680,6 +1720,7 @@ const actions = {
   public_check_ticket: (s, b) => publicCheckTicket(b),
   public_check_tickets: (s, b) => publicCheckTickets(b),
   public_random_numbers: (s, b) => publicRandomNumbers(b),
+  public_find_tickets: (s, b) => publicFindTickets(b),
   public_purchase: (s, b) => publicPurchase(b),
   log_link_shared: (s, b) => logLinkShared(s, b),
   sumup_check: (s) => sumupCheck(s),
@@ -1694,14 +1735,18 @@ const actions = {
   retention_flags: (s) => retentionFlags(s),
   anonymize_old_data: (s) => anonymizeOldData(s),
   seller_state: (s, b) => sellerState(s, b),
-  upload_payment_photo: (s, b) => uploadPaymentPhoto(s, b),
-  get_payment_photo_url: (s, b) => getPaymentPhotoUrl(s, b),
 };
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'POST only' });
   // Where SumUp should send payment notifications — this deployment's own address.
-  baseUrl = process.env.URL || `https://${event.headers['x-forwarded-host'] || event.headers.host}`;
+  // Use the address the request actually came to, so a draft preview sends buyers back to the
+  // preview and the live site to the live site. Only our own Netlify addresses (or the site's
+  // configured address) are trusted; anything else falls back to the configured address.
+  const reqHost = String(event.headers['x-forwarded-host'] || event.headers.host || '').split(',')[0].trim().toLowerCase();
+  const configuredHost = process.env.URL ? new URL(process.env.URL).host.toLowerCase() : '';
+  baseUrl = (/^[a-z0-9.-]+$/.test(reqHost) && (reqHost.endsWith('.netlify.app') || reqHost === configuredHost))
+    ? `https://${reqHost}` : (process.env.URL || `https://${reqHost}`);
   clientIp = String(event.headers['x-nf-client-connection-ip'] || String(event.headers['x-forwarded-for'] || '').split(',')[0] || '').trim().slice(0, 64);
   const action = event.path.split('/').pop();
   let body = {};
