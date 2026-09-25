@@ -810,3 +810,23 @@ still-pending link payment (newest 15) before building their lists/totals**, so 
 keep showing as Pending; status wording is clearer ("awaiting payment", "cash to reconcile",
 "link expired"). Void stays safe: it re-checks SumUp and refuses a payment that has arrived
 ("refund it directly in SumUp"). Verified on the preview with Justin's real paid checkout.
+
+---
+
+## 27. One look across the whole app — built 2026-09-25 (on dev; preview only)
+
+Justin liked the Hall Booking site's palette and type and asked for it everywhere, with bigger text.
+- **Palette** (from Hall Booking): deep pine `#2E4739` / `#22352A`, pale sage paper `#E4E7DE`,
+  surface `#FBFBF8`, brass `#A9822F`, ink `#1E241F`. Success / warning / error keep their own greens,
+  oranges and reds so they never read as "brand". Brass is used only for small caps lettering and accents
+  (too faint on sage for body text).
+- **Fonts**: Marcellus (small-caps lettering, header), Spectral (headings and numbers — totals,
+  steppers, ticket numbers), Hanken Grotesk (body). **Self-hosted** in `public/fonts` (≈117 KB,
+  Latin subset) rather than Google's servers, so they load fast on a weak signal, work offline
+  (service worker cache v2), and fit the site's own-origin-only security policy. Cached for a year.
+- **One shared file**, `public/theme.css`, defines the palette, font faces and base type; the old
+  variable names each page already used are mapped onto it, so retheming later is a one-file change.
+- **Bigger**: base text 17px (was 15–16), buttons/inputs 16.5–18px, larger stepper, chips, tables and
+  totals. Applied to the seller/admin app (deep-green header with the church name in brass lettering),
+  the public buy page (pine hero, brass shuffle button) and the ticket page (and the saved ticket picture,
+  which waits for the fonts before it draws).
