@@ -333,11 +333,27 @@ async function createCampaign(session, { name, tiers, blocks, details_text }) {
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
   if (!blocks || !blocks.length) throw httpError(400, 'Add at least one ticket block');
-  for (const b of blocks) {
+  // Checked BEFORE anything is created, so a mistake leaves nothing half-built behind.
+  const ranges = blocks.map((b, i) => {
     if (!['physical', 'digital'].includes(b.type)) throw httpError(400, `Unknown block type: ${b.type}`);
-    if (b.range_start == null || b.range_end == null || Number(b.range_end) < Number(b.range_start)) {
-      throw httpError(400, "Every ticket block needs a start and end number, with end after start");
+    const s = Number(b.range_start), e = Number(b.range_end);
+    if (b.range_start === '' || b.range_end === '' || !Number.isInteger(s) || !Number.isInteger(e) || s < 1 || e < s) {
+      throw httpError(400, `Series ${i + 1}: enter a first and last number (whole numbers, from 1 up), with the last at or after the first.`);
     }
+    if (e - s + 1 > MAX_SERIES_SIZE) throw httpError(400, `Series ${i + 1}: a series can hold at most ${MAX_SERIES_SIZE.toLocaleString()} tickets.`);
+    const label = (b.label && b.label.trim()) || `Series ${i + 1}`;
+    return { s, e, label: `${label} (${b.type === 'digital' ? 'online' : 'physical'})` };
+  });
+  // Every ticket number must belong to exactly ONE series in the campaign — physical or online.
+  // The same number in a physical and an online series makes no sense: which ticket is it?
+  const bySize = ranges.slice().sort((a, b) => a.s - b.s);
+  let widest = bySize[0];
+  for (const cur of bySize.slice(1)) {
+    if (cur.s <= widest.e) {
+      const from = cur.s, to = Math.min(cur.e, widest.e);
+      throw httpError(400, `${widest.label} ${widest.s}–${widest.e} and ${cur.label} ${cur.s}–${cur.e} both include ${from === to ? `number ${from}` : `numbers ${from}–${to}`}. Every ticket number must belong to exactly one series, so give each series its own range.`);
+    }
+    if (cur.e > widest.e) widest = cur;
   }
 
   const { data: campaign, error: campErr } = await supabase.from('campaigns')
