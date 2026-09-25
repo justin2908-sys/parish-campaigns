@@ -769,3 +769,35 @@ GitHub to production had made every `git push origin main` a paid deploy (22 in 
   that address, not production.
 - **Publishing:** merge the PR with a message ending `PUBLISH-NOW` — one production deploy, only when
   Justin has said to publish.
+
+---
+
+## 26. Getting buyers back from SumUp and keeping their ticket — built 2026-09-25 (on dev; preview only)
+
+**The bug.** SumUp has two different address fields: `redirect_url` (where the buyer's *browser* goes
+back to — the hosted success page shows a button to it) and `return_url` (a *backend* callback
+SumUp POSTs to when a payment changes). We had put the ticket page in `return_url` and never set
+`redirect_url`, so buyers finished on SumUp's page with nowhere to go, and SumUp's notifications
+were being sent to a static page that cannot receive them (status was only ever caught by polling).
+Fixed: `redirect_url` = the ticket page, `return_url` = the webhook. SumUp echoes the redirect
+back when read (verified via the SumUp connection test, which now checks this). The webhook now
+accepts the checkout id under any of SumUp's shapes (top-level `id`, `checkout_id`, or under
+`payload`). The return address is the site the buyer is on, so previews return to the preview.
+SumUp's success page shows a *button* back (not an automatic redirect) — we can't change that,
+so the buy page, the payment-link message and the overlay all tell buyers to tap it.
+
+**Keeping the ticket** (ticket page): one big "💾 Save or share my ticket" — on a phone the native
+share sheet (Save Image, Messages, WhatsApp, Mail, Files…), on a computer a download — plus
+"✉️ Email it to me", "💬 Text it to me" (each opens the buyer's own app pre-filled with the ticket
+numbers and a permanent link) and "🔗 Copy link". The page itself is the permanent ticket (the
+link never expires). Physical-ticket buyers get the same tools for a digital **receipt** ("keep your
+physical ticket — it is your entry"). We send nothing ourselves: automatic SMS/email would need a
+paid messaging service; this needs none and no sign-up.
+- Seller-attended sales (cash/machine) now have a ticket page too (an online ticket bought in
+  person is otherwise only a message); a voided one shows "Cancelled".
+- Ticket messages sent by sellers now include a permanent ticket/receipt link.
+
+**Find my ticket** (buy page: "Already paid? Find your ticket"): a buyer who closed SumUp's page can
+get their ticket back by typing the name + mobile/email they bought with. BOTH must match, one
+campaign only, paid link purchases only, forgiving of case/spacing/phone formatting, and limited
+to 10 searches an hour per visitor and per contact.
