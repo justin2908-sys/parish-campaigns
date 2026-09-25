@@ -879,3 +879,15 @@ It then follows the existing expiry path: an online ticket's number is released;
 stays "held" (it is in someone's hand — only an Admin can free it) and Needs Attention offers a fresh
 link. The sync runs whenever Sales / Needs Attention / the dashboard / the public page load (a
 sweep at most once a minute for the public page).
+
+## 30. Tab highlight and Raffle/Online speed — fixed 2026-09-25 (on dev; preview only)
+
+**Wrong tab highlighted.** Each admin tab loads its data from the server; a slow answer to an earlier
+click could arrive after a newer click and overwrite the page, leaving the old tab highlighted. Now the
+highlight moves the instant a tab is clicked (with a "Loading…" placeholder), and every tab load is
+numbered so a late answer to an earlier click is discarded.
+
+**Raffle ↔ Online delay.** Switching series used to re-ask the server for everything. Now it redraws
+from data already on the screen (no server call, instant). Switching campaign also redraws instantly and
+refreshes only that seller's totals in the background. The server call behind the Sell screen also runs
+its queries in parallel (median 1.47 s → about 1.1 s on the preview).
