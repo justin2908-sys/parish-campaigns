@@ -72,6 +72,7 @@
   .sell .card { padding: 12px; margin-bottom: 10px; border-radius: 12px; }
   .statsbar { display:flex; justify-content:space-between; align-items:center; gap:8px; width:100%; padding:10px 13px; margin-bottom:10px; font-size:14.5px; text-align:left; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:12px; }
   .statsbar b { font-weight:700; }
+  .statsline { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .saletitle { font-family:var(--font-head); font-size:20px; font-weight:500; margin:0 0 2px; }
   .selrow { display:flex; gap:8px; margin-bottom:2px; }
   .selrow select { flex:1; min-width:0; padding:11px; font-size:15.5px; }
@@ -95,6 +96,14 @@
   .feedbar { display:flex; justify-content:space-between; align-items:center; gap:8px; width:100%; padding:11px 13px; font-size:14.5px; text-align:left; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:12px; margin-bottom:10px; }
   .feedbar.attn { border-color:var(--warn); background:var(--warn-dim); }
   .sheet { position:fixed; left:0; right:0; bottom:0; z-index:20; max-width:560px; margin:0 auto; background:white; border-top:1px solid var(--line); border-radius:16px 16px 0 0; box-shadow:0 -6px 24px rgba(0,0,0,.18); padding:14px 16px 18px; }
+  @media (max-height:700px) {
+    header { padding:7px 14px; } header h1.brand .wm { font-size:19px; margin-top:1px; } header h1.brand .eb { font-size:10px; }
+    #app.sell { padding:8px 12px 8px; } .sell .card { padding:10px; margin-bottom:8px; } .statsbar { padding:8px 12px; margin-bottom:8px; }
+    .qty-row { margin-top:7px; } .stepper button, .stepper input { height:44px; } .sell input.compact { margin-top:8px; padding:10px 12px; }
+    .namecontact { margin-top:8px; } .namecontact input { padding:10px 11px; } .totalline { margin-top:6px; } .totalline b { font-size:27px; }
+    .pay3 button { padding:13px 4px; } .feedbar { padding:9px 12px; margin-bottom:6px; } .chips { margin-top:6px; }
+  }
+  @media (max-height:600px) { header h1.brand .wm { display:none; } .saletitle { font-size:17px; } .totalline b { font-size:24px; } .pay3 button { padding:11px 4px; font-size:16.5px; } }
   .sheet .share-link { padding:16px 4px; font-size:16.5px; }
 </style>
 </head>
@@ -420,6 +429,8 @@ async function renderSeller() {
 
 // ---- Compact Sell screen helpers ----
 let lastStats = null, statsOpen = false, feedOpen = false, sheetId = null, numbersOpen = false, ticketStatus = {};
+// Whole pounds when there are no pence (£24), otherwise £24.50 — keeps the stats bar to one line.
+function pounds(n) { n = Number(n) || 0; return '£' + (Math.abs(n - Math.round(n)) < 0.005 ? String(Math.round(n)) : n.toFixed(2)); }
 function toggleStats() { statsOpen = !statsOpen; renderStats(); }
 function toggleFeed() { feedOpen = !feedOpen; renderFeed(); }
 function toggleNumbers() { numbersOpen = !numbersOpen; renderTicketRows(true); }
@@ -433,7 +444,7 @@ function renderStats() {
   const el = document.getElementById('statsWrap'); if (!el || !lastStats) return;
   const s = lastStats;
   el.innerHTML = `<button type="button" class="statsbar" onclick="toggleStats()">
-      <span><b>${s.ticketsSoldCount}</b> sold · cash <b>£${s.cashCollected.toFixed(2)}</b> · card <b>£${s.cardTotal.toFixed(2)}</b>${s.linkPending > 0 ? ` · ⏳ £${s.linkPending.toFixed(2)}` : ''}</span>
+      <span class="statsline"><b>${s.ticketsSoldCount}</b> sold · <b>${pounds(s.cashCollected)}</b> cash · <b>${pounds(s.cardTotal)}</b> card${s.linkPending > 0 ? ` · ⏳ ${pounds(s.linkPending)}` : ''}</span>
       <span>${statsOpen ? '▴' : '▾'}</span></button>
     ${statsOpen ? `<div class="card">
       <div class="stat"><span>Tickets sold by you</span><b>${s.ticketsSoldCount}</b></div>

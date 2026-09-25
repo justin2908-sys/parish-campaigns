@@ -9,50 +9,58 @@
 <style>
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html { scroll-behavior:smooth; }
-  body { margin:0; padding-bottom:calc(116px + env(safe-area-inset-bottom)); }
+  html, body { height:100%; }
+  body { margin:0; }
   button { font-family:inherit; cursor:pointer; }
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 
-  /* ---- hero ---- */
-  .hero { position:relative; overflow:hidden; color:#F3F1E7; text-align:center; padding:16px 18px 24px;
+  /* ---- one-screen shell: nothing scrolls except the number list when it is long ---- */
+  .shell { height:100vh; height:100dvh; display:flex; flex-direction:column; }
+  @media (max-height:470px) { .shell { height:auto; min-height:100dvh; } }   /* landscape / very short: allow normal scrolling */
+  .top { position:relative; flex:none; color:#F3F1E7; padding:9px 14px 10px;
     background:radial-gradient(120% 140% at 15% 0%, #4F7A62 0%, transparent 55%), radial-gradient(90% 120% at 100% 100%, rgba(169,130,47,.5) 0%, transparent 60%), linear-gradient(160deg,var(--pine),var(--pine-deep)); }
-  .hero::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:18px; background:var(--paper); border-radius:18px 18px 0 0; }
-  .hero .spark { position:absolute; font-size:18px; opacity:.28; pointer-events:none; animation:float 6s ease-in-out infinite; }
-  .hero .church { position:relative; font-family:var(--font-caps); font-size:12.5px; letter-spacing:.2em; text-transform:uppercase; color:var(--brass-bright); }
-  .hero h1 { position:relative; margin:6px 0 4px; font-size:33px; line-height:1.1; text-shadow:0 2px 12px rgba(0,0,0,.25); }
-  .hero .each { position:relative; display:inline-block; margin-top:4px; padding:5px 14px; border-radius:20px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.28); font-size:15px; font-weight:600; backdrop-filter:blur(2px); }
-  .thanks { position:relative; max-width:400px; margin:12px auto 0; padding:10px 14px; border-radius:14px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.22); font-size:15.5px; line-height:1.45; }
-  .detailsBtn { position:relative; display:block; margin:8px auto 0; background:none; border:none; color:#F3F1E7; opacity:.95; font-size:15px; text-decoration:underline; text-underline-offset:3px; }
-  .details { position:relative; margin:10px auto 0; max-width:440px; text-align:left; white-space:pre-wrap; font-size:15.5px; line-height:1.55; background:rgba(0,0,0,.22); border-radius:14px; padding:13px 15px; }
-  @keyframes float { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-8px) rotate(8deg); } }
-
-  .wrap { max-width:480px; margin:0 auto; padding:0 14px; }
-  .card { background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:16px; margin-bottom:12px; box-shadow:0 1px 0 rgba(0,0,0,.02), 0 8px 24px -14px rgba(34,53,42,.35); }
-  .card h2 { margin:0 0 12px; font-family:var(--font-caps); font-weight:400; font-size:14.5px; letter-spacing:.16em; color:var(--brass-strong); text-transform:uppercase; }
+  .top .row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:1px; }
+  .top .titles { min-width:0; }
+  .top .church { font-family:var(--font-caps); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--brass-bright); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .top h1 { margin:0; font-size:24px; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-shadow:0 2px 10px rgba(0,0,0,.25); }
+  .detailsBtn { flex:none; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.32); color:#F3F1E7; border-radius:20px; padding:6px 12px; font-size:14px; font-weight:600; }
+  .thanks { margin:5px 0 0; font-size:12.5px; line-height:1.3; }
+  .body { flex:1 1 auto; width:100%; max-width:480px; margin:0 auto; padding:8px 12px 6px; display:flex; flex-direction:column; gap:6px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:10px; box-shadow:0 1px 0 rgba(0,0,0,.02), 0 8px 24px -14px rgba(34,53,42,.35); }
+  .card.tickets { flex:1 1 auto; display:flex; flex-direction:column; }
+  .mid { flex:1 1 0; min-height:64px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  .mid.picking { min-height:150px; }
+  .fine { flex:none; margin:0; padding:0 6px; text-align:center; color:var(--slate); font-size:12.5px; line-height:1.35; }
+  .fine b { color:var(--pine); font-weight:600; }
+  .sheetbox { position:fixed; left:0; right:0; bottom:0; z-index:25; max-width:520px; margin:0 auto; max-height:82vh; max-height:82dvh; overflow-y:auto; background:var(--surface); border-radius:20px 20px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom)); box-shadow:0 -14px 40px rgba(0,0,0,.4); }
+  .sheetbox h2 { margin:0 28px 10px 0; font-family:var(--font-caps); font-weight:400; font-size:15px; letter-spacing:.16em; color:var(--brass-strong); text-transform:uppercase; }
+  .sheetbox .close { position:absolute; top:10px; right:12px; width:36px; height:36px; border:none; background:var(--pine-dim); color:var(--pine); border-radius:50%; font-size:16px; font-weight:700; }
+  .dtext { white-space:pre-wrap; font-size:16px; line-height:1.55; color:var(--ink); }
+  .daddr { margin-top:12px; font-size:14px; color:var(--slate); }
 
   /* ---- quantity ---- */
-  .qty-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
-  .qty-label { font-family:var(--font-head); font-size:21px; font-weight:500; }
+  .qty-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:5px; }
+  .qty-label { font-family:var(--font-head); font-size:20px; font-weight:500; line-height:1.15; }
   .qty-label small { display:block; font-family:var(--font-body); font-weight:500; color:var(--slate); font-size:14px; }
   .stepper { display:flex; align-items:center; background:var(--pine-dim); border-radius:14px; overflow:hidden; border:1px solid var(--stone); }
-  .stepper button { width:56px; height:52px; border:none; background:none; color:var(--pine); font-size:30px; font-weight:600; line-height:1; }
+  .stepper button { width:50px; height:44px; border:none; background:none; color:var(--pine); font-size:27px; font-weight:600; line-height:1; }
   .stepper button:active { background:var(--stone); }
-  .stepper input { width:60px; height:52px; text-align:center; border:none; background:#fff; font-family:var(--font-head); font-size:26px; font-weight:600; color:var(--ink); padding:0; -moz-appearance:textfield; }
+  .stepper input { width:54px; height:44px; text-align:center; border:none; background:#fff; font-family:var(--font-head); font-size:23px; font-weight:600; color:var(--ink); padding:0; -moz-appearance:textfield; }
   .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
-  .quick { display:flex; gap:6px; margin-bottom:10px; }
-  .quick button { flex:1; padding:10px 0; border:1px solid var(--stone); background:#fff; border-radius:11px; font-size:17px; font-weight:700; color:var(--pine); }
+  .quick { display:flex; gap:6px; margin-bottom:6px; }
+  .quick button { flex:1; padding:6px 0; border:1px solid var(--stone); background:#fff; border-radius:11px; font-size:16px; font-weight:700; color:var(--pine); }
   .quick button.on { background:var(--wine); color:#fff; border-color:var(--wine); }
 
   /* ---- mode ---- */
-  .seg { display:flex; background:var(--pine-dim); border-radius:14px; padding:4px; margin:6px 0 12px; }
-  .seg button { flex:1; border:none; background:none; padding:12px 4px; border-radius:11px; font-size:15px; font-weight:700; color:var(--slate); transition:all .2s; white-space:nowrap; }
+  .seg { display:flex; background:var(--pine-dim); border-radius:14px; padding:3px; margin:0 0 6px; }
+  .seg button { flex:1; border:none; background:none; padding:9px 4px; border-radius:11px; font-size:15px; font-weight:700; color:var(--slate); transition:all .2s; white-space:nowrap; }
   .seg button.on { background:#fff; color:var(--wine); box-shadow:0 2px 8px rgba(0,0,0,.1); }
-  .note { font-size:16px; color:var(--slate); line-height:1.5; }
-  select { width:100%; padding:12px 13px; font-size:16.5px; border:1px solid var(--stone); border-radius:12px; background:#fff; color:var(--ink); margin-top:10px; }
+  .note { margin:0; font-size:15px; color:var(--slate); line-height:1.45; }
+  select { width:100%; padding:10px 12px; font-size:16px; border:1px solid var(--stone); border-radius:12px; background:#fff; color:var(--ink); margin-top:8px; }
 
   /* ---- ticket chips ---- */
-  .slots { display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:8px; margin-bottom:10px; }
-  .tk { position:relative; display:flex; align-items:center; justify-content:center; gap:4px; min-height:46px; padding:6px 54px 6px 12px; border-radius:10px; font-variant-numeric:tabular-nums; font-weight:600; font-size:20px; letter-spacing:.02em;
+  .slots { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-bottom:8px; }
+  .tk { position:relative; display:flex; align-items:center; justify-content:center; gap:4px; min-height:42px; padding:4px 50px 4px 11px; border-radius:10px; font-variant-numeric:tabular-nums; font-weight:600; font-size:18.5px; letter-spacing:.02em;
     background:linear-gradient(180deg,#FBFBF8,#F0E7CC); border:1.5px solid #CDB673; color:var(--pine); font-family:var(--font-head);
     -webkit-mask:radial-gradient(circle 6px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat, radial-gradient(circle 6px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat;
             mask:radial-gradient(circle 6px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat, radial-gradient(circle 6px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat; }
@@ -67,33 +75,34 @@
   @keyframes pop { 0% { transform:scale(.4) rotate(-6deg); opacity:0; } 100% { transform:scale(1) rotate(0); opacity:1; } }
   @keyframes shake { 0% { transform:translateY(-1px); } 50% { transform:translateY(1px); } 100% { transform:translateY(-1px); } }
   .btnrow { display:flex; gap:8px; }
-  .shuf { flex:1; border:none; padding:13px 8px; border-radius:13px; font-size:17px; font-weight:800; color:var(--ink); background:linear-gradient(180deg,#DDBA66,#B8913A); box-shadow:0 4px 0 #8B6A22; }
+  .shuf { flex:1; border:none; padding:11px 8px; border-radius:13px; font-size:16.5px; font-weight:800; color:var(--ink); background:linear-gradient(180deg,#DDBA66,#B8913A); box-shadow:0 4px 0 #8B6A22; }
   .shuf:active { transform:translateY(2px); box-shadow:0 2px 0 #8B6A22; }
   .shuf.alt { flex:0 0 auto; background:#fff; color:var(--wine); box-shadow:none; border:1.5px solid var(--line); }
   .dice { display:inline-block; }
   .busy .dice { animation:spin .6s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
-  .lucky { display:flex; gap:8px; margin-top:10px; }
-  .lucky input { flex:1; min-width:0; padding:12px; font-size:17px; border:1.5px solid var(--line); border-radius:12px; letter-spacing:.06em; background:#fff; color:var(--ink); }
+  .lucky { display:flex; gap:8px; margin-top:9px; }
+  .lucky input { flex:1; min-width:0; padding:11px 12px; font-size:16.5px; border:1.5px solid var(--line); border-radius:12px; letter-spacing:.06em; background:#fff; color:var(--ink); }
   .lucky button { padding:0 18px; border:none; border-radius:12px; background:var(--wine); color:#fff; font-size:15px; font-weight:700; }
-  .range { margin-bottom:10px; padding:8px 10px; border-radius:10px; background:var(--gold-dim); border:1px solid #DCCB98; font-size:13px; line-height:1.4; color:var(--slate); }
-  .msg { min-height:18px; margin-top:8px; font-size:13px; }
+  .range { margin-bottom:8px; padding:7px 10px; border-radius:10px; background:var(--gold-dim); border:1px solid #DCCB98; font-size:13px; line-height:1.35; color:var(--slate); }
+  .msg { margin-top:6px; font-size:13.5px; }
+  .msg:empty { display:none; }
   .msg.bad { color:var(--bad); } .msg.good { color:var(--good); }
 
   /* ---- contact ---- */
   .two { display:flex; gap:8px; }
-  .two input { flex:1; min-width:0; padding:13px 12px; font-size:16px; border:1.5px solid var(--line); border-radius:12px; background:#fff; color:var(--ink); }
+  .two input { flex:1; min-width:0; padding:10px 12px; font-size:16.5px; border:1.5px solid var(--line); border-radius:12px; background:#fff; color:var(--ink); }
   .two input:focus, .lucky input:focus, select:focus { outline:none; border-color:var(--wine2); box-shadow:0 0 0 3px #a8432f22; }
   .tiny { text-align:center; color:var(--muted); font-size:14px; line-height:1.5; margin:4px 8px 16px; }
 
-  /* ---- sticky pay bar ---- */
-  .paybar { position:fixed; left:0; right:0; bottom:0; z-index:10; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); border-top:1px solid var(--line); box-shadow:0 -10px 30px -12px rgba(0,0,0,.25); }
+  /* ---- pay bar: fixed to the bottom of the screen ---- */
+  .paybar { flex:none; padding:7px 12px calc(7px + env(safe-area-inset-bottom)); background:var(--surface); border-top:1px solid var(--line); box-shadow:0 -8px 24px -14px rgba(0,0,0,.3); }
   .paybar .in { max-width:480px; margin:0 auto; }
-  .sum { display:flex; justify-content:space-between; align-items:baseline; font-size:15px; color:var(--muted); margin-bottom:6px; }
-  .sum b { font-family:var(--font-head); font-weight:500; font-size:28px; color:var(--ink); }
-  .pay { width:100%; padding:17px; border:none; border-radius:15px; font-size:19px; font-weight:800; color:#fff; letter-spacing:.01em; background:linear-gradient(180deg,#3E5E4C,#2E4739); box-shadow:0 5px 0 #1A2A20; }
-  .pay:active { transform:translateY(3px); box-shadow:0 2px 0 #1A2A20; }
-  .pay.wait { background:#A9AE9F; box-shadow:0 5px 0 #8B9082; color:#fff; }
+  .sum { display:flex; justify-content:space-between; align-items:baseline; font-size:14px; color:var(--muted); margin-bottom:4px; }
+  .sum b { font-family:var(--font-head); font-weight:500; font-size:24px; color:var(--ink); }
+  .pay { width:100%; padding:12px; border:none; border-radius:14px; font-size:18px; font-weight:800; color:#fff; letter-spacing:.01em; background:linear-gradient(180deg,#3E5E4C,#2E4739); box-shadow:0 4px 0 #1A2A20; }
+  .pay:active { transform:translateY(2px); box-shadow:0 2px 0 #1A2A20; }
+  .pay.wait { background:#A9AE9F; box-shadow:0 4px 0 #8B9082; color:#fff; }
   .pay:disabled { opacity:.75; }
   .err { background:var(--bad-dim); color:var(--bad); padding:10px 12px; border-radius:12px; font-size:13.5px; margin-top:8px; }
 
@@ -106,6 +115,8 @@
   .linkbtn { background:none; border:none; color:var(--wine); text-decoration:underline; text-underline-offset:3px; font-size:13.5px; font-weight:600; padding:6px; }
   .found { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; margin-top:8px; border-radius:12px; background:var(--gold-dim); border:1px solid #DCCB98; color:var(--ink); text-decoration:none; font-size:15px; }
   .found span { color:var(--muted); font-size:12.5px; white-space:nowrap; }
+  @media (max-height:700px) { .quick { display:none; } .mid.picking { min-height:120px; } }
+  @media (max-height:600px) { .top .church { display:none; } .top h1 { font-size:21px; } .seg button { padding:7px 4px; } .fine { font-size:11.5px; } .thanks { font-size:12px; } .card { padding:8px; } .mid.picking { min-height:100px; } }
   .fatal { max-width:480px; margin:40px auto; padding:0 16px; }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .bit { display:none; } }
 </style>
@@ -178,67 +189,69 @@ function buildShell() {
   const from = Math.min(...info.tiers.map(t => Number(t.price)));
   document.title = info.campaign.name + (info.org.name ? ' — ' + info.org.name : '');
   $('app').innerHTML = `
-    <div class="hero">${sparks}
-      ${info.org.name ? `<div class="church">${esc(info.org.name)}</div>` : ''}
-      <h1>${esc(info.campaign.name)}</h1>
-      <span class="each">🎟️ ${info.tiers.length > 1 ? 'From ' : ''}${money(from)} a ticket</span>
-      <p class="thanks">💛 ${esc(thank)}</p>
-      ${info.campaign.details_text ? `<button class="detailsBtn" id="detailsBtn" type="button">🎁 Prizes &amp; details ▾</button><div class="details" id="details" hidden>${esc(info.campaign.details_text)}</div>` : ''}
-    </div>
-    <div class="wrap">
-      <div class="card">
-        <h2>How many tickets?</h2>
-        <div id="qtyArea"></div>
-        <div class="seg" id="seg" role="tablist">
-          <button type="button" data-mode="auto" role="tab">✨ Assign for me</button>
-          <button type="button" data-mode="pick" role="tab">🎲 Pick my numbers</button>
+    <div class="shell">
+      <header class="top">
+        ${info.org.name ? `<div class="church">${esc(info.org.name)}</div>` : ''}
+        <div class="row">
+          <h1>${esc(info.campaign.name)}</h1>
+          ${info.campaign.details_text ? `<button class="detailsBtn" id="detailsBtn" type="button">🎁 Prizes</button>` : ''}
         </div>
-        <div id="autoPane"><p class="note" id="autoNote"></p></div>
-        <div id="pickPane" hidden>
-          <div class="range">🎟️ Online numbers run from <b>${esc(rangeWords())}</b>. Numbers outside that aren't part of this draw.</div>
-          <div class="slots" id="slots" aria-live="polite"></div>
-          <div class="btnrow">
-            <button type="button" class="shuf" id="shuffleBtn"><span class="dice">🎲</span> <span id="shuffleLabel">Shuffle</span></button>
-            <button type="button" class="shuf alt" id="shuffleAllBtn" title="Replace every number with new random ones">↻ All</button>
+        <p class="thanks">💛 ${esc(thank)}</p>
+      </header>
+      <div class="body">
+        <div class="card tickets">
+          <div id="qtyArea"></div>
+          <div class="seg" id="seg" role="tablist">
+            <button type="button" data-mode="auto" role="tab">✨ Assign for me</button>
+            <button type="button" data-mode="pick" role="tab">🎲 Pick my numbers</button>
           </div>
-          <div class="lucky">
-            <label class="sr" for="luckyIn">A lucky number</label>
-            <input id="luckyIn" inputmode="numeric" autocomplete="off" placeholder="${info.blocks.length === 1 ? `Or type your own (${esc(rangeShort())})` : 'Or type a lucky number'}">
-            <button type="button" id="luckyAdd">Add</button>
+          <div class="mid">
+            <div id="autoPane"><p class="note" id="autoNote"></p></div>
+            <div id="pickPane" hidden>
+              <div class="range">🎟️ Online numbers run from <b>${esc(rangeWords())}</b>. Others aren't part of this draw.</div>
+              <div class="slots" id="slots" aria-live="polite"></div>
+              <div class="btnrow">
+                <button type="button" class="shuf" id="shuffleBtn"><span class="dice">🎲</span> <span id="shuffleLabel">Shuffle</span></button>
+                <button type="button" class="shuf alt" id="shuffleAllBtn" title="Replace every number with new random ones">↻ All</button>
+              </div>
+              <div class="lucky">
+                <label class="sr" for="luckyIn">A lucky number</label>
+                <input id="luckyIn" inputmode="numeric" autocomplete="off" placeholder="${info.blocks.length === 1 ? `Or type your own (${esc(rangeShort())})` : 'Or type a lucky number'}">
+                <button type="button" id="luckyAdd">Add</button>
+              </div>
+            </div>
+            ${info.blocks.length > 1 ? `<label class="sr" for="seriesSel">Which series</label><select id="seriesSel">${info.blocks.map(b => `<option value="${b.id}">${esc(b.label)} (${esc(b.number_prefix||'')}${b.range_start}–${esc(b.number_prefix||'')}${b.range_end})</option>`).join('')}</select>` : ''}
+            <div class="msg" id="msg" role="status"></div>
           </div>
         </div>
-        ${info.blocks.length > 1 ? `<label class="sr" for="seriesSel">Which series</label><select id="seriesSel">${info.blocks.map(b => `<option value="${b.id}">${esc(b.label)} (${esc(b.number_prefix||'')}${b.range_start}–${esc(b.number_prefix||'')}${b.range_end})</option>`).join('')}</select>` : ''}
-        <div class="msg" id="msg" role="status"></div>
-      </div>
-      <div class="card">
-        <h2>Who's it for?</h2>
-        <div class="two">
-          <label class="sr" for="buyerName">Your name</label><input id="buyerName" placeholder="Your name" autocomplete="name">
-          <label class="sr" for="contactInput">Mobile or email</label><input id="contactInput" placeholder="Mobile or email" autocomplete="email" inputmode="email">
+        <div class="card who">
+          <div class="two">
+            <label class="sr" for="buyerName">Your name</label><input id="buyerName" placeholder="Your name" autocomplete="name">
+            <label class="sr" for="contactInput">Mobile or email</label><input id="contactInput" placeholder="Mobile or email" autocomplete="email" inputmode="email">
+          </div>
         </div>
-        <p class="tiny" style="margin:8px 0 0">We'll send your ticket confirmation here.</p>
+        <p class="fine">🔒 Secure payment by SumUp · link valid 30 minutes. <b>After paying, tap the button on SumUp's page to come back and save your ticket.</b> <button type="button" class="linkbtn" id="findToggle">Already paid? Find your ticket</button></p>
       </div>
-      <p class="tiny" style="font-size:13px;color:var(--pine);font-weight:600">💛 ${esc(thank)}</p>
-      <p class="tiny">Secure payment by SumUp. Your payment link is valid for 30 minutes and your numbers are held for you meanwhile. <b>After you pay, tap the button on SumUp's page to come back — that's where you'll see and save your ticket.</b>${info.org.address ? `<br>${esc(info.org.name)} · ${esc(info.org.address)}` : ''}</p>
-      <p class="tiny" style="margin-top:0"><button type="button" class="linkbtn" id="findToggle">Already paid? Find your ticket</button></p>
-      <div class="card" id="findCard" hidden>
-        <h2>Find your ticket</h2>
-        <p class="note" style="margin:0 0 10px">Type your name and mobile or email exactly as you did when you bought.</p>
-        <div class="two">
-          <label class="sr" for="fName">Your name</label><input id="fName" placeholder="Your name" autocomplete="name">
-          <label class="sr" for="fContact">Mobile or email</label><input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email">
-        </div>
-        <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
-        <div id="findOut" role="status" aria-live="polite"></div>
-      </div>
+      <div class="paybar"><div class="in">
+        <div class="sum"><span id="sumText">Choose your tickets</span><b id="sumPrice">£0.00</b></div>
+        <button type="button" class="pay wait" id="payBtn">Choose your tickets</button>
+        <div id="payErr"></div>
+      </div></div>
     </div>
-    <div class="paybar"><div class="in">
-      <div class="sum"><span id="sumText">Choose your tickets</span><b id="sumPrice">£0.00</b></div>
-      <button type="button" class="pay wait" id="payBtn">Choose your tickets</button>
-      <div id="payErr"></div>
-    </div></div>`;
+    ${info.campaign.details_text ? `<div class="sheetbox" id="details" hidden><button type="button" class="close" id="detailsClose" aria-label="Close">✕</button><h2>Prizes &amp; details</h2><div class="dtext">${esc(info.campaign.details_text)}</div>${info.org.address ? `<div class="daddr">${esc(info.org.name)} · ${esc(info.org.address)}</div>` : ''}</div>` : ''}
+    <div class="sheetbox" id="findCard" hidden>
+      <button type="button" class="close" id="findClose" aria-label="Close">✕</button>
+      <h2>Find your ticket</h2>
+      <p class="note" style="margin:0 0 10px">Type your name and mobile or email exactly as you did when you bought.</p>
+      <div class="two">
+        <label class="sr" for="fName">Your name</label><input id="fName" placeholder="Your name" autocomplete="name">
+        <label class="sr" for="fContact">Mobile or email</label><input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email">
+      </div>
+      <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
+      <div id="findOut" role="status" aria-live="polite"></div>
+    </div>`;
 
-  if ($('detailsBtn')) $('detailsBtn').onclick = () => { detailsOpen = !detailsOpen; $('details').hidden = !detailsOpen; $('detailsBtn').innerHTML = detailsOpen ? '🎁 Hide details ▴' : '🎁 Prizes &amp; details ▾'; };
+  if ($('detailsBtn')) { $('detailsBtn').onclick = () => { $('details').hidden = false; }; $('detailsClose').onclick = () => { $('details').hidden = true; }; }
   $('seg').onclick = (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); };
   $('slots').onclick = onSlotClick;
   $('shuffleBtn').onclick = () => shuffle(false);
@@ -248,13 +261,11 @@ function buildShell() {
   $('luckyIn').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, digitBounds().max); };
   if ($('seriesSel')) $('seriesSel').onchange = (e) => { blockId = e.target.value; if (mode === 'pick') { slots = slots.map(() => null); taken.clear(); renderSlots(); } renderMode(); renderPay(); };
   $('payBtn').onclick = pay;
-  $('findToggle').onclick = () => {
-    const open = $('findCard').hidden; $('findCard').hidden = !open;
-    if (open) { // carry over what they've already typed above, then bring the form into view
-      if (!$('fName').value) $('fName').value = $('buyerName').value; if (!$('fContact').value) $('fContact').value = $('contactInput').value;
-      $('findCard').scrollIntoView({ block: 'center' });
-    }
+  $('findToggle').onclick = () => { // carry over what they've already typed, then open the sheet
+    if (!$('fName').value) $('fName').value = $('buyerName').value; if (!$('fContact').value) $('fContact').value = $('contactInput').value;
+    $('findCard').hidden = false;
   };
+  $('findClose').onclick = () => { $('findCard').hidden = true; };
   $('findBtn').onclick = findTicket;
   $('buyerName').oninput = renderPay; $('contactInput').oninput = renderPay;
 }
@@ -295,6 +306,7 @@ function renderMode() {
   for (const b of $('seg').children) b.classList.toggle('on', b.dataset.mode === mode);
   $('autoPane').hidden = mode !== 'auto';
   $('pickPane').hidden = mode !== 'pick';
+  const midEl = document.querySelector('.mid'); if (midEl) midEl.classList.toggle('picking', mode === 'pick');
   $('autoNote').innerHTML = n
     ? `We'll pick <b>${n} number${n > 1 ? 's' : ''}</b> for you from the online series (${esc(rangeWords())}) the moment you pay. Prefer to choose? Tap <b>Pick my numbers</b>.`
     : `Choose how many tickets, and we'll pick the numbers for you — or choose your own.`;
