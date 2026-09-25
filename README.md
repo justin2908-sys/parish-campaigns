@@ -83,7 +83,7 @@ nothing more to configure.
   and branch deploys are free. So:
   - Work on the `dev` branch. A pull request from `dev` to `main` gets a **free deploy preview**
     with its own web address — test there.
-  - Production only builds when a commit message contains `[publish]` (see the credit guard in
+  - Production only builds when a commit message contains `PUBLISH-NOW` (see the credit guard in
     `netlify.toml`); any other push to `main` is skipped. To publish: merge the PR with a message
-    ending in `[publish]`.
+    ending in `PUBLISH-NOW`.
 

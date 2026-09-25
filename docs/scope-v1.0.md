@@ -763,9 +763,9 @@ deploys are free (bandwidth/requests/compute are billed separately and are tiny 
 GitHub to production had made every `git push origin main` a paid deploy (22 in two days).
 
 - **Guard:** `netlify.toml` → `[context.production] ignore` — production builds only when the
-  commit message contains `[publish]`; any other push to `main` is skipped.
+  commit message contains `PUBLISH-NOW`; any other push to `main` is skipped.
 - **Drafts:** all work happens on the `dev` branch. A pull request from `dev` to `main` gets a free
   deploy-preview site (own address, same database and SumUp account) — live tests run against
   that address, not production.
-- **Publishing:** merge the PR with a message ending `[publish]` — one production deploy, only when
+- **Publishing:** merge the PR with a message ending `PUBLISH-NOW` — one production deploy, only when
   Justin has said to publish.
