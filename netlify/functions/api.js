@@ -1395,12 +1395,25 @@ async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
   };
 }
 
+// Any Pay-by-Link payment still marked pending is asked about at SumUp before a list or total is
+// built, so money that has actually arrived never keeps showing as "Pending" (SumUp's notification
+// can be late, or missed). Bounded — newest 15, and paid/failed ones are never re-asked — so
+// opening a screen can't fan out into a flood of SumUp calls.
+async function syncOpenLinkPayments(campaignIds) {
+  if (!campaignIds || !campaignIds.length) return;
+  const { data: open } = await supabase.from('payments').select('*').in('campaign_id', campaignIds)
+    .eq('method', 'link').eq('status', 'pending').not('sumup_checkout_id', 'is', null)
+    .order('created_at', { ascending: false }).limit(15);
+  await Promise.all((open || []).map(p => syncCheckout(p).catch(() => { /* leave it pending; the next look will try again */ })));
+}
+
 async function dashboardState(session, { campaign_id } = {}) {
   requireOrgRole(session, ['admin', 'superadmin']);
   await releaseStalePendingLinkPayments();
 
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
+  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
   const scopedIds = campaign_id ? [campaign_id] : orgCampaignIds;
   if (campaign_id && !orgCampaignIds.includes(campaign_id)) throw httpError(404, 'Campaign not found');
 
@@ -1480,6 +1493,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
   requireOrgRole(session, ['admin', 'superadmin']);
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
+  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
   let q = supabase.from('payments').select('*').order('created_at', { ascending: false }).limit(75);
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
@@ -1504,6 +1518,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   await releaseStalePendingLinkPayments();
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
+  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
   let q = supabase.from('payments').select('*').eq('method', 'link').in('status', ['pending', 'failed']).order('created_at', { ascending: false });
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
