@@ -561,3 +561,20 @@ only for the case where the SuperAdmin themself is the one locked out.
 
 Frontend: a fourth card on the Platform Owner's screen ("Recover a locked-out SuperAdmin"),
 alongside the existing Organizations / Add parish / Add first Admin cards.
+
+---
+
+## 18. Add a series to an existing campaign — built 2026-09-25
+
+The BBQ parent site let a campaign gain extra series after creation; the rebuild only
+allowed blocks at creation time. Now a SuperAdmin can add a physical top-up or a second
+online series to any existing (non-binned) campaign (`add_block_to_campaign`, "Add a series
+to an existing campaign" card on the Campaigns tab).
+
+- The new range may not overlap **any** ticket number already in that campaign (physical
+  sales resolve tickets by campaign + number, so a shared number would be ambiguous). The
+  error names the clashing numbers.
+- Series names must be unique within a campaign; if left blank they default to "Series N"
+  (physical) or "Online N".
+- Shares block/ticket creation with `create_campaign`; a failed insert removes the
+  half-built series. Sanity cap of 50,000 tickets per series (not a business rule).
