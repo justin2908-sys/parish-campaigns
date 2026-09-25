@@ -808,6 +808,27 @@ async function renderCampaignsTab() {
       </table>
       <p class="muted">Only Active campaigns are selectable on the Sell screen.</p>
     </div>
+    ${state.user.role==='superadmin' && campaigns.length ? `
+    <div class="card">
+      <h3 style="margin-top:0">Add a series to an existing campaign</h3>
+      <p class="muted">A physical top-up, or a second online series. The new numbers can't overlap any number already in that campaign.</p>
+      <label>Campaign</label>
+      <select id="asCampaign">${campaigns.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+      <label>Type</label>
+      <select id="asType" onchange="document.getElementById('asPrefixWrap').style.display = this.value==='digital' ? '' : 'none'">
+        <option value="physical">Physical (printed tickets)</option>
+        <option value="digital">Online</option>
+      </select>
+      <label>Name <span class="muted">(optional — e.g. Top-up, Online 2)</span></label>
+      <input id="asLabel">
+      <div class="row">
+        <div><label>First number</label><input id="asStart" type="number" inputmode="numeric" min="1"></div>
+        <div><label>Last number</label><input id="asEnd" type="number" inputmode="numeric" min="1"></div>
+      </div>
+      <div id="asPrefixWrap" style="display:none"><label>Display prefix <span class="muted">(optional, online only — e.g. O)</span></label><input id="asPrefix"></div>
+      <button class="primary" onclick="doAddSeries()">Add series</button>
+      <div id="addSeriesResult"></div>
+    </div>` : ''}
     ${state.user.role==='superadmin' ? `
     <div class="card">
       <h3 style="margin-top:0">Add New Campaign</h3>
@@ -893,6 +914,23 @@ async function createCampaign() {
     draftTiers = [{name:'',price:''},{name:'',price:''}];
     draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
     renderCampaignsTab();
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function doAddSeries() {
+  const resEl = document.getElementById('addSeriesResult');
+  const campaignSel = document.getElementById('asCampaign');
+  const campaignName = campaignSel.options[campaignSel.selectedIndex].text;
+  try {
+    const { block } = await call('add_block_to_campaign', {
+      campaign_id: campaignSel.value,
+      type: document.getElementById('asType').value,
+      label: document.getElementById('asLabel').value,
+      range_start: document.getElementById('asStart').value,
+      range_end: document.getElementById('asEnd').value,
+      number_prefix: document.getElementById('asPrefix').value,
+    });
+    await renderCampaignsTab();
+    document.getElementById('addSeriesResult').innerHTML = `<div class="info">Added "${esc(block.label)}" (${esc(block.number_prefix||'')}${block.range_start}–${esc(block.number_prefix||'')}${block.range_end}) to ${esc(campaignName)}.</div>`;
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); renderCampaignsTab(); } catch (e) { alert(e.message); } }

@@ -284,26 +284,75 @@ async function createCampaign(session, { name, tiers, blocks, details_text }) {
     const label = isDigital
       ? (b.label && b.label.trim()) || ((++digitalCount) === 1 ? 'Online' : `Online ${digitalCount}`)
       : (b.label && b.label.trim()) || 'Main';
-    const range_start = Number(b.range_start), range_end = Number(b.range_end);
-    const { data: block, error: blockErr } = await supabase.from('ticket_blocks')
-      .insert({
-        campaign_id: campaign.id, type: b.type, label, range_start, range_end,
-        number_prefix: isDigital ? (b.number_prefix || '').trim() : '',
-      })
-      .select().single();
-    if (blockErr) throw httpError(500, 'Campaign created but a ticket block failed: ' + blockErr.message);
-    blockRows.push(block);
-
-    // Pre-populate every ticket number in the range as 'unsold' — physical and digital alike.
-    const rows = [];
-    for (let n = range_start; n <= range_end; n++) rows.push({ campaign_id: campaign.id, block_id: block.id, ticket_number: n });
-    for (let i = 0; i < rows.length; i += 500) {
-      const { error: e2 } = await supabase.from('tickets').insert(rows.slice(i, i + 500));
-      if (e2) throw httpError(500, 'Campaign created but ticket generation failed: ' + e2.message);
-    }
+    blockRows.push(await insertBlockWithTickets(campaign.id, b, label));
   }
 
   return { ok: true, campaign, tiers: tierRows, blocks: blockRows };
+}
+
+// Inserts one ticket block and pre-populates every ticket number in its range as 'unsold' —
+// physical and digital alike. Shared by createCampaign and addBlockToCampaign.
+async function insertBlockWithTickets(campaign_id, b, label) {
+  const isDigital = b.type === 'digital';
+  const range_start = Number(b.range_start), range_end = Number(b.range_end);
+  const { data: block, error: blockErr } = await supabase.from('ticket_blocks')
+    .insert({
+      campaign_id, type: b.type, label, range_start, range_end,
+      number_prefix: isDigital ? (b.number_prefix || '').trim() : '',
+    })
+    .select().single();
+  if (blockErr) throw httpError(500, 'A ticket block failed: ' + blockErr.message);
+
+  const rows = [];
+  for (let n = range_start; n <= range_end; n++) rows.push({ campaign_id, block_id: block.id, ticket_number: n });
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error: e2 } = await supabase.from('tickets').insert(rows.slice(i, i + 500));
+    if (e2) {
+      // Don't leave a half-populated series behind: remove what was inserted, then the block.
+      await supabase.from('tickets').delete().eq('block_id', block.id);
+      await supabase.from('ticket_blocks').delete().eq('id', block.id);
+      throw httpError(500, 'Ticket generation failed, nothing was added: ' + e2.message);
+    }
+  }
+  return block;
+}
+
+const MAX_SERIES_SIZE = 50000; // sanity cap on one series, not a business rule
+
+// Adds another series (a physical top-up, or a second online series) to an existing campaign.
+// The new range may not overlap ANY ticket number already in the campaign: physical sales
+// look tickets up by campaign + number, so two tickets sharing a number would be ambiguous.
+async function addBlockToCampaign(session, { campaign_id, type, label, range_start, range_end, number_prefix }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  if (!['physical', 'digital'].includes(type)) throw httpError(400, 'Choose physical or online');
+  const start = Number(range_start), end = Number(range_end);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+    throw httpError(400, 'Enter a start and end number, with end at or after start');
+  }
+  if (end - start + 1 > MAX_SERIES_SIZE) throw httpError(400, `A series can hold at most ${MAX_SERIES_SIZE.toLocaleString()} tickets`);
+
+  const { data: campaign } = await supabase.from('campaigns').select('id, binned').eq('id', campaign_id).maybeSingle();
+  if (!campaign) throw httpError(404, 'Campaign not found');
+  if (campaign.binned) throw httpError(400, 'This campaign is in the Recycle Bin — restore it first');
+
+  const { data: clash } = await supabase.from('tickets').select('ticket_number')
+    .eq('campaign_id', campaign_id).gte('ticket_number', start).lte('ticket_number', end).order('ticket_number');
+  if (clash && clash.length) {
+    const first = clash[0].ticket_number, last = clash[clash.length - 1].ticket_number;
+    throw httpError(400, `${first === last ? `Number ${first} is` : `Numbers ${first}–${last} (${clash.length} in your range) are`} already used in this campaign — pick a range that doesn't overlap an existing series.`);
+  }
+
+  const { data: existing } = await supabase.from('ticket_blocks').select('type, label').eq('campaign_id', campaign_id);
+  const sameType = (existing || []).filter(b => b.type === type).length;
+  let finalLabel = (label || '').trim();
+  if (!finalLabel) finalLabel = type === 'digital' ? `Online ${sameType + 1}` : `Series ${sameType + 1}`;
+  if ((existing || []).some(b => b.label.toLowerCase() === finalLabel.toLowerCase())) {
+    throw httpError(400, `This campaign already has a series called "${finalLabel}" — use a different name so sellers can tell them apart.`);
+  }
+
+  const block = await insertBlockWithTickets(campaign_id, { type, range_start: start, range_end: end, number_prefix }, finalLabel);
+  return { ok: true, block };
 }
 
 const STALE_MINUTES = 35; // SumUp hosted checkouts are valid ~30 min; give a small buffer
@@ -1303,6 +1352,7 @@ const actions = {
   list_campaigns: (s, b) => listCampaigns(s, b),
   set_disabled_campaigns: (s, b) => setDisabledCampaigns(s, b),
   set_campaign_active: (s, b) => setCampaignActive(s, b),
+  add_block_to_campaign: (s, b) => addBlockToCampaign(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),
   list_binned_campaigns: (s) => listBinnedCampaigns(s),
