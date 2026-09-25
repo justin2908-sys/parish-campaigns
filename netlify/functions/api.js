@@ -198,8 +198,9 @@ async function login({ mobile, password }) {
 // still has the password the token was issued for — so disabling someone or resetting their
 // password ends their session immediately instead of at the 2-hour expiry.
 async function assertSessionLive(session) {
-  const { data: u } = await supabase.from('users').select('active, password_hash').eq('id', session.uid).maybeSingle();
-  if (!u || !u.active || !session.pf || session.pf !== passwordFingerprint(u.password_hash)) {
+  const { data: u } = await supabase.from('users').select('active, password_hash, role').eq('id', session.uid).maybeSingle();
+  // A role change (e.g. SuperAdmin -> Seller) ends the old session at once rather than lingering up to 2 hours.
+  if (!u || !u.active || u.role !== session.role || !session.pf || session.pf !== passwordFingerprint(u.password_hash)) {
     throw httpError(401, 'Your session has ended — please log in again.');
   }
 }
