@@ -18,14 +18,14 @@
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 
   /* ---- hero ---- */
-  .hero { position:relative; overflow:hidden; color:#fff; text-align:center; padding:20px 18px 26px;
+  .hero { position:relative; overflow:hidden; color:#fff; text-align:center; padding:14px 18px 22px;
     background:radial-gradient(120% 140% at 15% 0%, #c25a3f 0%, transparent 55%), radial-gradient(90% 120% at 100% 100%, #e8b04a55 0%, transparent 60%), linear-gradient(160deg,#7a2e22,#4d1a14); }
   .hero::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:18px; background:var(--paper); border-radius:18px 18px 0 0; }
   .hero .spark { position:absolute; font-size:18px; opacity:.55; animation:float 6s ease-in-out infinite; }
   .hero .parish { position:relative; font-size:12px; letter-spacing:.14em; text-transform:uppercase; opacity:.85; }
-  .hero h1 { position:relative; margin:6px 0 4px; font-size:28px; line-height:1.1; letter-spacing:-.01em; text-shadow:0 2px 12px rgba(0,0,0,.25); }
+  .hero h1 { position:relative; margin:4px 0 2px; font-size:27px; line-height:1.1; letter-spacing:-.01em; text-shadow:0 2px 12px rgba(0,0,0,.25); }
   .hero .each { position:relative; display:inline-block; margin-top:4px; padding:4px 12px; border-radius:20px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28); font-size:13px; font-weight:600; backdrop-filter:blur(2px); }
-  .detailsBtn { position:relative; display:block; margin:10px auto 0; background:none; border:none; color:#fff; opacity:.9; font-size:13px; text-decoration:underline; text-underline-offset:3px; }
+  .detailsBtn { position:relative; display:block; margin:6px auto 0; background:none; border:none; color:#fff; opacity:.9; font-size:13px; text-decoration:underline; text-underline-offset:3px; }
   .details { position:relative; margin:10px auto 0; max-width:420px; text-align:left; white-space:pre-wrap; font-size:13.5px; line-height:1.5; background:rgba(0,0,0,.22); border-radius:12px; padding:12px 14px; }
   @keyframes float { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-8px) rotate(8deg); } }
 
@@ -55,7 +55,7 @@
 
   /* ---- ticket chips ---- */
   .slots { display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:8px; margin-bottom:10px; }
-  .tk { position:relative; display:flex; align-items:center; justify-content:center; gap:4px; min-height:46px; padding:6px 30px 6px 10px; border-radius:10px; font-variant-numeric:tabular-nums; font-weight:800; font-size:17px; letter-spacing:.02em;
+  .tk { position:relative; display:flex; align-items:center; justify-content:center; gap:4px; min-height:46px; padding:6px 54px 6px 12px; border-radius:10px; font-variant-numeric:tabular-nums; font-weight:800; font-size:17px; letter-spacing:.02em;
     background:linear-gradient(180deg,#fffaf0,#fdf1d8); border:1.5px solid #e6c98a; color:var(--wine);
     -webkit-mask:radial-gradient(circle 6px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat, radial-gradient(circle 6px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat;
             mask:radial-gradient(circle 6px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat, radial-gradient(circle 6px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat; }
@@ -63,8 +63,10 @@
   .tk.taken { background:var(--bad-dim); border-color:var(--bad); color:var(--bad); text-decoration:line-through; }
   .tk.rolling { color:#b8874a; animation:shake .18s linear infinite; }
   .tk.pop { animation:pop .45s cubic-bezier(.2,1.6,.4,1); }
-  .tk .mini { position:absolute; right:2px; top:50%; transform:translateY(-50%); width:26px; height:26px; border:none; background:none; font-size:13px; color:#a07a3a; padding:0; }
-  .tk .mini.rm { right:auto; }
+  .tk { justify-content:flex-start; }
+  .tk .mini { position:absolute; top:50%; transform:translateY(-50%); width:26px; height:30px; border:none; background:none; font-size:17px; font-weight:700; line-height:1; color:#b8874a; padding:0; }
+  .tk .mini.re { right:26px; } .tk .mini.rm { right:1px; font-size:14px; }
+  .tk .mini:active { color:var(--wine); }
   @keyframes pop { 0% { transform:scale(.4) rotate(-6deg); opacity:0; } 100% { transform:scale(1) rotate(0); opacity:1; } }
   @keyframes shake { 0% { transform:translateY(-1px); } 50% { transform:translateY(1px); } 100% { transform:translateY(-1px); } }
   .btnrow { display:flex; gap:8px; }
@@ -273,7 +275,7 @@ function renderSlots() {
     if (rolling.has(i)) return `<div class="tk rolling" aria-label="Picking a number">${esc(rollText[i] || '…')}</div>`;
     if (v == null) return `<div class="tk empty" aria-label="Empty ticket ${i + 1}">?</div>`;
     const cls = ['tk', taken.has(v) ? 'taken' : '', popping.has(i) ? 'pop' : ''].join(' ');
-    return `<div class="${cls}"><button type="button" class="mini rm" data-i="${i}" data-act="rm" aria-label="Remove ${esc(fmt(v))}">✕</button>${esc(fmt(v))}<button type="button" class="mini" data-i="${i}" data-act="re" aria-label="Pick a different number instead of ${esc(fmt(v))}">🔁</button></div>`;
+    return `<div class="${cls}">${esc(fmt(v))}<button type="button" class="mini re" data-i="${i}" data-act="re" aria-label="Pick a different number instead of ${esc(fmt(v))}">↻</button><button type="button" class="mini rm" data-i="${i}" data-act="rm" aria-label="Remove ${esc(fmt(v))}">✕</button></div>`;
   }).join('');
   renderModeLabelsOnly();
 }
@@ -344,12 +346,14 @@ async function addLucky() {
   $('luckyAdd').disabled = true;
   try {
     const { results } = await call('public_check_tickets', { campaign_id: campaignId, ticket_numbers: [num] });
-    if (!results[0].ok) { msg(results[0].error.replace(/^Ticket \d+/, fmt(num)) + ' — try another.', 'bad'); return; }
+    if (!results[0].ok) { msg(nice(results[0].error) + ' — try another.', 'bad'); return; }
     slots[idx] = num; popping.add(idx); inp.value = ''; msg(`${fmt(num)} is yours ✓`, 'good');
     renderSlots(); renderPay(); burst($('luckyAdd')); setTimeout(() => popping.clear(), 600);
   } catch (e) { msg(e.message, 'bad'); }
   finally { $('luckyAdd').disabled = false; }
 }
+// Buyer-facing wording: show the prefixed number, and don't leak internal status words.
+function nice(m) { return String(m).replace(/Ticket ([0-9]+) is already [a-z_]+/g, (_, n) => fmt(Number(n)) + ' has just been taken').replace(/Ticket ([0-9]+)/g, (_, n) => fmt(Number(n))); }
 function msg(t, kind) { const m = $('msg'); if (m) { m.textContent = t || ''; m.className = 'msg ' + (kind || ''); } }
 
 function burst(el) {
@@ -401,7 +405,7 @@ async function pay() {
   } catch (e) {
     busy = false;
     if (!e.network) attempt = null;
-    errEl.innerHTML = `<div class="err">${esc(e.message)}${e.network ? ' Nothing is lost — tap again to retry; you will not be charged twice.' : ''}</div>`;
+    errEl.innerHTML = `<div class="err">${esc(nice(e.message))}${e.network ? ' Nothing is lost — tap again to retry; you will not be charged twice.' : ''}</div>`;
     if (mode === 'pick' && !e.network) await flagTaken();
     renderPay();
   }

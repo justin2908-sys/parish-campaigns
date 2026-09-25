@@ -638,3 +638,31 @@ buttons). Now ~470px typical, ~580px worst case (two campaigns, two tiers, two s
   call (max 200), returning one result per number in order, with the same wording as the
   single `check_ticket` (which stays, for editing one number). Both are now scoped to the
   caller's own parish — the single check previously didn't verify the campaign was theirs.
+
+---
+
+## 21. Public buy page rebuilt — built 2026-09-25
+
+One page, no steps, a little festive (it's the parish's public face), mobile-first, with a sticky
+Pay bar whose label always names the next thing needed ("Pick 3 more numbers", "Add your name",
+then "Pay £20.00 securely").
+
+- **How many:** − / + stepper (typeable) plus quick picks 1 · 5 · 10 · 20; capped at 20 per
+  purchase (the existing server cap).
+- **Two ways to get numbers**, one tap apart:
+  - **✨ Assign for me** — the system assigns N numbers the moment the buyer pays (the existing
+    lowest-available claim).
+  - **🎲 Pick my numbers** — a basket of N ticket-shaped slots. **Shuffle** fills the empty slots
+    with random available numbers (a brief tumble animation), **↻** re-rolls one, **✕** empties
+    one, **↻ All** re-shuffles the lot, and a lucky-number box adds a typed number (checked when
+    Add is tapped — nothing is looked up per keystroke). Adding a lucky number with no free slot
+    bumps the quantity (single-price campaigns).
+- **Shuffles are suggestions, not reservations.** Nothing is held until the buyer pays; the
+  purchase's all-or-nothing claim is what guarantees the numbers. If someone snaps one up first,
+  the page marks exactly which numbers went and offers a one-tap "Swap" for fresh ones.
+- **New actions:** `public_random_numbers` (backed by the `random_unsold_numbers` DB function —
+  online numbers only, unsold only, never the ones already in the basket, max 20) and
+  `public_check_tickets` (batch, online only, max 20). Buyer-facing messages show the prefixed
+  number and never internal status words.
+- Same weak-signal protections as the Sell screen: request timeout, retry-safe `client_ref`.
+- Respects `prefers-reduced-motion` (no tumble/confetti).
