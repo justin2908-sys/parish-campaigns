@@ -790,6 +790,41 @@ async function publicCheckTicket({ campaign_id, ticket_number }) {
   return { ok: true };
 }
 
+// The same check for several numbers in one request (the buy page's basket, max 20 — the
+// per-purchase cap). Online tickets only. One result per number, in the order asked.
+async function publicCheckTickets({ campaign_id, ticket_numbers }) {
+  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+  if (!Array.isArray(ticket_numbers) || !ticket_numbers.length) throw httpError(400, 'No ticket numbers to check');
+  if (ticket_numbers.length > MAX_PUBLIC_PURCHASE_QTY) throw httpError(400, `Check at most ${MAX_PUBLIC_PURCHASE_QTY} numbers at a time`);
+  const nums = ticket_numbers.map(Number);
+  if (nums.some(n => !Number.isInteger(n))) throw httpError(400, 'Ticket numbers must be whole numbers');
+  const { data: rows } = await supabase.from('tickets').select('ticket_number, status, ticket_blocks!inner(type)')
+    .eq('campaign_id', campaign_id).eq('ticket_blocks.type', 'digital').in('ticket_number', nums);
+  const statusByNum = Object.fromEntries((rows || []).map(r => [r.ticket_number, r.status]));
+  return {
+    results: nums.map(n => {
+      if (!(n in statusByNum)) return { ticket_number: n, ok: false, error: `Ticket ${n} doesn't exist in this campaign` };
+      if (statusByNum[n] !== 'unsold') return { ticket_number: n, ok: false, error: `Ticket ${n} is already taken` };
+      return { ticket_number: n, ok: true };
+    }),
+  };
+}
+
+// The "shuffle" button: up to `count` random online numbers that are still free, skipping any
+// the buyer already holds in their basket. These are suggestions only — nothing is reserved
+// until they pay, and the purchase itself re-checks every number atomically.
+async function publicRandomNumbers({ campaign_id, block_id, count, exclude }) {
+  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+  const n = Number(count);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_PUBLIC_PURCHASE_QTY) throw httpError(400, `Ask for between 1 and ${MAX_PUBLIC_PURCHASE_QTY} numbers`);
+  const skip = (Array.isArray(exclude) ? exclude : []).map(Number).filter(Number.isInteger).slice(0, 100);
+  const { data, error } = await supabase.rpc('random_unsold_numbers', { p_campaign_id: campaign_id, p_block_id: block_id || null, p_count: n, p_exclude: skip });
+  if (error) throw httpError(500, 'Could not pick numbers right now — please try again.');
+  return { numbers: (data || []).map(Number) };
+}
+
 // The purchase itself. block_id picks which online pool for "any available"; ticket_numbers
 // is a buyer's own lucky-number pick — exactly one of the two, same contract as recordSale.
 async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbers, buyer_name, contact_value, client_ref }) {
@@ -1494,6 +1529,8 @@ const actions = {
   public_payment_status: (s, b) => publicPaymentStatus(b),
   public_campaign_info: (s, b) => publicCampaignInfo(b),
   public_check_ticket: (s, b) => publicCheckTicket(b),
+  public_check_tickets: (s, b) => publicCheckTickets(b),
+  public_random_numbers: (s, b) => publicRandomNumbers(b),
   public_purchase: (s, b) => publicPurchase(b),
   log_link_shared: (s, b) => logLinkShared(s, b),
   sumup_check: (s) => sumupCheck(s),

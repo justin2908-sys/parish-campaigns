@@ -2,51 +2,117 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#7a2e22">
 <title>Buy tickets</title>
 <style>
   :root {
-    --ink: #1c1c1e; --paper: #fdfcf9; --line: #e4e0d8;
-    --accent: #8a3b2b; --accent-dim: #f2e4de;
-    --good: #3a6b4f; --good-dim: #e2efe6;
-    --bad: #a4342a; --bad-dim: #f6dedb;
-    --tier-c: #4b5c7a; --tier-c-dim: #e4e8f0;
+    --ink:#22191a; --paper:#fbf7ef; --card:#ffffff; --line:#eadfce;
+    --wine:#7a2e22; --wine2:#a8432f; --gold:#e8b04a; --gold-dim:#fbefd4;
+    --good:#2f7a52; --good-dim:#e2f2e8; --bad:#b03a2e; --bad-dim:#fbe3df; --muted:#8a7d72;
   }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--paper); color:var(--ink); }
-  header { padding: 18px 20px; border-bottom: 1px solid var(--line); text-align:center; }
-  header h1 { font-size: 17px; margin:0; }
-  main { max-width: 480px; margin: 0 auto; padding: 20px; }
-  .card { background:white; border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:16px; }
-  label { display:block; font-size:13px; color:#555; margin: 12px 0 4px; font-weight:500; }
-  label:first-child { margin-top:0; }
-  input, select { width:100%; padding:13px; font-size:16px; border:1px solid var(--line); border-radius:10px; background:var(--paper); color:var(--ink); font-family:inherit; }
-  .row { display:flex; gap:10px; flex-wrap:wrap; }
-  .row > * { flex:1; min-width:130px; }
-  .toggle { display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-top:6px; }
-  .toggle button { flex:1; padding:11px; border:none; background:white; font-size:14px; font-weight:600; color:#777; cursor:pointer; }
-  .toggle button.active { background:var(--accent); color:white; }
-  .toggle button.active.alt { background:var(--tier-c); }
-  .total { font-family:inherit; font-size:28px; font-weight:700; text-align:center; margin:16px 0; }
-  button.primary { width:100%; padding:16px; font-size:17px; font-weight:600; background:var(--accent); color:white; border:none; border-radius:12px; margin-top:16px; cursor:pointer; }
-  button.primary:disabled { background:var(--line); color:#888; cursor:not-allowed; }
-  .muted { color:#888; font-size:13px; }
-  .error { background:var(--bad-dim); color:var(--bad); padding:12px; border-radius:10px; margin:10px 0; font-size:14px; }
-  .details-text { white-space:pre-wrap; font-size:14px; color:#444; line-height:1.5; }
-  .ticket-row { display:flex; gap:8px; align-items:center; margin-bottom:4px; }
-  .badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; }
-  .badge.tier0 { background:var(--accent-dim); color:var(--accent); }
-  .badge.tier1 { background:var(--good-dim); color:var(--good); }
-  .badge.tier2 { background:var(--tier-c-dim); color:var(--tier-c); }
-  .tn-status { font-size:11px; margin:-2px 0 8px 4px; min-height:14px; }
-  .tn-status.ok { color:var(--good); } .tn-status.bad { color:var(--bad); } .tn-status.checking { color:#888; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,system-ui,sans-serif; background:var(--paper); color:var(--ink); padding-bottom:calc(112px + env(safe-area-inset-bottom)); }
+  button { font-family:inherit; cursor:pointer; }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+  /* ---- hero ---- */
+  .hero { position:relative; overflow:hidden; color:#fff; text-align:center; padding:20px 18px 26px;
+    background:radial-gradient(120% 140% at 15% 0%, #c25a3f 0%, transparent 55%), radial-gradient(90% 120% at 100% 100%, #e8b04a55 0%, transparent 60%), linear-gradient(160deg,#7a2e22,#4d1a14); }
+  .hero::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:18px; background:var(--paper); border-radius:18px 18px 0 0; }
+  .hero .spark { position:absolute; font-size:18px; opacity:.55; animation:float 6s ease-in-out infinite; }
+  .hero .parish { position:relative; font-size:12px; letter-spacing:.14em; text-transform:uppercase; opacity:.85; }
+  .hero h1 { position:relative; margin:6px 0 4px; font-size:28px; line-height:1.1; letter-spacing:-.01em; text-shadow:0 2px 12px rgba(0,0,0,.25); }
+  .hero .each { position:relative; display:inline-block; margin-top:4px; padding:4px 12px; border-radius:20px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28); font-size:13px; font-weight:600; backdrop-filter:blur(2px); }
+  .detailsBtn { position:relative; display:block; margin:10px auto 0; background:none; border:none; color:#fff; opacity:.9; font-size:13px; text-decoration:underline; text-underline-offset:3px; }
+  .details { position:relative; margin:10px auto 0; max-width:420px; text-align:left; white-space:pre-wrap; font-size:13.5px; line-height:1.5; background:rgba(0,0,0,.22); border-radius:12px; padding:12px 14px; }
+  @keyframes float { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-8px) rotate(8deg); } }
+
+  .wrap { max-width:480px; margin:0 auto; padding:0 14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:14px; margin-bottom:12px; box-shadow:0 1px 0 rgba(0,0,0,.02), 0 8px 24px -14px rgba(122,46,34,.35); }
+  .card h2 { margin:0 0 10px; font-size:14px; letter-spacing:.02em; color:var(--wine); text-transform:uppercase; }
+
+  /* ---- quantity ---- */
+  .qty-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+  .qty-label { font-size:16px; font-weight:700; }
+  .qty-label small { display:block; font-weight:500; color:var(--muted); font-size:12.5px; }
+  .stepper { display:flex; align-items:center; background:var(--gold-dim); border-radius:14px; overflow:hidden; border:1px solid var(--line); }
+  .stepper button { width:52px; height:48px; border:none; background:none; color:var(--wine); font-size:28px; font-weight:600; line-height:1; }
+  .stepper button:active { background:#f4dfb0; }
+  .stepper input { width:54px; height:48px; text-align:center; border:none; background:#fff; font-size:22px; font-weight:800; color:var(--ink); padding:0; -moz-appearance:textfield; }
+  .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+  .quick { display:flex; gap:6px; margin-bottom:10px; }
+  .quick button { flex:1; padding:8px 0; border:1px solid var(--line); background:#fff; border-radius:10px; font-size:14px; font-weight:700; color:var(--wine); }
+  .quick button.on { background:var(--wine); color:#fff; border-color:var(--wine); }
+
+  /* ---- mode ---- */
+  .seg { display:flex; background:#f3ece0; border-radius:14px; padding:4px; margin:6px 0 12px; }
+  .seg button { flex:1; border:none; background:none; padding:11px 6px; border-radius:11px; font-size:14.5px; font-weight:700; color:var(--muted); transition:all .2s; }
+  .seg button.on { background:#fff; color:var(--wine); box-shadow:0 2px 8px rgba(0,0,0,.1); }
+  .note { font-size:13.5px; color:#5a4d47; line-height:1.45; }
+  select { width:100%; padding:11px 12px; font-size:15px; border:1px solid var(--line); border-radius:12px; background:#fff; color:var(--ink); margin-top:10px; }
+
+  /* ---- ticket chips ---- */
+  .slots { display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:8px; margin-bottom:10px; }
+  .tk { position:relative; display:flex; align-items:center; justify-content:center; gap:4px; min-height:46px; padding:6px 30px 6px 10px; border-radius:10px; font-variant-numeric:tabular-nums; font-weight:800; font-size:17px; letter-spacing:.02em;
+    background:linear-gradient(180deg,#fffaf0,#fdf1d8); border:1.5px solid #e6c98a; color:var(--wine);
+    -webkit-mask:radial-gradient(circle 6px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat, radial-gradient(circle 6px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat;
+            mask:radial-gradient(circle 6px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat, radial-gradient(circle 6px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat; }
+  .tk.empty { background:#faf6ee; border:1.5px dashed #d9cbb2; color:#c3b39a; padding:6px 10px; font-weight:700; }
+  .tk.taken { background:var(--bad-dim); border-color:var(--bad); color:var(--bad); text-decoration:line-through; }
+  .tk.rolling { color:#b8874a; animation:shake .18s linear infinite; }
+  .tk.pop { animation:pop .45s cubic-bezier(.2,1.6,.4,1); }
+  .tk .mini { position:absolute; right:2px; top:50%; transform:translateY(-50%); width:26px; height:26px; border:none; background:none; font-size:13px; color:#a07a3a; padding:0; }
+  .tk .mini.rm { right:auto; }
+  @keyframes pop { 0% { transform:scale(.4) rotate(-6deg); opacity:0; } 100% { transform:scale(1) rotate(0); opacity:1; } }
+  @keyframes shake { 0% { transform:translateY(-1px); } 50% { transform:translateY(1px); } 100% { transform:translateY(-1px); } }
+  .btnrow { display:flex; gap:8px; }
+  .shuf { flex:1; border:none; padding:13px 8px; border-radius:13px; font-size:15px; font-weight:800; color:#3a2604; background:linear-gradient(180deg,#f7c962,#e8a93a); box-shadow:0 4px 0 #c88a22; }
+  .shuf:active { transform:translateY(2px); box-shadow:0 2px 0 #c88a22; }
+  .shuf.alt { flex:0 0 auto; background:#fff; color:var(--wine); box-shadow:none; border:1.5px solid var(--line); }
+  .dice { display:inline-block; }
+  .busy .dice { animation:spin .6s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .lucky { display:flex; gap:8px; margin-top:10px; }
+  .lucky input { flex:1; min-width:0; padding:12px; font-size:17px; border:1.5px solid var(--line); border-radius:12px; letter-spacing:.06em; background:#fff; color:var(--ink); }
+  .lucky button { padding:0 18px; border:none; border-radius:12px; background:var(--wine); color:#fff; font-size:15px; font-weight:700; }
+  .msg { min-height:18px; margin-top:8px; font-size:13px; }
+  .msg.bad { color:var(--bad); } .msg.good { color:var(--good); }
+
+  /* ---- contact ---- */
+  .two { display:flex; gap:8px; }
+  .two input { flex:1; min-width:0; padding:13px 12px; font-size:16px; border:1.5px solid var(--line); border-radius:12px; background:#fff; color:var(--ink); }
+  .two input:focus, .lucky input:focus, select:focus { outline:none; border-color:var(--wine2); box-shadow:0 0 0 3px #a8432f22; }
+  .tiny { text-align:center; color:var(--muted); font-size:12px; line-height:1.5; margin:4px 8px 16px; }
+
+  /* ---- sticky pay bar ---- */
+  .paybar { position:fixed; left:0; right:0; bottom:0; z-index:10; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:rgba(255,255,255,.96); backdrop-filter:blur(8px); border-top:1px solid var(--line); box-shadow:0 -10px 30px -12px rgba(0,0,0,.25); }
+  .paybar .in { max-width:480px; margin:0 auto; }
+  .sum { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .sum b { font-size:24px; color:var(--ink); }
+  .pay { width:100%; padding:16px; border:none; border-radius:15px; font-size:17px; font-weight:800; color:#fff; letter-spacing:.01em; background:linear-gradient(180deg,#b24a34,#7a2e22); box-shadow:0 5px 0 #4d1a14; }
+  .pay:active { transform:translateY(3px); box-shadow:0 2px 0 #4d1a14; }
+  .pay.wait { background:#cbbfb0; box-shadow:0 5px 0 #a99c8b; color:#fff; }
+  .pay:disabled { opacity:.75; }
+  .err { background:var(--bad-dim); color:var(--bad); padding:10px 12px; border-radius:12px; font-size:13.5px; margin-top:8px; }
+
+  /* ---- overlay & confetti ---- */
+  .veil { position:fixed; inset:0; z-index:30; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; background:rgba(77,26,20,.92); color:#fff; font-size:18px; font-weight:700; text-align:center; padding:24px; }
+  .veil.on { display:flex; }
+  .veil .big { font-size:54px; animation:spin 1.2s linear infinite; }
+  .bit { position:fixed; z-index:40; pointer-events:none; font-size:16px; animation:fly .9s ease-out forwards; }
+  @keyframes fly { from { transform:translate(0,0) scale(1); opacity:1; } to { transform:translate(var(--dx),var(--dy)) rotate(var(--r)) scale(.6); opacity:0; } }
+  .fatal { max-width:480px; margin:40px auto; padding:0 16px; }
+  @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .bit { display:none; } }
 </style>
 </head>
 <body>
-<header><h1>⛪ Parish Campaigns</h1></header>
-<main id="app"><div class="card"><p class="muted">Loading…</p></div></main>
+<div id="app"><div class="fatal"><div class="card"><p class="note">Loading…</p></div></div></div>
+<div class="veil" id="veil"><div class="big">🎟️</div><div>Taking you to SumUp's secure payment page…</div><div style="font-size:13px;font-weight:500;opacity:.8">Your numbers are held for you while you pay.</div></div>
 
 <script>
+const $ = (id) => document.getElementById(id);
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 // No reply within 25s gives up with a plain message instead of hanging on a weak signal.
 // err.network = we don't know whether the server received it (vs. a real answer from it).
@@ -54,7 +120,7 @@ async function call(action, body) {
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 25000);
   let res, data;
   try {
-    res = await fetch('/api/' + action, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body || {}), signal: ctl.signal });
+    res = await fetch('/api/' + action, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {}), signal: ctl.signal });
     data = await res.json().catch(() => ({}));
   } catch (e) {
     const err = new Error(e && e.name === 'AbortError' ? 'No reply from the server — the signal may be weak.' : "Can't reach the server — check your signal.");
@@ -63,147 +129,305 @@ async function call(action, body) {
   if (!res.ok) throw new Error(data.error || 'Something went wrong');
   return data;
 }
-// Same purchase details reuse the same reference, so a retry after a lost reply can't create a
-// second purchase; changing anything starts a fresh one.
-let purchaseAttempt = null;
-function newClientRef() { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12); }
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const REDUCED = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const campaignId = new URLSearchParams(location.search).get('campaign_id');
+function newClientRef() { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12); }
 
-let info = null, counts = {}, pickMode = 'auto', blockId = null, luckyNumbers = [];
+let info = null, counts = {}, mode = 'auto', blockId = null;
+let slots = [];            // one entry per ticket wanted: a number, or null for an empty slot
+let rolling = new Set(), rollText = {}, popping = new Set(), taken = new Set();
+let shuffling = false, busy = false, attempt = null, detailsOpen = false;
+
+const MAX_QTY = 20; // matches the server's per-purchase cap
+
+function totalQty() { return info.tiers.reduce((s, t) => s + (counts[t.id] || 0), 0); }
+function totalPrice() { return info.tiers.reduce((s, t) => s + (counts[t.id] || 0) * Number(t.price), 0); }
+function money(n) { return '£' + Number(n).toFixed(2); }
+function digitBounds() {
+  return { min: Math.min(...info.blocks.map(b => String(b.range_start).length)), max: Math.max(...info.blocks.map(b => String(b.range_end).length)) };
+}
+function fmt(n) { const b = info.blocks.find(b => n >= b.range_start && n <= b.range_end); return ((b && b.number_prefix) || '') + n; }
 
 async function boot() {
-  const app = document.getElementById('app');
-  if (!campaignId) { app.innerHTML = `<div class="card error">This link is missing its campaign reference.</div>`; return; }
+  const app = $('app');
+  if (!campaignId) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">This link is missing its campaign reference.</div></div></div>`; return; }
   try {
     info = await call('public_campaign_info', { campaign_id: campaignId });
-    counts = Object.fromEntries(info.tiers.map(t => [t.id, 0]));
-    blockId = info.blocks.length === 1 ? info.blocks[0].id : null;
-    render();
-  } catch (e) {
-    app.innerHTML = `<div class="card error">${esc(e.message)}</div>`;
-  }
+  } catch (e) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">${esc(e.message)}</div></div></div>`; return; }
+  counts = Object.fromEntries(info.tiers.map(t => [t.id, 0]));
+  blockId = info.blocks[0].id;
+  buildShell();
+  syncSlots(); renderQty(); renderMode(); renderPay();
 }
 
-function currentBlock() { return info.blocks.find(b => b.id === blockId); }
-
-function render() {
-  const app = document.getElementById('app');
-  const block = currentBlock();
-  const total = info.tiers.reduce((s, t) => s + (counts[t.id] || 0) * Number(t.price), 0);
-  const totalCount = Object.values(counts).reduce((s, c) => s + c, 0);
-
-  app.innerHTML = `
-    <div class="card">
-      <h2 style="margin-top:0">${esc(info.campaign.name)}</h2>
-      ${info.org.name ? `<p class="muted" style="margin-top:-8px">${esc(info.org.name)}${info.org.address?' · '+esc(info.org.address):''}</p>` : ''}
-      ${info.campaign.details_text ? `<div class="details-text">${esc(info.campaign.details_text)}</div>` : ''}
+function buildShell() {
+  const sparks = ['✨','🎟️','⭐','🎁','✨'].map((s, i) => `<span class="spark" style="left:${8 + i * 21}%;top:${14 + (i % 2) * 42}%;animation-delay:${i * .8}s">${s}</span>`).join('');
+  const from = Math.min(...info.tiers.map(t => Number(t.price)));
+  $('app').innerHTML = `
+    <div class="hero">${sparks}
+      ${info.org.name ? `<div class="parish">${esc(info.org.name)}</div>` : ''}
+      <h1>${esc(info.campaign.name)}</h1>
+      <span class="each">🎟️ ${info.tiers.length > 1 ? 'From ' : ''}${money(from)} a ticket</span>
+      ${info.campaign.details_text ? `<button class="detailsBtn" id="detailsBtn" type="button">🎁 Prizes &amp; details ▾</button><div class="details" id="details" hidden>${esc(info.campaign.details_text)}</div>` : ''}
     </div>
-    <div class="card">
-      <h3 style="margin-top:0">Choose your tickets</h3>
-      ${info.blocks.length > 1 ? `
-      <label>Which series</label>
-      <select id="blockSelect">${info.blocks.map(b => `<option value="${b.id}" ${b.id===blockId?'selected':''}>${esc(b.label)} (${esc(b.number_prefix||'')}${b.range_start}–${esc(b.number_prefix||'')}${b.range_end})</option>`).join('')}</select>
-      ` : ''}
-      <div class="row">
-        ${info.tiers.map(t => `<div><label>No. of ${esc(t.name)} (£${Number(t.price).toFixed(2)})</label>
-          <input type="number" min="0" inputmode="numeric" value="${counts[t.id]||0}" data-tier="${t.id}" oninput="onCountChange('${t.id}', this.value)"></div>`).join('')}
+    <div class="wrap">
+      <div class="card">
+        <h2>How many tickets?</h2>
+        <div id="qtyArea"></div>
+        <div class="seg" id="seg" role="tablist">
+          <button type="button" data-mode="auto" role="tab">✨ Assign for me</button>
+          <button type="button" data-mode="pick" role="tab">🎲 Pick my numbers</button>
+        </div>
+        <div id="autoPane"><p class="note" id="autoNote"></p></div>
+        <div id="pickPane" hidden>
+          <div class="slots" id="slots" aria-live="polite"></div>
+          <div class="btnrow">
+            <button type="button" class="shuf" id="shuffleBtn"><span class="dice">🎲</span> <span id="shuffleLabel">Shuffle</span></button>
+            <button type="button" class="shuf alt" id="shuffleAllBtn" title="Replace every number with new random ones">↻ All</button>
+          </div>
+          <div class="lucky">
+            <label class="sr" for="luckyIn">A lucky number</label>
+            <input id="luckyIn" inputmode="numeric" autocomplete="off" placeholder="Or type a lucky number">
+            <button type="button" id="luckyAdd">Add</button>
+          </div>
+        </div>
+        ${info.blocks.length > 1 ? `<label class="sr" for="seriesSel">Which series</label><select id="seriesSel">${info.blocks.map(b => `<option value="${b.id}">${esc(b.label)} (${esc(b.number_prefix||'')}${b.range_start}–${esc(b.number_prefix||'')}${b.range_end})</option>`).join('')}</select>` : ''}
+        <div class="msg" id="msg" role="status"></div>
       </div>
-
-      <label>Ticket numbers</label>
-      <div class="toggle">
-        <button type="button" class="${pickMode==='auto'?'active':''}" onclick="setPickMode('auto')">Any available</button>
-        <button type="button" class="${pickMode==='manual'?'active alt':''}" onclick="setPickMode('manual')">Pick your lucky number</button>
+      <div class="card">
+        <h2>Who's it for?</h2>
+        <div class="two">
+          <label class="sr" for="buyerName">Your name</label><input id="buyerName" placeholder="Your name" autocomplete="name">
+          <label class="sr" for="contactInput">Mobile or email</label><input id="contactInput" placeholder="Mobile or email" autocomplete="email" inputmode="email">
+        </div>
+        <p class="tiny" style="margin:8px 0 0">We'll send your ticket confirmation here.</p>
       </div>
-      ${pickMode==='manual' ? `
-      <div class="muted" style="margin-top:8px">Valid range: ${esc(block.number_prefix||'')}${block.range_start}–${esc(block.number_prefix||'')}${block.range_end}</div>
-      <div id="ticketRows" style="margin-top:8px"></div>
-      ` : `<div class="muted" style="margin-top:8px">We'll assign the next available number(s) for you.</div>`}
-
-      <div class="total">£${total.toFixed(2)}</div>
-
-      <label>Your name</label>
-      <input id="buyerName" placeholder="e.g. Mary O'Brien">
-      <label>Your mobile or email <span class="muted">(so we can confirm your ticket)</span></label>
-      <input id="contactInput" placeholder="07… or name@example.com" autocomplete="off">
-
-      <button class="primary" id="payBtn" onclick="doPurchase()" ${totalCount<=0?'disabled':''}>Pay by Link — £${total.toFixed(2)}</button>
-      <div id="err"></div>
+      <p class="tiny">Secure payment by SumUp. Your payment link is valid for 30 minutes and your numbers are held for you meanwhile.${info.org.address ? `<br>${esc(info.org.name)} · ${esc(info.org.address)}` : ''}</p>
     </div>
-  `;
-  if (info.blocks.length > 1) document.getElementById('blockSelect').onchange = (e) => { blockId = e.target.value; luckyNumbers = []; render(); };
-  if (pickMode === 'manual') renderTicketRows();
+    <div class="paybar"><div class="in">
+      <div class="sum"><span id="sumText">Choose your tickets</span><b id="sumPrice">£0.00</b></div>
+      <button type="button" class="pay wait" id="payBtn">Choose your tickets</button>
+      <div id="payErr"></div>
+    </div></div>`;
+
+  if ($('detailsBtn')) $('detailsBtn').onclick = () => { detailsOpen = !detailsOpen; $('details').hidden = !detailsOpen; $('detailsBtn').innerHTML = detailsOpen ? '🎁 Hide details ▴' : '🎁 Prizes &amp; details ▾'; };
+  $('seg').onclick = (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); };
+  $('slots').onclick = onSlotClick;
+  $('shuffleBtn').onclick = () => shuffle(false);
+  $('shuffleAllBtn').onclick = () => shuffle(true);
+  $('luckyAdd').onclick = addLucky;
+  $('luckyIn').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addLucky(); } };
+  $('luckyIn').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, digitBounds().max); };
+  if ($('seriesSel')) $('seriesSel').onchange = (e) => { blockId = e.target.value; if (mode === 'pick') { slots = slots.map(() => null); taken.clear(); renderSlots(); } renderMode(); renderPay(); };
+  $('payBtn').onclick = pay;
+  $('buyerName').oninput = renderPay; $('contactInput').oninput = renderPay;
 }
 
-function onCountChange(tierId, v) { counts[tierId] = Number(v) || 0; regenerateRows(); render(); }
-function setPickMode(m) { pickMode = m; luckyNumbers = []; render(); }
-
-function regenerateRows() {
-  const seq = [];
-  info.tiers.forEach(t => { for (let i=0; i<(counts[t.id]||0); i++) seq.push(t.id); });
-  luckyNumbers = seq.map((tierId, i) => ({ tierId, value: luckyNumbers[i] ? luckyNumbers[i].value : '' }));
+/* ---------- quantity ---------- */
+function setCount(tierId, v) {
+  counts[tierId] = Math.max(0, Math.min(MAX_QTY, Number(v) || 0));
+  // never let the total exceed the per-purchase cap
+  let over = totalQty() - MAX_QTY; if (over > 0) counts[tierId] -= over;
+  syncSlots(); renderQty(); renderMode(); renderPay();
+}
+function renderQty() {
+  const single = info.tiers.length === 1;
+  $('qtyArea').innerHTML = info.tiers.map(t => `
+    <div class="qty-row"><div class="qty-label">${esc(t.name)}<small>${money(t.price)} each</small></div>
+      <div class="stepper"><button type="button" data-t="${t.id}" data-d="-1" aria-label="One fewer ${esc(t.name)}">−</button>
+        <input type="number" min="0" max="${MAX_QTY}" inputmode="numeric" id="q-${t.id}" data-t="${t.id}" aria-label="Number of ${esc(t.name)}" value="${counts[t.id] || 0}">
+        <button type="button" data-t="${t.id}" data-d="1" aria-label="One more ${esc(t.name)}">+</button></div></div>`).join('')
+    + (single ? `<div class="quick">${[1, 5, 10, 20].map(n => `<button type="button" data-t="${info.tiers[0].id}" data-set="${n}" class="${(counts[info.tiers[0].id] || 0) === n ? 'on' : ''}">${n}</button>`).join('')}</div>` : '');
+  $('qtyArea').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.set) setCount(b.dataset.t, b.dataset.set);
+    else if (b.dataset.d) setCount(b.dataset.t, (counts[b.dataset.t] || 0) + Number(b.dataset.d));
+  };
+  $('qtyArea').onchange = (e) => { if (e.target.dataset.t && !e.target.dataset.d) setCount(e.target.dataset.t, e.target.value); };
 }
 
-function renderTicketRows() {
-  regenerateRows();
-  const wrap = document.getElementById('ticketRows'); if (!wrap) return;
-  wrap.innerHTML = luckyNumbers.map((tn, i) => {
-    const idx = info.tiers.findIndex(t => t.id === tn.tierId);
-    const tier = info.tiers[idx];
-    return `<div class="ticket-row"><span class="badge tier${idx%3}">${esc(tier.name)}</span>
-      <input value="${esc(tn.value)}" inputmode="numeric" placeholder="e.g. ${currentBlock().range_start}" oninput="setLuckyNumber(${i}, this.value)"></div>
-      <div class="tn-status" id="tnStatus-${i}"></div>`;
+/* ---------- mode & basket ---------- */
+function setMode(m) { mode = m; msg(''); renderMode(); renderPay(); }
+function syncSlots() {
+  const n = totalQty();
+  if (slots.length > n) slots.length = n;
+  while (slots.length < n) slots.push(null);
+  renderSlots();
+}
+function renderMode() {
+  const n = totalQty();
+  for (const b of $('seg').children) b.classList.toggle('on', b.dataset.mode === mode);
+  $('autoPane').hidden = mode !== 'auto';
+  $('pickPane').hidden = mode !== 'pick';
+  $('autoNote').innerHTML = n
+    ? `We'll pick <b>${n} number${n > 1 ? 's' : ''}</b> for you the moment you pay. Prefer to choose? Tap <b>Pick my numbers</b>.`
+    : `Choose how many tickets, and we'll pick the numbers for you — or choose your own.`;
+  renderModeLabelsOnly();
+}
+function renderSlots() {
+  if (!$('slots')) return;
+  const n = slots.length;
+  $('slots').style.display = n ? '' : 'none';
+  $('slots').innerHTML = slots.map((v, i) => {
+    if (rolling.has(i)) return `<div class="tk rolling" aria-label="Picking a number">${esc(rollText[i] || '…')}</div>`;
+    if (v == null) return `<div class="tk empty" aria-label="Empty ticket ${i + 1}">?</div>`;
+    const cls = ['tk', taken.has(v) ? 'taken' : '', popping.has(i) ? 'pop' : ''].join(' ');
+    return `<div class="${cls}"><button type="button" class="mini rm" data-i="${i}" data-act="rm" aria-label="Remove ${esc(fmt(v))}">✕</button>${esc(fmt(v))}<button type="button" class="mini" data-i="${i}" data-act="re" aria-label="Pick a different number instead of ${esc(fmt(v))}">🔁</button></div>`;
   }).join('');
-  luckyNumbers.forEach((tn, i) => tn.value && checkLive(i, tn.value));
+  renderModeLabelsOnly();
 }
-const checkTimers = {};
-function setLuckyNumber(i, v) {
-  luckyNumbers[i].value = v;
-  const el = document.getElementById(`tnStatus-${i}`); if (el) el.textContent = '';
-  clearTimeout(checkTimers[i]);
-  if (String(v).trim() === '') return;
-  checkTimers[i] = setTimeout(() => checkLive(i, v), 350);
+function renderModeLabelsOnly() {
+  const n = totalQty(); const empties = slots.filter(x => x == null).length;
+  $('shuffleLabel').textContent = !n ? 'Shuffle' : empties === n ? `Shuffle ${n} random` : empties ? `Shuffle ${empties} more` : 'All picked!';
+  $('shuffleAllBtn').style.display = slots.some(x => x != null) ? '' : 'none';
 }
-async function checkLive(i, v) {
-  const el = document.getElementById(`tnStatus-${i}`); if (!el) return;
-  el.textContent = '⋯ checking'; el.className = 'tn-status checking';
+async function onSlotClick(e) {
+  const b = e.target.closest('button'); if (!b) return;
+  const i = Number(b.dataset.i);
+  if (b.dataset.act === 'rm') { taken.delete(slots[i]); slots[i] = null; renderSlots(); renderPay(); }
+  if (b.dataset.act === 're') reroll(i);
+}
+function heldNumbers() { return slots.filter(x => x != null); }
+
+async function fetchRandom(count, exclude) {
+  const { numbers } = await call('public_random_numbers', { campaign_id: campaignId, block_id: blockId, count, exclude });
+  return numbers;
+}
+async function shuffle(all) {
+  if (shuffling) return;
+  const n = totalQty();
+  if (!n) { msg('Choose how many tickets first.', 'bad'); return; }
+  const targets = slots.map((v, i) => (all || v == null) ? i : -1).filter(i => i >= 0);
+  if (!targets.length) return;
+  shuffling = true; $('shuffleBtn').classList.add('busy'); msg('');
+  const exclude = heldNumbers();
+  targets.forEach(i => rolling.add(i));
+  const { max } = digitBounds();
+  const roller = setInterval(() => { targets.forEach(i => { rollText[i] = String(Math.floor(Math.random() * Math.pow(10, max))).padStart(max, '0'); }); renderSlots(); }, 70);
   try {
-    await call('public_check_ticket', { campaign_id: campaignId, ticket_number: Number(v) });
-    if (String(luckyNumbers[i].value) !== String(v)) return;
-    el.textContent = '✓ available'; el.className = 'tn-status ok';
-  } catch (e) {
-    if (String(luckyNumbers[i].value) !== String(v)) return;
-    el.textContent = e.message; el.className = 'tn-status bad';
+    // Show the tumble for at least a moment so it feels like a draw, even on a fast connection.
+    const [numbers] = await Promise.all([fetchRandom(targets.length, exclude), sleep(REDUCED ? 0 : 650)]);
+    clearInterval(roller);
+    if (all) targets.forEach(i => { taken.delete(slots[i]); slots[i] = null; });
+    rolling.clear(); popping.clear();
+    numbers.forEach((num, k) => { slots[targets[k]] = num; popping.add(targets[k]); });
+    renderSlots(); renderPay(); burst($('shuffleBtn'));
+    if (numbers.length < targets.length) msg(`Only ${numbers.length} more number${numbers.length === 1 ? ' is' : 's are'} left to pick from.`, 'bad');
+    setTimeout(() => { popping.clear(); }, 600);
+  } catch (e) { clearInterval(roller); rolling.clear(); renderSlots(); msg(e.message, 'bad'); }
+  finally { shuffling = false; $('shuffleBtn').classList.remove('busy'); }
+}
+async function reroll(i) {
+  if (shuffling) return;
+  shuffling = true; rolling.add(i); const { max } = digitBounds();
+  const roller = setInterval(() => { rollText[i] = String(Math.floor(Math.random() * Math.pow(10, max))).padStart(max, '0'); renderSlots(); }, 70);
+  try {
+    const [numbers] = await Promise.all([fetchRandom(1, heldNumbers()), sleep(REDUCED ? 0 : 450)]);
+    clearInterval(roller); rolling.clear();
+    if (numbers.length) { taken.delete(slots[i]); slots[i] = numbers[0]; popping.add(i); }
+    else msg('No other numbers are free right now.', 'bad');
+    renderSlots(); renderPay(); setTimeout(() => popping.clear(), 600);
+  } catch (e) { clearInterval(roller); rolling.clear(); renderSlots(); msg(e.message, 'bad'); }
+  finally { shuffling = false; }
+}
+async function addLucky() {
+  const inp = $('luckyIn'); const v = inp.value.trim(); const { min, max } = digitBounds();
+  if (v.length < min) { msg(`Type a full ${min === max ? min : min + '–' + max}-digit number.`, 'bad'); return; }
+  const num = Number(v);
+  if (heldNumbers().includes(num)) { msg(`${fmt(num)} is already in your tickets.`, 'bad'); return; }
+  let idx = slots.findIndex(x => x == null);
+  if (idx < 0) {
+    if (info.tiers.length === 1 && totalQty() < MAX_QTY) { setCount(info.tiers[0].id, totalQty() + 1); idx = slots.findIndex(x => x == null); }
+    else { msg(totalQty() >= MAX_QTY ? `That's the most you can buy at once (${MAX_QTY}).` : 'All your tickets already have a number — remove one first, or add another ticket.', 'bad'); return; }
+  }
+  $('luckyAdd').disabled = true;
+  try {
+    const { results } = await call('public_check_tickets', { campaign_id: campaignId, ticket_numbers: [num] });
+    if (!results[0].ok) { msg(results[0].error.replace(/^Ticket \d+/, fmt(num)) + ' — try another.', 'bad'); return; }
+    slots[idx] = num; popping.add(idx); inp.value = ''; msg(`${fmt(num)} is yours ✓`, 'good');
+    renderSlots(); renderPay(); burst($('luckyAdd')); setTimeout(() => popping.clear(), 600);
+  } catch (e) { msg(e.message, 'bad'); }
+  finally { $('luckyAdd').disabled = false; }
+}
+function msg(t, kind) { const m = $('msg'); if (m) { m.textContent = t || ''; m.className = 'msg ' + (kind || ''); } }
+
+function burst(el) {
+  if (REDUCED || !el) return;
+  const r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  for (let i = 0; i < 14; i++) {
+    const s = document.createElement('span'); s.className = 'bit'; s.textContent = ['✨', '🎉', '⭐', '🎟️'][i % 4];
+    s.style.left = cx + 'px'; s.style.top = cy + 'px';
+    s.style.setProperty('--dx', (Math.random() * 220 - 110) + 'px'); s.style.setProperty('--dy', (-40 - Math.random() * 130) + 'px'); s.style.setProperty('--r', (Math.random() * 360 - 180) + 'deg');
+    document.body.appendChild(s); setTimeout(() => s.remove(), 950);
   }
 }
 
-async function doPurchase() {
-  const errEl = document.getElementById('err');
-  const buyer_name = document.getElementById('buyerName').value.trim();
-  const contact_value = document.getElementById('contactInput').value.trim();
-  if (!buyer_name) { errEl.innerHTML = `<div class="error">Please enter your name.</div>`; return; }
-  if (!contact_value) { errEl.innerHTML = `<div class="error">Please enter your mobile number or email.</div>`; return; }
-  if (pickMode === 'manual') {
-    if (!luckyNumbers.length) { errEl.innerHTML = `<div class="error">Choose at least one ticket first.</div>`; return; }
-    const statuses = luckyNumbers.map((tn,i) => document.getElementById(`tnStatus-${i}`)?.textContent || '');
-    if (statuses.some(s => !s.includes('available')) || luckyNumbers.some(tn => !tn.value)) {
-      errEl.innerHTML = `<div class="error">Fix the flagged ticket number(s) first.</div>`; return;
-    }
+/* ---------- pay bar ---------- */
+function nextStep() {
+  const n = totalQty();
+  if (!n) return { ok: false, label: 'Choose your tickets', focus: 'qtyArea' };
+  if (mode === 'pick') {
+    const left = slots.filter(x => x == null).length;
+    if (left) return { ok: false, label: `Pick ${left} more number${left > 1 ? 's' : ''}`, focus: 'pickPane' };
+    if (slots.some(v => taken.has(v))) return { ok: false, label: 'Replace the taken numbers', focus: 'slots' };
   }
-  errEl.innerHTML = '';
-  const payBtn = document.getElementById('payBtn'); payBtn.disabled = true; payBtn.textContent = 'Please wait…';
+  if (!$('buyerName').value.trim()) return { ok: false, label: 'Add your name', focus: 'buyerName' };
+  if (!$('contactInput').value.trim()) return { ok: false, label: 'Add your mobile or email', focus: 'contactInput' };
+  return { ok: true, label: `Pay ${money(totalPrice())} securely` };
+}
+function renderPay() {
+  const n = totalQty(), s = nextStep();
+  $('sumText').textContent = n ? `${n} ticket${n > 1 ? 's' : ''}${mode === 'pick' ? ' · your numbers' : ' · assigned for you'}` : 'Choose your tickets';
+  $('sumPrice').textContent = money(totalPrice());
+  const b = $('payBtn'); b.textContent = busy ? 'Please wait…' : s.label; b.classList.toggle('wait', !s.ok); b.disabled = busy;
+  renderModeLabelsOnly();
+}
+async function pay() {
+  if (busy) return;
+  const s = nextStep(); const errEl = $('payErr'); errEl.innerHTML = '';
+  if (!s.ok) { const el = $(s.focus); if (el) { el.scrollIntoView({ block: 'center' }); if (el.focus && el.tagName === 'INPUT') el.focus(); } return; }
+  const buyer_name = $('buyerName').value.trim(), contact_value = $('contactInput').value.trim();
   const tier_counts = { ...counts };
-  const sig = JSON.stringify([tier_counts, pickMode === 'manual' ? luckyNumbers.map(t => t.value) : blockId, buyer_name, contact_value]);
-  if (!purchaseAttempt || purchaseAttempt.sig !== sig) purchaseAttempt = { sig, ref: newClientRef() };
+  const sig = JSON.stringify([tier_counts, mode === 'pick' ? slots : blockId, buyer_name, contact_value]);
+  if (!attempt || attempt.sig !== sig) attempt = { sig, ref: newClientRef() };
+  busy = true; renderPay();
   try {
-    const data = pickMode === 'manual'
-      ? await call('public_purchase', { campaign_id: campaignId, tier_counts, ticket_numbers: luckyNumbers.map(t => t.value), buyer_name, contact_value, client_ref: purchaseAttempt.ref })
-      : await call('public_purchase', { campaign_id: campaignId, tier_counts, block_id: blockId, buyer_name, contact_value, client_ref: purchaseAttempt.ref });
+    const body = { campaign_id: campaignId, tier_counts, buyer_name, contact_value, client_ref: attempt.ref };
+    if (mode === 'pick') body.ticket_numbers = slots; else body.block_id = blockId;
+    const data = await call('public_purchase', body);
+    $('veil').classList.add('on');
     location.href = data.pay_url;
   } catch (e) {
-    if (!e.network) purchaseAttempt = null;
-    errEl.innerHTML = `<div class="error">${esc(e.message)}${e.network ? ' Nothing is lost — tap the button again to retry; you will not be charged twice.' : ''}</div>`;
-    payBtn.disabled = false; payBtn.textContent = 'Pay by Link';
+    busy = false;
+    if (!e.network) attempt = null;
+    errEl.innerHTML = `<div class="err">${esc(e.message)}${e.network ? ' Nothing is lost — tap again to retry; you will not be charged twice.' : ''}</div>`;
+    if (mode === 'pick' && !e.network) await flagTaken();
+    renderPay();
   }
+}
+// After a failed purchase, find out which of the basket's numbers were snapped up meanwhile,
+// mark them, and offer replacements with one tap.
+async function flagTaken() {
+  try {
+    const held = heldNumbers(); if (!held.length) return;
+    const { results } = await call('public_check_tickets', { campaign_id: campaignId, ticket_numbers: held });
+    taken = new Set(results.filter(r => !r.ok).map(r => r.ticket_number));
+    renderSlots();
+    if (taken.size) {
+      $('payErr').innerHTML = `<div class="err">${taken.size === 1 ? 'One number was' : taken.size + ' numbers were'} just taken by someone else. <button type="button" id="swapBtn" style="margin-left:6px;padding:6px 10px;border:none;border-radius:8px;background:var(--wine);color:#fff;font-weight:700">Swap ${taken.size === 1 ? 'it' : 'them'}</button></div>`;
+      $('swapBtn').onclick = swapTaken;
+    }
+  } catch { /* the error already shown is enough */ }
+}
+async function swapTaken() {
+  const idxs = slots.map((v, i) => taken.has(v) ? i : -1).filter(i => i >= 0);
+  if (!idxs.length) return;
+  try {
+    const numbers = await fetchRandom(idxs.length, heldNumbers());
+    idxs.forEach((i, k) => { if (numbers[k] != null) { slots[i] = numbers[k]; popping.add(i); } else slots[i] = null; });
+    taken.clear(); $('payErr').innerHTML = ''; renderSlots(); renderPay(); setTimeout(() => popping.clear(), 600);
+  } catch (e) { $('payErr').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
 boot();
