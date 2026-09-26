@@ -891,3 +891,25 @@ numbered so a late answer to an earlier click is discarded.
 from data already on the screen (no server call, instant). Switching campaign also redraws instantly and
 refreshes only that seller's totals in the background. The server call behind the Sell screen also runs
 its queries in parallel (median 1.47 s → about 1.1 s on the preview).
+
+## 31. Payment links can be corrected and re-sent any time — built 2026-09-26 (on dev; preview only)
+
+**Share ticket** after a sale is now only for ONLINE tickets (they exist only on the buyer's phone). A physical
+ticket is handed over on paper, so nothing is shared after the sale; the only thing sent for a physical sale is
+the payment link, and only when Link was the way to pay.
+
+**Wrong mobile/email** — on a sale in the feed, in the send sheet, in "Payment links I've sent" and on the
+Admin Needs Attention tab there is a "Wrong number or email? Change it" control. It corrects the contact
+(server validates it; a seller can only change their own sale; never on a paid/voided sale) and the send
+buttons then point at the right person. The link itself does not change while it is still live.
+
+**Buyer comes back later** — the header has **🔗 Links** (sellers, and admins on the Sell screen): every unpaid link
+this person has sent, however old. A physical ticket stays held for its buyer, so an expired link just needs
+**Create a fresh link** (valid a further 30 minutes) and then SMS / WhatsApp / Email. Online tickets whose link
+expired have been released to the pool and are not listed (a new sale is needed).
+Not built: finding another seller's unpaid link by ticket number (admins can use Needs Attention).
+
+**Found while testing at real size (also fixed):** the database returns at most 1,000 rows per request, silently.
+With a 10,000-ticket campaign this would have made the Admin dashboard totals, campaign report, Sales /
+Needs Attention ticket numbers and a seller's totals wrong. Totals now come from a database roll-up
+(`ticket_rollup`), other lists page through or look up only the tickets they need.
