@@ -181,7 +181,7 @@ function render() {
     ? `<button onclick="viewMode='admin'; render();">← Admin</button>` : '';
   const sellingNow = state.user.role === 'seller' || (state.user.role !== 'platform_owner' && viewMode === 'sell');
   const linksBtn = sellingNow ? `<button onclick="openLinksPanel()" aria-label="Payment links I have sent">🔗 Links</button>` : '';
-  document.getElementById('headerRight').innerHTML = `${toAdmin}${linksBtn}<button onclick="logout()">Log out (${esc(state.user.name)})</button>`;
+  document.getElementById('headerRight').innerHTML = `${toAdmin}${linksBtn}<button onclick="logout()">${toAdmin ? 'Log out' : `Log out (${esc(state.user.name)})`}</button>`;
   if (state.user.role === 'platform_owner') renderPlatformOwner();
   else if (state.user.role === 'seller') renderSeller();
   else if (viewMode === 'sell') renderSeller();
