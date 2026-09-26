@@ -174,11 +174,14 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;',
 let viewMode = 'sell'; // Sell is everyone's landing page; admins reach the Admin area via a button there
 function render() {
   const staleSheet = document.getElementById('sheet'); if (staleSheet) staleSheet.remove();
+  closeLinksPanel();
   document.getElementById('app').className = '';
   if (!state.session) { renderLogin(); return; }
   const toAdmin = state.user.role !== 'seller' && state.user.role !== 'platform_owner' && viewMode === 'sell'
     ? `<button onclick="viewMode='admin'; render();">← Admin</button>` : '';
-  document.getElementById('headerRight').innerHTML = `${toAdmin}<button onclick="logout()">Log out (${esc(state.user.name)})</button>`;
+  const sellingNow = state.user.role === 'seller' || (state.user.role !== 'platform_owner' && viewMode === 'sell');
+  const linksBtn = sellingNow ? `<button onclick="openLinksPanel()" aria-label="Payment links I have sent">🔗 Links</button>` : '';
+  document.getElementById('headerRight').innerHTML = `${toAdmin}${linksBtn}<button onclick="logout()">Log out (${esc(state.user.name)})</button>`;
   if (state.user.role === 'platform_owner') renderPlatformOwner();
   else if (state.user.role === 'seller') renderSeller();
   else if (viewMode === 'sell') renderSeller();
@@ -519,7 +522,76 @@ async function logShared(paymentId, channel) {
     await call('log_link_shared', { payment_id: paymentId, channel });
     const a = activity.find(x => x.paymentId === paymentId);
     if (a) { a.sharedVia = channel; a.sharedAt = new Date().toISOString(); setTimeout(renderFeed, 400); }
+    const l = (myLinks || []).find(x => x.id === paymentId);
+    if (l) { l.contact_channel = channel; l.link_shared_at = new Date().toISOString(); setTimeout(drawLinksPanel, 400); }
   } catch {}
+}
+// ---- "Payment links I've sent": every unpaid link of this seller's, however long ago ----
+// The Sell feed only remembers this session. A buyer who returns next Sunday — link expired, ticket
+// in hand — is found here, given a fresh link, and it is sent from here. A wrong mobile/email can be
+// corrected here or straight from a sale in the feed.
+let myLinks = null, myLinksError = '', linksFilter = '';
+function closeLinksPanel() { const el = document.getElementById('linksPanel'); if (el) el.remove(); }
+async function openLinksPanel() {
+  myLinks = null; myLinksError = ''; linksFilter = ''; drawLinksPanel();
+  try { myLinks = (await call('my_open_links')).links; } catch (e) { myLinksError = e.message; }
+  drawLinksPanel();
+}
+function linkCardHtml(l) {
+  const failed = l.status === 'failed';
+  const sent = l.link_shared_at
+    ? `Sent by ${{sms:'SMS',whatsapp:'WhatsApp',email:'Email'}[l.contact_channel] || 'message'} on ${new Date(l.link_shared_at).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`
+    : 'Not sent to this contact yet';
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><b>${esc(l.payer_name || '(no name)')}</b>
+      <span class="badge ${failed ? 'bad' : 'warn'}">${failed ? 'Link expired' : 'Awaiting payment'}</span></div>
+    <div class="muted">£${Number(l.amount).toFixed(2)} · ${esc(l.campaign_name)} no. ${l.numbers.map(esc).join(', ')} · ${new Date(l.created_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div>
+    <div class="muted" style="margin:4px 0 8px">${esc(l.contact_value || '(no contact)')} · ${sent}</div>
+    ${failed
+      ? `<button class="small" ${l.busy ? 'disabled' : ''} onclick="doPanelResend('${l.id}')">${l.busy ? 'Please wait…' : 'Create a fresh link'}</button>${l.error ? `<div class="error">${esc(l.error)}</div>` : ''}
+         <div class="muted" style="margin-top:6px">The ticket is still theirs. A fresh link is valid for 30 minutes.</div>`
+      : linkShareHtml(l.id, l.contact_value, linkMessage(l.campaign_name, l.amount, l.numbers, l.link_url, l.is_online), l.campaign_name + ' — payment link')}
+    <div style="margin-top:8px"><button class="link" onclick="doChangeContact('${l.id}')">✏️ Wrong number or email? Change it</button></div>
+  </div>`;
+}
+function drawLinksPanel() {
+  let el = document.getElementById('linksPanel');
+  if (!el) { el = document.createElement('div'); el.id = 'linksPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:40;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const q = linksFilter.trim().toLowerCase();
+  const shown = (myLinks || []).filter(l => !q || (l.payer_name || '').toLowerCase().includes(q) || (l.contact_value || '').toLowerCase().includes(q) || l.numbers.join(' ').toLowerCase().includes(q));
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px"><h3 style="margin:0">Payment links I've sent</h3><button class="small" onclick="closeLinksPanel()">Close</button></div>
+    ${myLinksError ? `<div class="error">${esc(myLinksError)}</div>` : myLinks === null ? '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>'
+      : !myLinks.length ? '<div class="card"><p class="muted" style="margin:0">Nothing waiting — every link you have sent has been paid. 🎉</p></div>'
+      : `<p class="muted" style="margin:0 0 8px">Not paid yet. Find the buyer, and send the link again — or make a fresh one if it expired.</p>
+         ${myLinks.length > 4 ? `<input id="linksFilter" placeholder="Search name, number or contact" value="${esc(linksFilter)}" oninput="linksFilter=this.value; drawLinksPanel(); const i=document.getElementById('linksFilter'); i.focus(); i.setSelectionRange(i.value.length,i.value.length);" style="margin-bottom:10px">` : ''}
+         ${shown.map(linkCardHtml).join('') || '<p class="muted">No match.</p>'}`}
+  </div>`;
+}
+async function doPanelResend(id) {
+  const l = (myLinks || []).find(x => x.id === id); if (!l || l.busy) return;
+  l.busy = true; l.error = ''; drawLinksPanel();
+  try {
+    const r = await call('resend_payment', { payment_id: id });
+    Object.assign(l, { status: 'pending', link_url: r.pay_url, link_shared_at: null, contact_channel: null });
+  } catch (e) { l.error = e.message; }
+  l.busy = false; drawLinksPanel();
+}
+// Fix a wrongly typed mobile/email. The payment link itself does not change, so if it is still live it
+// simply goes to the right person; if it has expired, a fresh link is made next (in the panel or feed).
+async function doChangeContact(paymentId) {
+  const l = (myLinks || []).find(x => x.id === paymentId);
+  const a = activity.find(x => x.paymentId === paymentId);
+  const current = (l && l.contact_value) || (a && a.contact) || '';
+  const v = prompt('Type the correct mobile number or email:', current);
+  if (v === null || !v.trim()) return;
+  try {
+    const r = await call('update_link_contact', { payment_id: paymentId, contact_value: v });
+    if (l) Object.assign(l, { contact_value: r.contact_value, contact_channel: null, link_shared_at: null });
+    if (a) { Object.assign(a, { contact: r.contact_value, sharedVia: null, sharedAt: null }); if (a.status === 'linkpending') sheetId = a.id; }
+    if (l) drawLinksPanel();
+    renderFeed();
+  } catch (e) { alert(e.message); }
 }
 // SumUp tells the server the moment a link is paid; this just keeps the seller's screen current.
 function startLinkPoller() {
@@ -868,6 +940,7 @@ function renderSheet() {
   el.innerHTML = `<div style="font-weight:700;font-size:16px">Send the payment link to ${esc(a.buyerName)}</div>
     <div class="muted" style="margin:2px 0 12px">£${a.amount.toFixed(2)} · ${nums.length} ticket${nums.length>1?'s':''} · ${esc(a.contact)} · ${sent}</div>
     ${linkShareHtml(a.paymentId, a.contact, linkMessage(camp.name, a.amount, nums, a.payUrl, isOnline), camp.name + ' — payment link')}
+    <div style="margin:10px 0 2px;text-align:center"><button type="button" class="link" onclick="doChangeContact('${a.paymentId}')">✏️ Wrong number or email? Change it</button></div>
     <button type="button" class="secondary" onclick="closeSheet()">Done</button>`;
 }
 
@@ -890,6 +963,7 @@ function feedCardsHtml(mine) {
       return `<div class="card">
         <div class="${failed ? 'error' : 'hint'}" style="margin-top:0">${failed ? 'Link expired or failed' : '⏳ Awaiting payment'} — £${a.amount.toFixed(2)} for ${label}, ${esc(a.buyerName)}</div>
         <div style="font-size:12px;color:var(--slate);margin:6px 0">${sentLine}</div>
+        <div style="margin:0 0 6px"><button class="link" onclick="doChangeContact('${a.paymentId}')">✏️ Wrong number or email? Change it</button></div>
         ${failed ? (((currentCampaign().blocks.find(b => b.id === (a.draft && a.draft.selectedBlockId)) || {}).type === 'digital')
           ? `<div class="muted">This online ticket number has been released. Start a new sale for ${esc(a.buyerName)} if they still want it.</div>`
           : `<div class="muted">The ticket stays with ${esc(a.buyerName)}. If they still want to pay, make them a fresh link.</div>
@@ -1333,10 +1407,17 @@ async function renderAttentionTab() {
         <div class="muted">${esc(p.contact_value||'(contact removed)')} · £${Number(p.amount).toFixed(2)} · tickets ${p.tickets.join(' · ')} · seller ${esc(p.seller)}</div>
         <div class="muted">${sent}${p.resend_count ? ` · resent ${p.resend_count}×` : ''}</div>
         ${p.status==='pending' && p.link_url && p.contact_value ? `<div style="margin-top:8px">${linkShareHtml(p.id, p.contact_value, msg, 'Payment link')}</div>` : ''}
-        <div style="margin-top:8px"><button class="small" onclick="doResend('${p.id}')">${p.status==='failed' ? 'Create a fresh link' : 'Replace link'}</button></div>
+        <div style="margin-top:8px"><button class="small" onclick="doResend('${p.id}')">${p.status==='failed' ? 'Create a fresh link' : 'Replace link'}</button>
+          <button class="small" onclick="doAdminChangeContact('${p.id}', '${esc(p.contact_value||'').replace(/'/g,'')}')">Change contact</button></div>
       </div>`;
     }).join('')}
   </div>`;
+}
+async function doAdminChangeContact(paymentId, current) {
+  const v = prompt('Type the correct mobile number or email:', current || '');
+  if (v === null || !v.trim()) return;
+  try { await call('update_link_contact', { payment_id: paymentId, contact_value: v }); renderAttentionTab(); }
+  catch (e) { alert(e.message); }
 }
 async function doResend(paymentId) {
   try { await call('resend_payment', { payment_id: paymentId }); renderAttentionTab(); }

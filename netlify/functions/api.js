@@ -75,6 +75,26 @@ async function ratePeek(key, windowSeconds) {
 }
 async function rateReset(key) { await supabase.rpc('rate_reset', { p_key: key }); }
 
+// The database returns at most 1,000 rows per request — silently. A campaign has thousands of ticket
+// rows, so anything that reads tickets or payments in bulk pages through with fetchAll (build() must
+// give a fresh, ordered query each time), or looks up only the rows it needs (ticketsForPayments).
+async function fetchAll(build) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build().range(from, from + 999);
+    if (error) throw httpError(500, error.message);
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+async function ticketsForPayments(paymentIds, columns) {
+  const ids = [...new Set(paymentIds)]; if (!ids.length) return [];
+  const chunks = []; for (let i = 0; i < ids.length; i += 40) chunks.push(ids.slice(i, i + 40));
+  const parts = await Promise.all(chunks.map(chunk => fetchAll(() => supabase.from('tickets').select(columns).in('payment_id', chunk).order('id'))));
+  return parts.flat();
+}
+
 // Runs the stale-hold sweep at most once a minute, whoever triggers it, so the public page can
 // free abandoned holds itself without every visitor causing SumUp lookups.
 async function sweepIfDue() {
@@ -613,8 +633,8 @@ async function exportCampaignReport(session, { campaign_id }) {
 
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
   const { data: blocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id);
-  const { data: tickets } = await supabase.from('tickets').select('*').eq('campaign_id', campaign_id).order('ticket_number');
-  const { data: payments } = await supabase.from('payments').select('*').eq('campaign_id', campaign_id);
+  const tickets = await fetchAll(() => supabase.from('tickets').select('*').eq('campaign_id', campaign_id).order('ticket_number'));
+  const payments = await fetchAll(() => supabase.from('payments').select('*').eq('campaign_id', campaign_id).order('id'));
   const { data: users } = await supabase.from('users').select('id,name');
   const userName = (id) => (users.find(u => u.id === id) || {}).name || '';
   const tierName = (id) => (tiers.find(t => t.id === id) || {}).name || '';
@@ -1445,27 +1465,32 @@ async function dashboardState(session, { campaign_id } = {}) {
   const scopedIds = campaign_id ? [campaign_id] : orgCampaignIds;
   if (campaign_id && !orgCampaignIds.includes(campaign_id)) throw httpError(404, 'Campaign not found');
 
-  const { data: tickets } = await supabase.from('tickets').select('status, tier_id, campaign_id').in('campaign_id', scopedIds);
-  const { data: payments } = await supabase.from('payments').select('*').in('campaign_id', scopedIds).neq('status', 'void');
-  const { data: users } = await supabase.from('users').select('id,name,role').eq('org_id', session.org_id);
-  const { data: tiers } = await supabase.from('tiers').select('id, name, price, campaign_id').in('campaign_id', scopedIds);
+  // Ticket totals are counted by the database (grouped by status and tier) — a campaign has far more
+  // than the 1,000 rows one request can return.
+  const [{ data: rollup, error: rollupError }, payments, { data: users }, { data: tiers }] = await Promise.all([
+    supabase.rpc('ticket_rollup', { p_campaign_ids: scopedIds }),
+    fetchAll(() => supabase.from('payments').select('*').in('campaign_id', scopedIds).neq('status', 'void').order('id')),
+    supabase.from('users').select('id,name,role').eq('org_id', session.org_id),
+    supabase.from('tiers').select('id, name, price, campaign_id').in('campaign_id', scopedIds),
+  ]);
+  if (rollupError) throw httpError(500, rollupError.message);
+  const countWhere = (pred) => (rollup || []).filter(pred).reduce((s, r) => s + Number(r.n), 0);
 
   const soldStatuses = ['paid', 'cash_pending', 'held'];
-  const soldTickets = tickets.filter(t => soldStatuses.includes(t.status));
-  const sold = soldTickets.length;
-  const unsold = tickets.filter(t => t.status === 'unsold').length;
+  const sold = countWhere(r => soldStatuses.includes(r.status));
+  const unsold = countWhere(r => r.status === 'unsold');
 
   // Roll up by tier NAME (not id) so "All Campaigns" sensibly combines e.g. every
   // campaign's own "Adult" tier into one line, even though each has a distinct tier row.
   const tierById = {};
   for (const t of tiers) tierById[t.id] = t;
   const tierBreakdown = {};
-  for (const t of soldTickets) {
-    const tier = tierById[t.tier_id];
+  for (const r of (rollup || []).filter(r => soldStatuses.includes(r.status))) {
+    const tier = tierById[r.tier_id];
     const name = tier ? tier.name : 'Unknown';
     tierBreakdown[name] = tierBreakdown[name] || { name, soldCount: 0, amount: 0 };
-    tierBreakdown[name].soldCount += 1;
-    tierBreakdown[name].amount += tier ? Number(tier.price) : 0;
+    tierBreakdown[name].soldCount += Number(r.n);
+    tierBreakdown[name].amount += (tier ? Number(tier.price) : 0) * Number(r.n);
   }
 
   const cardTotal = payments.filter(p => (p.method === 'link' && p.status === 'paid') || p.method === 'machine').reduce((s, p) => s + Number(p.amount), 0);
@@ -1485,10 +1510,10 @@ async function dashboardState(session, { campaign_id } = {}) {
   }
 
   // integrity check
-  const total = tickets.length;
-  const paidCount = tickets.filter(t => t.status === 'paid').length;
-  const cashPendingCount = tickets.filter(t => t.status === 'cash_pending').length;
-  const heldCount = tickets.filter(t => t.status === 'held').length;
+  const total = countWhere(() => true);
+  const paidCount = countWhere(r => r.status === 'paid');
+  const cashPendingCount = countWhere(r => r.status === 'cash_pending');
+  const heldCount = countWhere(r => r.status === 'held');
   const integrityOk = (unsold + paidCount + cashPendingCount + heldCount) === total;
 
   return {
@@ -1526,7 +1551,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
   const { data: users } = await supabase.from('users').select('id,name');
-  const { data: tickets } = await supabase.from('tickets').select('payment_id, ticket_number, tier_id, block_id, attendee_name');
+  const tickets = await ticketsForPayments(payments.map(p => p.id), 'payment_id, ticket_number, tier_id, block_id, attendee_name');
   const { data: tiers } = await supabase.from('tiers').select('id, name');
   const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
   const out = payments.map(p => ({
@@ -1550,7 +1575,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
   const { data: users } = await supabase.from('users').select('id,name');
-  const { data: tickets } = await supabase.from('tickets').select('payment_id, ticket_number, tier_id, block_id');
+  const tickets = await ticketsForPayments((payments || []).map(p => p.id), 'payment_id, ticket_number, tier_id, block_id');
   const { data: tiers } = await supabase.from('tiers').select('id, name');
   const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
   const out = (payments || []).map(p => ({
@@ -1565,6 +1590,55 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
   return { payments: out };
+}
+
+// A wrong mobile/email typed at the sale: fix it (the link itself is unchanged and, if still live,
+// can simply be sent again to the right person). A seller can only touch their own sale; nothing
+// that is already paid or voided.
+async function updateLinkContact(session, { payment_id, contact_value }) {
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
+  if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
+  if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only change the details on your own sale.');
+  if (payment.method !== 'link') throw httpError(400, 'Only pay-by-link sales have a contact to change');
+  if (payment.status === 'paid' || payment.status === 'void') throw httpError(400, `This payment is already ${payment.status} — there is nothing left to send.`);
+  const contact = parseContact(contact_value);
+  await supabase.from('payments').update({ contact_value: contact.value, contact_channel: null, link_shared_at: null }).eq('id', payment_id);
+  return { ok: true, contact_value: contact.value, contact_kind: contact.kind, pay_url: payment.link_url, status: payment.status };
+}
+
+// The signed-in person's OWN pay-by-link sales that are still unpaid, however long ago — so a buyer
+// who comes back a week later ("here's my ticket, I still need to pay") can be given a fresh link.
+// A physical ticket stays held for its buyer, so an expired link only needs a fresh one; an online
+// ticket whose link expired has been released and is not listed.
+async function myOpenLinks(session) {
+  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  const { data: orgCampaigns } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id).eq('binned', false);
+  const campaignName = Object.fromEntries((orgCampaigns || []).map(c => [c.id, c.name]));
+  await syncOpenLinkPayments(Object.keys(campaignName));
+  const { data: payments } = await supabase.from('payments').select('*').eq('seller_id', session.uid).eq('method', 'link')
+    .in('status', ['pending', 'failed']).in('campaign_id', Object.keys(campaignName)).order('created_at', { ascending: false }).limit(60);
+  const list = payments || [];
+  const [tickets, { data: blocks }] = await Promise.all([
+    ticketsForPayments(list.map(p => p.id), 'payment_id, ticket_number, block_id'),
+    supabase.from('ticket_blocks').select('id, number_prefix, type'),
+  ]);
+  const typeByBlock = Object.fromEntries((blocks || []).map(b => [b.id, b.type]));
+  const out = list.map(p => {
+    const mine = tickets.filter(t => t.payment_id === p.id);
+    return {
+      id: p.id, campaign_id: p.campaign_id, campaign_name: campaignName[p.campaign_id],
+      payer_name: p.payer_name, contact_value: p.contact_value, link_url: p.link_url,
+      amount: p.amount, status: p.status, created_at: p.created_at,
+      link_shared_at: p.link_shared_at, contact_channel: p.contact_channel, resend_count: p.resend_count,
+      is_online: mine.some(t => typeByBlock[t.block_id] === 'digital'),
+      numbers: mine.sort((a, b) => a.ticket_number - b.ticket_number).map(t => {
+        const b = (blocks || []).find(x => x.id === t.block_id); return `${(b && b.number_prefix) || ''}${t.ticket_number}`;
+      }),
+      tickets_held: mine.length,
+    };
+  }).filter(p => p.tickets_held > 0);   // an expired online sale (tickets already released) has nothing left to pay for
+  return { links: out };
 }
 
 // Cancels a still-open SumUp checkout so its link can no longer be paid. SumUp refuses (non-2xx)
@@ -1680,12 +1754,12 @@ async function anonymizeOldData(session) {
 
 async function sellerState(session, { campaign_id } = {}) {
   requireRole(session, ['seller', 'admin', 'superadmin']);
-  let payQ = supabase.from('payments').select('*').eq('seller_id', session.uid).neq('status', 'void').neq('status', 'failed');
+  const payQ = () => { let q = supabase.from('payments').select('*').eq('seller_id', session.uid).neq('status', 'void').neq('status', 'failed').order('id'); if (campaign_id) q = q.eq('campaign_id', campaign_id); return q; };
   // The ticket total is a COUNT (the database only returns 1,000 rows at a time, so counting rows
   // would under-report a seller who has sold more than that). Both queries run side by side.
   let tixQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('sold_by', session.uid).neq('status', 'unsold');
-  if (campaign_id) { payQ = payQ.eq('campaign_id', campaign_id); tixQ = tixQ.eq('campaign_id', campaign_id); }
-  const [{ data: payments }, { count: ticketCount }] = await Promise.all([payQ, tixQ]);
+  if (campaign_id) tixQ = tixQ.eq('campaign_id', campaign_id);
+  const [payments, { count: ticketCount }] = await Promise.all([fetchAll(payQ), tixQ]);
 
   const ticketsSoldCount = ticketCount || 0;
   const cashConfirmed = payments.filter(p => p.method === 'cash' && p.status === 'paid').reduce((s, p) => s + Number(p.amount), 0);
@@ -1766,6 +1840,8 @@ const actions = {
   list_recent_payments: (s, b) => listRecentPayments(s, b),
   list_incomplete_payments: (s, b) => listIncompletePayments(s, b),
   resend_payment: (s, b) => resendPayment(s, b),
+  update_link_contact: (s, b) => updateLinkContact(s, b),
+  my_open_links: (s) => myOpenLinks(s),
   retention_flags: (s) => retentionFlags(s),
   anonymize_old_data: (s) => anonymizeOldData(s),
   seller_state: (s, b) => sellerState(s, b),
