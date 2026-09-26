@@ -392,6 +392,9 @@ function drawSeller(screen) {
   // side, and the three payment buttons in one row. Recent sales sit behind a slim bar.
   lastStats = stats;
   const multiCamp = campaigns.length > 1, multiBlock = camp.blocks.length > 1;
+  // Online tickets live on the buyer's phone, so name + mobile/email are required for them (any payment
+  // method). For a physical ticket (in the buyer's hand) they are optional — except for a payment link.
+  const sellingOnline = ((camp.blocks.find(b => b.id === selectedBlockId) || {}).type === 'digital');
   document.getElementById('app').className = 'sell';
   document.getElementById('app').innerHTML = h`
     <div id="statsWrap"></div>
@@ -421,8 +424,8 @@ function drawSeller(screen) {
       <div id="ticketRows"></div>
 
       <div class="namecontact">
-        <input id="buyerName" aria-label="Buyer name" placeholder="Buyer name" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
-        <input id="contactInput" aria-label="Buyer's mobile or email, needed for Pay by Link" placeholder="Mobile / email" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
+        <input id="buyerName" aria-label="Buyer name${sellingOnline ? ' (required)' : ' (optional, needed for Pay by Link)'}" placeholder="${sellingOnline ? 'Buyer name *' : 'Name (optional)'}" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
+        <input id="contactInput" aria-label="Buyer's mobile or email${sellingOnline ? ' (required)' : ' (optional, needed for Pay by Link)'}" placeholder="${sellingOnline ? 'Mobile / email *' : 'Mobile / email (optional)'}" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
       </div>
 
       <div class="totalline"><span>Total</span><b id="totalDisplay">£0.00</b></div>
@@ -808,10 +811,12 @@ async function submitSale(method) {
       errEl.innerHTML = `<div class="error">Fix the flagged ticket number(s) before recording this sale.</div>`; return;
     }
   }
-  if (method === 'link' && !contactValue.trim()) {
-    errEl.innerHTML = `<div class="error">Enter the buyer's mobile number or email first — that's where the payment link goes, and how we tie the ticket to them.</div>`; return;
+  // Physical + Cash/Machine: name and contact are optional. Link, or any online ticket: both required.
+  const needsDetails = method === 'link' || autoMode;
+  if (needsDetails && (!buyerNameValue.trim() || !contactValue.trim())) {
+    const missing = !buyerNameValue.trim() && !contactValue.trim() ? "name and mobile number or email" : !buyerNameValue.trim() ? 'name' : 'mobile number or email';
+    errEl.innerHTML = `<div class="error">Enter the buyer's ${missing} first — ${method === 'link' ? "that's where the payment link goes" : "an online ticket lives on their phone, so we need to be able to send it"}.</div>`; return;
   }
-  if (!buyerNameValue.trim()) { errEl.innerHTML = `<div class="error">Enter the buyer's name first.</div>`; return; }
   if (saleInFlight) return; // a second tap while the first is still going must do nothing
   errEl.innerHTML = '';
   const tier_counts = Object.fromEntries(camp.tiers.map(t => [t.id, sellCounts[t.id]||0]));
@@ -820,7 +825,7 @@ async function submitSale(method) {
   // Retry-safe: the same sale details reuse the same reference, so if a reply was lost on a weak
   // signal and the seller taps again, the server hands back the ORIGINAL sale instead of making
   // a second one. Changing anything about the sale starts a fresh reference.
-  const sig = JSON.stringify([camp.id, tier_counts, autoMode ? selectedBlockId : ticketNumbers.map(t => t.value), method, buyerNameValue, method === 'link' ? contactValue : '']);
+  const sig = JSON.stringify([camp.id, tier_counts, autoMode ? selectedBlockId : ticketNumbers.map(t => t.value), method, buyerNameValue, needsDetails ? contactValue : '']);
   if (!saleAttempt || saleAttempt.sig !== sig) saleAttempt = { sig, ref: newClientRef() };
   saleInFlight = true; updatePaymentButtons();
   errEl.innerHTML = `<div class="hint">Recording the sale…</div>`;
@@ -830,7 +835,7 @@ async function submitSale(method) {
       campaign_id: camp.id, tier_counts,
       ticket_numbers: autoMode ? undefined : ticketNumbers.map(t => t.value),
       auto_assign_block_id: autoMode ? selectedBlockId : undefined,
-      method, payer_name: buyerNameValue, contact_value: method === 'link' ? contactValue : undefined,
+      method, payer_name: buyerNameValue.trim() || undefined, contact_value: needsDetails ? contactValue : undefined,
       client_ref: saleAttempt.ref,
     });
     saleAttempt = null;
@@ -839,7 +844,7 @@ async function submitSale(method) {
     const entry = {
       id: newId, paymentId: data.payment_id, campaignId: camp.id, method, amount: data.amount,
       buyerName: buyerNameValue, tickets: data.tickets, soldAt: new Date().toISOString(),
-      status: 'undo', remaining: 8, draft,
+      status: 'undo', remaining: 8, draft, contact: data.contact_value,
     };
     if (method === 'link') {
       // Not undoable: the link exists now. Track it until SumUp says it's paid.

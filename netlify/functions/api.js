@@ -760,7 +760,6 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
     throw httpError(400, 'Ticket counts must be whole numbers, zero or more.');
   }
   const buyerName = cleanName(payer_name, 'The buyer name');
-  if (!buyerName) throw httpError(400, 'Buyer name is required for every sale.');
 
   const tierIdSequence = [];
   counts.forEach(c => { for (let i = 0; i < c.count; i++) tierIdSequence.push(c.tier.id); });
@@ -791,12 +790,24 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
       throw httpError(400, 'Choosing a specific online ticket number is only available to buyers on the public purchase page — use "Any available" here instead.');
     }
   }
-  const contact = method === 'link' ? parseContact(contact_value) : null;
+  // Who must be named. A PHYSICAL ticket handed over for cash or the card machine is already in the
+  // buyer's hand, so name and contact are optional. A payment LINK needs both (that is who it goes to),
+  // and an ONLINE ticket needs both whatever the payment method — it exists only on the buyer's phone,
+  // so we must be able to send it to them and find them again.
+  const isOnlineSale = !!(autoAssignBlock && autoAssignBlock.type === 'digital');
+  const needsDetails = method === 'link' || isOnlineSale;
+  if (needsDetails && !buyerName) {
+    throw httpError(400, isOnlineSale ? "An online ticket needs the buyer's name — the ticket lives on their phone." : "Enter the buyer's name — the payment link is sent to them.");
+  }
+  if (needsDetails && !String(contact_value || '').trim() && method !== 'link') {
+    throw httpError(400, "An online ticket needs the buyer's mobile number or email — that is where their ticket is sent.");
+  }
+  const contact = needsDetails ? parseContact(contact_value) : null;
 
   const initialStatus = method === 'cash' ? 'cash_pending' : (method === 'machine' ? 'paid' : 'held');
 
   const { data: payment, error: payErr } = await supabase.from('payments')
-    .insert({ campaign_id, method, amount, status: 'pending', seller_id: session.uid, payer_name: buyerName, contact_value: contact ? contact.value : null, client_ref: client_ref || null })
+    .insert({ campaign_id, method, amount, status: 'pending', seller_id: session.uid, payer_name: buyerName || null, contact_value: contact ? contact.value : null, client_ref: client_ref || null })
     .select().single();
   if (payErr) {
     // Two copies of the same attempt raced each other: the unique client_ref let only one in.
@@ -851,12 +862,12 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
 
   if (method === 'cash') {
     await supabase.from('payments').update({ status: 'pending' }).eq('id', payment.id);
-    return { ok: true, payment_id: payment.id, amount, method: 'cash', tickets: soldTickets };
+    return { ok: true, payment_id: payment.id, amount, method: 'cash', contact_value: contact ? contact.value : undefined, tickets: soldTickets };
   }
   if (method === 'machine') {
     // Tapped on the POS machine outside the church and already confirmed there — we're just logging it.
     await supabase.from('payments').update({ status: 'paid' }).eq('id', payment.id);
-    return { ok: true, payment_id: payment.id, amount, method: 'machine', tickets: soldTickets };
+    return { ok: true, payment_id: payment.id, amount, method: 'machine', contact_value: contact ? contact.value : undefined, tickets: soldTickets };
   }
 
   // link: a fresh SumUp checkout for THIS sale. Its reference is this sale's own id, so every
