@@ -1037,7 +1037,7 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   }
   const buyerName = cleanName(buyer_name, 'Your name');
   if (!buyerName) throw httpError(400, 'Please enter your name.');
-  const contact = parseContact(contact_value);
+  const contact = parseContact(contact_value, "Please enter your mobile number or email — that's where your ticket is sent.");
   await sweepIfDue();
   await enforcePublicPurchaseLimits(contact.value, totalCount);
 
@@ -1258,10 +1258,10 @@ async function releaseSaleTickets(payment_id) {
 
 // A Pay-by-Link sale must record where the link went, so a physical ticket handed to someone
 // can be tied to their mobile/email and its paid status pinpointed.
-function parseContact(raw) {
+function parseContact(raw, emptyMessage) {
   const v = String(raw || '').trim();
   if (v.length > MAX_CONTACT_LENGTH) throw httpError(400, 'That mobile number or email is too long.');
-  if (!v) throw httpError(400, "Enter the buyer's mobile number or email — that's how we know who the payment link was sent to.");
+  if (!v) throw httpError(400, emptyMessage || "Enter the buyer's mobile number or email — that's how we know who the payment link was sent to.");
   if (v.includes('@')) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw httpError(400, "That email address doesn't look right.");
     return { value: v.toLowerCase(), kind: 'email' };

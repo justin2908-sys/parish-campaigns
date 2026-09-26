@@ -913,3 +913,15 @@ Not built: finding another seller's unpaid link by ticket number (admins can use
 With a 10,000-ticket campaign this would have made the Admin dashboard totals, campaign report, Sales /
 Needs Attention ticket numbers and a seller's totals wrong. Totals now come from a database roll-up
 (`ticket_rollup`), other lists page through or look up only the tickets they need.
+
+## 32. Who must be named on a sale — 2026-09-26 (on dev; preview only)
+
+| Sale | Name | Mobile / email |
+|---|---|---|
+| Physical, Cash or Machine | optional | optional |
+| Physical, Link | required | required (the link goes there) |
+| Online ticket sold by a seller — Cash, Machine or Link | required | required (the ticket lives on the buyer's phone) |
+| Public buy page (online) | required | required |
+
+Enforced on the server, not just the screen. The Sell screen's boxes say "(optional)" for physical sales and
+"*" for online ones. A nameless physical sale is stored and listed normally (name shown as "—").
