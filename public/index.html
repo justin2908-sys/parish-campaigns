@@ -883,8 +883,8 @@ function feedCardsHtml(mine) {
       if (a.status === 'linkpaid') return `<div class="card">
         <div class="info">✓ Paid — £${a.amount.toFixed(2)} for ${label} (${esc(a.buyerName)}, ${esc(a.contact)}). SumUp confirmed it.</div>
         <div style="font-size:11px;color:var(--slate);margin-top:4px">${sentLine} · Sold ${when}</div>
-        <div style="margin-top:9px"><button class="link" onclick="toggleShareMenu(${a.id})">📤 Share ticket</button></div>
-        ${shareMenuOpenFor===a.id ? shareMenuHtml(a) : ''}
+        ${isOnlineSale(a) ? `<div style="margin-top:9px"><button class="link" onclick="toggleShareMenu(${a.id})">📤 Share ticket</button></div>
+        ${shareMenuOpenFor===a.id ? shareMenuHtml(a) : ''}` : ''}
       </div>`;
       const failed = a.status === 'linkfailed';
       return `<div class="card">
@@ -902,10 +902,10 @@ function feedCardsHtml(mine) {
     return `<div class="card">
       <div class="info">£${a.amount.toFixed(2)} ${a.method==='cash'?'cash':'paid at machine'} recorded for ${label} (${esc(a.buyerName||'no name given')}).</div>
       <div style="font-size:11px;color:var(--slate);margin-top:4px">Sold ${when}</div>
-      <div style="margin-top:9px">
+      ${isOnlineSale(a) ? `<div style="margin-top:9px">
         <button class="link" onclick="toggleShareMenu(${a.id})">📤 Share ticket</button>
       </div>
-      ${shareMenuOpenFor===a.id ? shareMenuHtml(a) : ''}
+      ${shareMenuOpenFor===a.id ? shareMenuHtml(a) : ''}` : ''}
     </div>`;
   }).join('');
 }
@@ -925,6 +925,13 @@ async function doSellerResend(activityId) {
   a.resending = false; renderFeed();
 }
 
+// "Share ticket" only makes sense for an ONLINE ticket, which exists only on the buyer's phone. A physical
+// ticket is handed over on paper, so nothing is shared after the sale; the only thing a seller ever sends
+// for a physical sale is the payment link, and only when Link was the way to pay.
+function isOnlineSale(a) {
+  const camp = state.campaigns.find(c => c.id === a.campaignId);
+  return !!camp && (camp.blocks.find(b => b.id === (a.draft && a.draft.selectedBlockId)) || {}).type === 'digital';
+}
 function toggleShareMenu(id) { shareMenuOpenFor = shareMenuOpenFor === id ? null : id; renderFeed(); }
 // Replicates the physical ticket's own content — church name/address, campaign-specific
 // details (prizes, draw date, tagline, whatever the SuperAdmin wrote for THIS campaign — see
