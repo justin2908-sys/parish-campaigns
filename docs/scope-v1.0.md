@@ -925,3 +925,12 @@ Needs Attention ticket numbers and a seller's totals wrong. Totals now come from
 
 Enforced on the server, not just the screen. The Sell screen's boxes say "(optional)" for physical sales and
 "*" for online ones. A nameless physical sale is stored and listed normally (name shown as "—").
+
+## 33. Public page: check your details, and remember to save the ticket — 2026-09-26 (on dev; preview only)
+
+Tapping **Pay** on the public page no longer goes straight to SumUp. A "Check your details" sheet reads back the
+name and the mobile/email in large type (with the ticket count and total) and asks "Yes, that's right — pay £X"
+or "Change my details". It warns — without blocking — about a likely typo: a misspelt email domain (gmial.com,
+gmail.con, hotmial.com…, with the suggested spelling) or a UK mobile with the wrong number of digits. The same
+sheet carries the reminder to come back to the page after paying (tap the button on SumUp's page) and save the
+raffle ticket to the phone; the "Taking you to SumUp" screen repeats it.

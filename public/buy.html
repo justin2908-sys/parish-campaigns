@@ -130,6 +130,13 @@ window.__infoP = (function () {
   .veil .big { font-size:54px; animation:spin 1.2s linear infinite; }
   .bit { position:fixed; z-index:40; pointer-events:none; font-size:16px; animation:fly .9s ease-out forwards; }
   @keyframes fly { from { transform:translate(0,0) scale(1); opacity:1; } to { transform:translate(var(--dx),var(--dy)) rotate(var(--r)) scale(.6); opacity:0; } }
+  .confirmBox { margin:6px 0 10px; padding:12px 14px; border-radius:14px; background:var(--pine-dim); border:1px solid var(--stone); }
+  .confirmBox .who { font-size:15px; color:var(--slate); }
+  .confirmBox .big { font-family:var(--font-head); font-size:24px; font-weight:600; color:var(--ink); word-break:break-all; line-height:1.2; margin-top:2px; }
+  .confirmBox .amt { margin-top:6px; font-size:14.5px; color:var(--slate); }
+  .keep { margin:0 0 12px; padding:11px 13px; border-radius:12px; background:var(--gold-dim); border:1px solid #DCCB98; font-size:15px; line-height:1.4; color:var(--ink); }
+  .keep b { color:var(--pine); }
+  .warn2 { margin:0 0 10px; padding:10px 12px; border-radius:12px; background:var(--bad-dim); color:var(--bad); font-size:14.5px; font-weight:600; }
   .linkbtn { background:none; border:none; color:var(--wine); text-decoration:underline; text-underline-offset:3px; font-size:13.5px; font-weight:600; padding:6px; }
   .found { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; margin-top:8px; border-radius:12px; background:var(--gold-dim); border:1px solid #DCCB98; color:var(--ink); text-decoration:none; font-size:15px; }
   .found span { color:var(--muted); font-size:12.5px; white-space:nowrap; }
@@ -141,7 +148,7 @@ window.__infoP = (function () {
 </head>
 <body>
 <div id="app"><div class="fatal"><div class="card"><p class="note">Loading…</p></div></div></div>
-<div class="veil" id="veil"><div class="big">🎟️</div><div>Taking you to SumUp's secure payment page…</div><div style="font-size:13px;font-weight:500;opacity:.85;max-width:300px">Your numbers are held for you while you pay. <b>After paying, tap the button on SumUp's page to come back and save your ticket.</b></div></div>
+<div class="veil" id="veil"><div class="big">🎟️</div><div>Taking you to SumUp's secure payment page…</div><div style="font-size:13px;font-weight:500;opacity:.85;max-width:300px">Your numbers are held for you while you pay. <b>After paying, tap the button on SumUp's page to come back — then save your raffle ticket to your phone.</b></div></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -260,6 +267,14 @@ function buildShell() {
       </div></div>
     </div>
     ${info.campaign.details_text ? `<div class="sheetbox" id="details" hidden><button type="button" class="close" id="detailsClose" aria-label="Close">✕</button><h2>Prizes &amp; details</h2><div class="dtext">${esc(info.campaign.details_text)}</div>${info.org.address ? `<div class="daddr">${esc(info.org.name)} · ${esc(info.org.address)}</div>` : ''}</div>` : ''}
+    <div class="sheetbox" id="confirmCard" hidden>
+      <h2>Check your details</h2>
+      <div class="confirmBox"><div class="who">Your ticket will be sent to <b id="cName"></b> at:</div><div class="big" id="cContact"></div><div class="amt" id="cAmt"></div></div>
+      <div class="warn2" id="cWarn" hidden></div>
+      <div class="keep">📲 <b>Important — after you pay, come back to this page</b> (tap the button on SumUp's page) and <b>save your raffle ticket</b> to your phone. Then you'll always have it.</div>
+      <button type="button" class="pay" id="confirmPay">Yes, that's right — pay</button>
+      <button type="button" class="shuf alt" id="confirmEdit" style="width:100%;margin-top:8px">✏️ Change my details</button>
+    </div>
     <div class="sheetbox" id="findCard" hidden>
       <button type="button" class="close" id="findClose" aria-label="Close">✕</button>
       <h2>Find your ticket</h2>
@@ -283,6 +298,8 @@ function buildShell() {
   $('luckyIn').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, digitBounds().max); };
   if ($('seriesSel')) $('seriesSel').onchange = (e) => { blockId = e.target.value; if (mode === 'pick') { slots = slots.map(() => null); taken.clear(); renderSlots(); } renderMode(); renderPay(); };
   $('payBtn').onclick = pay;
+  $('confirmPay').onclick = doPay;
+  $('confirmEdit').onclick = () => { $('confirmCard').hidden = true; const i = $('contactInput'); i.focus(); i.select(); };
   $('findToggle').onclick = () => { // carry over what they've already typed, then open the sheet
     if (!$('fName').value) $('fName').value = $('buyerName').value; if (!$('fContact').value) $('fContact').value = $('contactInput').value;
     $('findCard').hidden = false;
@@ -461,10 +478,36 @@ function renderPay() {
   const b = $('payBtn'); b.textContent = busy ? 'Please wait…' : s.label; b.classList.toggle('wait', !s.ok); b.disabled = busy;
   renderModeLabelsOnly();
 }
-async function pay() {
+// Common typing slips in an email domain / a UK mobile number, so we can point them out before the ticket is
+// sent to the wrong place. This only warns — the buyer decides.
+const DOMAIN_FIXES = { 'gmial.com': 'gmail.com', 'gmai.com': 'gmail.com', 'gamil.com': 'gmail.com', 'gmail.con': 'gmail.com', 'gmail.co': 'gmail.com', 'gmail.cm': 'gmail.com', 'hotmial.com': 'hotmail.com', 'hotmail.con': 'hotmail.com', 'hotmail.co': 'hotmail.com', 'yahoo.con': 'yahoo.com', 'yaho.com': 'yahoo.com', 'outlok.com': 'outlook.com', 'outlook.con': 'outlook.com', 'iclod.com': 'icloud.com', 'icloud.con': 'icloud.com' };
+function contactWarning(v) {
+  if (v.includes('@')) {
+    const at = v.lastIndexOf('@'), local = v.slice(0, at), dom = v.slice(at + 1).toLowerCase();
+    return DOMAIN_FIXES[dom] ? `Did you mean ${local}@${DOMAIN_FIXES[dom]}? Please check the spelling.` : '';
+  }
+  const d = v.replace(/[^\d]/g, '');
+  if (/^07/.test(d) && d.length !== 11) return `A UK mobile number has 11 digits — this one has ${d.length}. Please check it.`;
+  if (/^447/.test(d) && d.length !== 12) return `A UK mobile number starting +44 has 12 digits — this one has ${d.length}. Please check it.`;
+  return '';
+}
+function pay() {
   if (busy) return;
-  const s = nextStep(); const errEl = $('payErr'); errEl.innerHTML = '';
+  const s = nextStep(); $('payErr').innerHTML = '';
   if (!s.ok) { const el = $(s.focus); if (el) { el.scrollIntoView({ block: 'center' }); if (el.focus && el.tagName === 'INPUT') el.focus(); } return; }
+  // Before any money moves: read back where the ticket will go, and remind them to save it afterwards.
+  const contact = $('contactInput').value.trim(), warn = contactWarning(contact);
+  $('cName').textContent = $('buyerName').value.trim();
+  $('cContact').textContent = contact;
+  $('cAmt').textContent = `${totalQty()} ticket${totalQty() > 1 ? 's' : ''} · ${money(totalPrice())}`;
+  $('cWarn').hidden = !warn; $('cWarn').textContent = warn;
+  $('confirmPay').textContent = `Yes, that's right — pay ${money(totalPrice())}`;
+  $('confirmCard').hidden = false;
+}
+async function doPay() {
+  if (busy) return;
+  $('confirmCard').hidden = true;
+  const errEl = $('payErr'); errEl.innerHTML = '';
   const buyer_name = $('buyerName').value.trim(), contact_value = $('contactInput').value.trim();
   const tier_counts = { ...counts };
   const sig = JSON.stringify([tier_counts, mode === 'pick' ? slots : blockId, buyer_name, contact_value]);
