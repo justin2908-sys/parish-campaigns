@@ -1072,6 +1072,7 @@ async function renderAdmin() {
     <div id="retentionBanner"></div>
     <div class="tabs">
       <button class="${adminTab==='campaigns'?'active':''}" data-tab="campaigns" onclick="setAdminTab('campaigns')">Campaigns</button>
+      <button class="${adminTab==='overview'?'active':''}" data-tab="overview" onclick="setAdminTab('overview')">Overview</button>
       <button class="${adminTab==='sales'?'active':''}" data-tab="sales" onclick="setAdminTab('sales')">Sales</button>
       <button class="${adminTab==='cash'?'active':''}" data-tab="cash" onclick="setAdminTab('cash')">Cash Recon</button>
       <button class="${adminTab==='attention'?'active':''}" data-tab="attention" onclick="setAdminTab('attention')">Needs Attention</button>
@@ -1095,7 +1096,7 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, users: renderUsersTab, bin: renderRecycleBinTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, users: renderUsersTab, bin: renderRecycleBinTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -1344,6 +1345,46 @@ async function renderRecycleBinTab() {
   </div>`;
 }
 async function doRestoreCampaign(id) { try { await call('restore_campaign', { campaign_id: id }); renderRecycleBinTab(); } catch (e) { alert(e.message); } }
+
+// ---- Overview tab: how the campaign(s) are doing, and who sold what ----
+async function renderOverviewTab() {
+  const seq = adminSeq;
+  const { campaigns } = await call('list_campaigns');
+  const d = await call('dashboard_state', { campaign_id: campaignFilter || undefined });
+  const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
+  const pct = d.total ? Math.round((d.sold / d.total) * 100) : 0;
+  const sellerRows = Object.entries(d.sellerBreakdown).sort((a, b) => (b[1].card + b[1].cash_confirmed + b[1].cash_pending) - (a[1].card + a[1].cash_confirmed + a[1].cash_pending));
+  el.innerHTML = `<div class="card"><label>Viewing</label>
+    <select onchange="campaignFilter=this.value; renderOverviewTab();">
+      <option value="">All Campaigns</option>
+      ${campaigns.map(c=>`<option value="${c.id}" ${campaignFilter===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+    </select></div>
+    ${!d.integrityOk ? `<div class="card"><div class="error">The ticket counts don't add up — tell your developer (integrity check failed).</div></div>` : ''}
+    <div class="card">
+      <h3 style="margin-top:0">Tickets</h3>
+      <div class="stat"><span>Sold or reserved</span><b>${d.sold} of ${d.total} (${pct}%)</b></div>
+      <div class="stat"><span>Still available</span><b>${d.unsold}</b></div>
+      ${d.heldCount ? `<div class="stat"><span>Physical, awaiting card payment</span><b>${d.heldCount}</b></div>` : ''}
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Money collected</h3>
+      <div class="stat"><span>Total collected</span><b>£${d.totalCollected.toFixed(2)}</b></div>
+      <div class="stat"><span>· Card &amp; Machine</span><b>£${d.cardTotal.toFixed(2)}</b></div>
+      <div class="stat"><span>· Cash — reconciled</span><b>£${d.cashConfirmed.toFixed(2)}</b></div>
+      <div class="stat"><span>· Cash — not yet reconciled</span><b>£${d.cashPending.toFixed(2)}</b></div>
+      <div class="stat"><span>Payment links awaiting payment</span><b>£${d.linkPending.toFixed(2)}</b></div>
+    </div>
+    ${d.tierBreakdown.length ? `<div class="card"><h3 style="margin-top:0">By tier</h3><table>
+      <tr><th>Tier</th><th>Sold</th><th>Amount</th></tr>
+      ${d.tierBreakdown.map(t=>`<tr><td>${esc(t.name)}</td><td>${t.soldCount}</td><td>£${t.amount.toFixed(2)}</td></tr>`).join('')}
+    </table></div>` : ''}
+    <div class="card"><h3 style="margin-top:0">Seller activity</h3>
+    ${!sellerRows.length ? '<p class="muted">No sales yet.</p>' : `<table>
+      <tr><th>Seller</th><th>Card &amp; Machine</th><th>Cash confirmed</th><th>Cash pending</th><th>Total</th></tr>
+      ${sellerRows.map(([name, s])=>`<tr><td>${esc(name)}</td><td>£${s.card.toFixed(2)}</td><td>£${s.cash_confirmed.toFixed(2)}</td><td>£${s.cash_pending.toFixed(2)}</td><td><b>£${(s.card+s.cash_confirmed+s.cash_pending).toFixed(2)}</b></td></tr>`).join('')}
+    </table>`}
+    </div>`;
+}
 
 // ---- Sales tab ----
 async function renderSalesTab() {
