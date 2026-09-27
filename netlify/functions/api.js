@@ -359,7 +359,7 @@ async function setCampaignDetails(session, { campaign_id, details_text }) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks, details_text }) {
+async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
@@ -388,7 +388,15 @@ async function createCampaign(session, { name, tiers, blocks, details_text }) {
   }
 
   const { data: campaign, error: campErr } = await supabase.from('campaigns')
-    .insert({ org_id: session.org_id, name: name.trim(), created_by: session.uid, details_text: (details_text || '').trim() || null })
+    .insert({
+      org_id: session.org_id, name: name.trim(), created_by: session.uid, details_text: (details_text || '').trim() || null,
+      // public_only: a self-service campaign (e.g. an online-only registration) that never shows on a
+      // Seller's Sell screen — Admins/SuperAdmins are unaffected and can still sell it in person if needed.
+      public_only: !!public_only,
+      // age_restricted: the public page's 18+ confirmation, on by default (a raffle/lottery needs it);
+      // an ordinary paid event that isn't gambling (a dinner, a picnic) can turn it off.
+      age_restricted: age_restricted === undefined ? true : !!age_restricted,
+    })
     .select().single();
   if (campErr) throw httpError(400, campErr.message);
 
@@ -569,7 +577,7 @@ async function listCampaigns(session, { include_inactive } = {}) {
   let visible = campaigns;
   if (session.role === 'seller') {
     const disabledIds = new Set(((disabledRes && disabledRes.data) || []).map(a => a.campaign_id));
-    visible = campaigns.filter(c => !disabledIds.has(c.id));
+    visible = campaigns.filter(c => !disabledIds.has(c.id) && !c.public_only);
   }
 
   return {
@@ -607,6 +615,14 @@ async function restoreCampaign(session, { campaign_id }) {
   // Force Inactive on restore — reactivating (making it sellable again) is a separate,
   // deliberate step, not an automatic side-effect of un-binning.
   const { error } = await supabase.from('campaigns').update({ binned: false, active: false }).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+// Flip whether a campaign shows on the Seller's Sell screen, after it's already been created.
+async function setCampaignVisibility(session, { campaign_id, public_only }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const { error } = await supabase.from('campaigns').update({ public_only: !!public_only }).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
@@ -956,7 +972,7 @@ async function publicCampaignInfo({ campaign_id }) {
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
   const [{ data: campaign }, { data: tiers }, { data: blocks }] = await Promise.all([
-    supabase.from('campaigns').select('id, name, details_text, org_id, organizations(name, address, thank_you_text)').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle(),
+    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, organizations(name, address, thank_you_text)').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
   ]);
@@ -964,7 +980,7 @@ async function publicCampaignInfo({ campaign_id }) {
   if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online tickets available.');
   const org = campaign.organizations;
   return {
-    campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text },
+    campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text, age_restricted: campaign.age_restricted !== false },
     org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null },
     tiers, blocks,
   };
@@ -1862,6 +1878,7 @@ const actions = {
   list_campaigns: (s, b) => listCampaigns(s, b),
   set_disabled_campaigns: (s, b) => setDisabledCampaigns(s, b),
   set_campaign_active: (s, b) => setCampaignActive(s, b),
+  set_campaign_visibility: (s, b) => setCampaignVisibility(s, b),
   sell_screen: (s, b) => sellScreen(s, b),
   add_block_to_campaign: (s, b) => addBlockToCampaign(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),

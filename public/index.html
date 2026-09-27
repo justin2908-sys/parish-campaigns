@@ -1156,9 +1156,10 @@ async function renderCampaignsTab() {
           <td>${esc(c.name)}</td>
           <td>${esc(tierSummary(c))}</td>
           <td>${esc(blockSummary(c))}</td>
-          <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span></td>
+          <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span>${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
             ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
+            <button class="small" onclick="toggleCampaignVisibility('${c.id}', ${!c.public_only})" title="${c.public_only ? 'Sellers currently cannot see this campaign' : 'Sellers can currently see this campaign'}">${c.public_only?'Show to Sellers':'Hide from Sellers'}</button>
             <button class="small" onclick="doEditCampaignDetails('${c.id}')">${c.details_text ? 'Details ✓' : 'Add details'}</button>
             ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="doCopyPublicLink('${c.id}')">Copy public link</button>` : ''}
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
@@ -1166,7 +1167,7 @@ async function renderCampaignsTab() {
           </td>
         </tr>`).join('')}
       </table>
-      <p class="muted">Only Active campaigns are selectable on the Sell screen.</p>
+      <p class="muted">Only Active campaigns are selectable on the Sell screen. "Public only" campaigns never appear there for a Seller, whatever their status.</p>
     </div>
     ${state.user.role==='superadmin' && campaigns.length ? `
     <div class="card">
@@ -1201,7 +1202,9 @@ async function renderCampaignsTab() {
       <button class="ghost" onclick="addBlockRow()">+ Add another block</button>
       <label>Campaign details <span class="muted">(optional — prizes, draw date, tagline, anything included in every ticket message for this campaign)</span></label>
       <textarea id="cDetails" rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="e.g. 1st Prize — £1,200 · 2nd Prize — £500 · 3rd Prize — £300&#10;Draw Date: 20 December 2026&#10;&quot;Give a little, help a lot&quot; — every penny raised supports our church building fund.&#10;Winning numbers published on the church website &amp; notice board; winners contacted via the church office."></textarea>
-      <button class="primary" onclick="createCampaign()">Create Campaign</button>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-weight:500"><input type="checkbox" id="cAgeRestricted" checked style="width:auto;margin:0"> This is a raffle or lottery — buyers must confirm they're 18 or over</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:500"><input type="checkbox" id="cPublicOnly" style="width:auto;margin:0"> Public site only — don't show this campaign to Sellers</label>
+      <button class="primary" style="margin-top:12px" onclick="createCampaign()">Create Campaign</button>
       <div id="createResult"></div>
     </div>` : ''}
   `;
@@ -1275,7 +1278,11 @@ async function createCampaign() {
       range_start:Number(b.range_start), range_end:Number(b.range_end),
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
-    await call('create_campaign', { name: document.getElementById('cName').value.trim(), tiers, blocks, details_text: document.getElementById('cDetails').value }, 60000);
+    await call('create_campaign', {
+      name: document.getElementById('cName').value.trim(), tiers, blocks, details_text: document.getElementById('cDetails').value,
+      age_restricted: document.getElementById('cAgeRestricted').checked,
+      public_only: document.getElementById('cPublicOnly').checked,
+    }, 60000);
     draftTiers = [{name:'',price:''},{name:'',price:''}];
     draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
     renderCampaignsTab();
@@ -1299,6 +1306,7 @@ async function doAddSeries() {
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
+async function toggleCampaignVisibility(id, public_only) { try { await call('set_campaign_visibility', { campaign_id: id, public_only }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function downloadCampaignReport(id) {
   try {
     const { csv, filename } = await call('export_campaign_report', { campaign_id: id }, 60000);
