@@ -953,3 +953,23 @@ The campaign report also no longer drops a voided sale from the CSV entirely (it
 ticket row was freed) — it's now appended at the end against the number it was for.
 
 Not retroactive: a sale already voided before this shipped has no snapshot to fall back on, so it stays blank.
+
+## 35. A self-service, public-only campaign; and not every campaign is a raffle — 2026-09-27 (on dev; preview only)
+
+**Public only.** A new checkbox on Add Campaign, "Public site only — don't show this campaign to Sellers", and
+a toggle on any existing campaign ("Hide from Sellers" / "Show to Sellers" in Admin → Campaigns). A public-only
+campaign never appears in a Seller's campaign list — it's for a purely self-service purchase (a picnic
+registration, say), with no seller involvement. Admins/SuperAdmins are unaffected and can still see, edit and
+report on it, and can still sell it from the Sell screen themselves if ever needed. A campaign like this needs
+no physical series at all — one online series is enough, since names/mobile/email are already mandatory on
+every online sale.
+
+**Age-restricted.** A second checkbox, "This is a raffle or lottery — buyers must confirm they're 18 or over",
+checked by default (so the existing Raffle2026 is unaffected). The public buy page's 18+ confirmation, and the
+generic "ticket" wording on that page and its loading screen, now come from this setting rather than assuming
+every campaign is a raffle — a paid, non-gambling event (a dinner, a picnic) can turn it off. A picnic campaign
+would tick "Public only" and untick "This is a raffle or lottery".
+
+**Priority when two campaigns run together.** A Seller's Sell screen remembers whichever campaign they last
+used; failing that, the oldest active one they can see comes first. A public-only campaign is never in that
+list at all, so it can never compete with the campaign a Seller actually sells in person.
