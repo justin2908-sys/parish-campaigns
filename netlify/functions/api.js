@@ -673,6 +673,25 @@ async function exportCampaignReport(session, { campaign_id }) {
       p ? p.link_shared_at || '' : '',
     ];
   });
+  // A voided or expired sale no longer holds any ticket row (voiding deliberately frees the number),
+  // so it would otherwise vanish from this report entirely. Its permanent snapshot puts it back in,
+  // appended at the end, against the number(s) it was actually for.
+  const coveredPaymentIds = new Set(tickets.filter(t => t.payment_id).map(t => t.payment_id));
+  for (const p of payments) {
+    if (!Array.isArray(p.ticket_snapshot) || !p.ticket_snapshot.length || coveredPaymentIds.has(p.id)) continue;
+    for (const t of p.ticket_snapshot) {
+      rows.push([
+        t.ticket_number,
+        `${(blocks.find(b => b.id === t.block_id) || {}).number_prefix || ''}${t.ticket_number}`,
+        blockLabel(t.block_id), tierName(t.tier_id),
+        '(released — see Payment Status)',
+        p.payer_name || '', p.method, Number(p.amount).toFixed(2), p.status, userName(p.seller_id), '',
+        p.cash_confirmed_by ? userName(p.cash_confirmed_by) : '', p.cash_confirmed_at || '',
+        p.voided ? 'Yes' : '', p.void_reason || '', p.sumup_checkout_ref || '', p.sumup_transaction_code || '',
+        p.contact_value || '', p.contact_channel || '', p.link_shared_at || '',
+      ]);
+    }
+  }
 
   const csv = [headers, ...rows].map(r => r.map(csvEscape).join(',')).join('\n');
   const filename = `${campaign.name.replace(/[^a-z0-9-]/gi, '_')}-report-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -836,7 +855,14 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
       p_campaign_id: campaign_id, p_items: items, p_status: initialStatus, p_payment_id: payment.id, p_sold_by: session.uid,
     });
     if (claimErr) {
-      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'ticket unavailable at claim time' }).eq('id', payment.id);
+      // Even though the claim failed, we already know exactly which numbers were asked for —
+      // record them now, on the payment itself, so this attempt still shows what it was FOR even
+      // after nothing is left to join to (this ticket now belongs to whoever's claim won the race).
+      const attemptSnapshot = items.map(it => {
+        const blk = blocks.find(b => it.ticket_number >= b.range_start && it.ticket_number <= b.range_end);
+        return { ticket_number: it.ticket_number, tier_id: it.tier_id, block_id: blk ? blk.id : null };
+      });
+      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'ticket unavailable at claim time', ticket_snapshot: attemptSnapshot }).eq('id', payment.id);
       // Figure out WHY the claim failed, so the message is accurate rather than assuming a
       // race — the far more common cause is a typo or wrong campaign selected. Nothing was
       // actually claimed (the function rolled itself back), so this reads fresh state.
@@ -859,14 +885,17 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
     ticket_number: t.ticket_number, tier_id: t.tier_id, tier_name: tierNameById[t.tier_id],
     display_number: `${(blockById[t.block_id] || {}).number_prefix || ''}${t.ticket_number}`,
   }));
+  // Recorded once, permanently, on the payment itself — so this sale still shows its ticket
+  // number(s) even after a later void frees them (voiding deliberately unlinks the live tickets).
+  const ticketSnapshot = soldTicketRows.map(t => ({ ticket_number: t.ticket_number, tier_id: t.tier_id, block_id: t.block_id }));
 
   if (method === 'cash') {
-    await supabase.from('payments').update({ status: 'pending' }).eq('id', payment.id);
+    await supabase.from('payments').update({ status: 'pending', ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
     return { ok: true, payment_id: payment.id, amount, method: 'cash', contact_value: contact ? contact.value : undefined, tickets: soldTickets };
   }
   if (method === 'machine') {
     // Tapped on the POS machine outside the church and already confirmed there — we're just logging it.
-    await supabase.from('payments').update({ status: 'paid' }).eq('id', payment.id);
+    await supabase.from('payments').update({ status: 'paid', ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
     return { ok: true, payment_id: payment.id, amount, method: 'machine', contact_value: contact ? contact.value : undefined, tickets: soldTickets };
   }
 
@@ -878,7 +907,7 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
     await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'could not create SumUp payment link' }).eq('id', payment.id);
     throw httpError(502, created.message);
   }
-  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', payment.id);
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url, ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
   return { ok: true, payment_id: payment.id, amount, method: 'link', pay_url: created.pay_url, contact_value: contact.value, contact_kind: contact.kind, tickets: soldTickets };
 }
 
@@ -1079,7 +1108,11 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
       p_campaign_id: campaign_id, p_items: items, p_status: 'held', p_payment_id: payment.id, p_sold_by: null,
     });
     if (claimErr) {
-      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'ticket unavailable at claim time' }).eq('id', payment.id);
+      const attemptSnapshot = items.map(it => {
+        const blk = onlineBlocks.find(b => it.ticket_number >= b.range_start && it.ticket_number <= b.range_end);
+        return { ticket_number: it.ticket_number, tier_id: it.tier_id, block_id: blk ? blk.id : null };
+      });
+      await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'ticket unavailable at claim time', ticket_snapshot: attemptSnapshot }).eq('id', payment.id);
       for (const num of nums) {
         const { data: existing } = await supabase.from('tickets').select('status').eq('campaign_id', campaign_id).eq('ticket_number', num).maybeSingle();
         if (!existing) throw httpError(404, `Ticket ${num} doesn't exist in this campaign.`);
@@ -1104,6 +1137,7 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
     ticket_number: t.ticket_number, tier_name: tierNameById[t.tier_id],
     display_number: `${(blockById[t.block_id] || {}).number_prefix || ''}${t.ticket_number}`,
   }));
+  const ticketSnapshot = soldTicketRows.map(t => ({ ticket_number: t.ticket_number, tier_id: t.tier_id, block_id: t.block_id }));
 
   const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: campaign.name, ticketNumbers: soldTickets.map(t => t.display_number) });
   if (!created.ok) {
@@ -1111,7 +1145,7 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
     await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'could not create SumUp payment link' }).eq('id', payment.id);
     throw httpError(502, created.message);
   }
-  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', payment.id);
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url, ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
   return { ok: true, payment_id: payment.id, pay_url: created.pay_url, amount, tickets: soldTickets };
 }
 
@@ -1541,7 +1575,11 @@ async function dashboardState(session, { campaign_id } = {}) {
 // letter onto each number by default — the number shown is exactly the block's own display
 // number (raw for physical, prefixed for an online series, e.g. "O15221"), never invented.
 function groupTicketsForDisplay(payment, allTickets, tiers, blocks) {
-  const mine = allTickets.filter(t => t.payment_id === payment.id);
+  // The snapshot taken at sale time is the source of truth once it exists — it's the only thing that
+  // still says what this sale was for after a void or an expiry unlinks the live ticket rows. Older
+  // payments made before this existed fall back to the live join (accurate for as long as the link holds).
+  const snapshot = Array.isArray(payment.ticket_snapshot) ? payment.ticket_snapshot : null;
+  const mine = (snapshot && snapshot.length) ? snapshot : allTickets.filter(t => t.payment_id === payment.id);
   const byTier = {};
   for (const t of mine) {
     const tier = tiers.find(x => x.id === t.tier_id);
