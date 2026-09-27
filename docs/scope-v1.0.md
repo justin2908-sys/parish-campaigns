@@ -934,3 +934,22 @@ or "Change my details". It warns — without blocking — about a likely typo: a
 gmail.con, hotmial.com…, with the suggested spelling) or a UK mobile with the wrong number of digits. The same
 sheet carries the reminder to come back to the page after paying (tap the button on SumUp's page) and save the
 raffle ticket to the phone; the "Taking you to SumUp" screen repeats it.
+
+## 34. A sale never forgets its own ticket number — 2026-09-27 (on dev; preview only)
+
+Voiding a sale (or an automatic void, e.g. two attempts racing for the same number) deliberately frees the
+ticket and unlinks it from that payment — otherwise the ticket could never go back on sale. Until now that
+also erased the only record of which number the sale had been for, so a voided or auto-voided row on Sales /
+Needs Attention showed no ticket number at all.
+
+Every sale now records its own ticket number(s) permanently on the payment itself, at the moment they're
+claimed (or, if a specific number was requested and the claim then lost a race, at the moment it fails) — this
+is separate from the live link to the `tickets` table, so it survives a later void. Sales / Needs Attention /
+the campaign report now always show the number(s) a sale was for. The one case that's still correctly blank:
+an "any available number" auto-assigned sale that failed because too few tickets were left — no specific
+number was ever chosen, so there's genuinely nothing to show.
+
+The campaign report also no longer drops a voided sale from the CSV entirely (it used to vanish once its
+ticket row was freed) — it's now appended at the end against the number it was for.
+
+Not retroactive: a sale already voided before this shipped has no snapshot to fall back on, so it stays blank.
