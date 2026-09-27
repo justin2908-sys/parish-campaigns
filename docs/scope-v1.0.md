@@ -973,3 +973,14 @@ would tick "Public only" and untick "This is a raffle or lottery".
 **Priority when two campaigns run together.** A Seller's Sell screen remembers whichever campaign they last
 used; failing that, the oldest active one they can see comes first. A public-only campaign is never in that
 list at all, so it can never compete with the campaign a Seller actually sells in person.
+
+## 36. Overview tab restored — 2026-09-27 (on dev; preview only)
+
+The Admin/SuperAdmin summary from the BBQ site — how a campaign (or all of them) is doing, and each seller's
+own totals — has its own tab again, "Overview", between Campaigns and Sales. Same "Viewing: All Campaigns / a
+specific one" selector as Sales and Needs Attention. Shows: tickets sold-or-reserved vs. still available (and
+physical tickets currently awaiting a card payment); money collected (card & machine, cash reconciled vs. not
+yet, payment links still awaiting payment); a by-tier breakdown; and a seller activity table (card & machine,
+cash confirmed, cash pending, total, sorted busiest first). The server-side data (`dashboard_state`) already
+existed from the original build but had no screen wired up to it — this only adds the missing tab, no backend
+change. Visible to Admin and SuperAdmin, same as Sales/Cash Recon/Needs Attention.
