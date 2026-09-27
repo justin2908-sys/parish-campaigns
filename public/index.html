@@ -671,7 +671,7 @@ function renderTicketRows(keepStatus) {
       </div>
       <div id="tnStatus-${i}" style="font-size:12px;margin:-4px 0 8px 4px;color:var(--slate)"></div>`;
   }).join('') : '';
-  wrap.innerHTML = `${startHint ? `<div class="muted" style="margin-top:8px">${esc(startHint)}</div>` : ''}<div class="chips" id="ticketChips"></div><div id="ticketErr"></div>${rows}`;
+  wrap.innerHTML = `${startHint ? `<div class="muted" style="margin-top:8px">${esc(startHint)}</div>` : ''}<div class="chips" id="ticketChips"></div><div id="ticketErr"></div>${numbersOpen ? `<div class="muted" id="cascadeHint" style="font-size:12px;margin:-4px 0 8px 2px"></div>` : ''}${rows}`;
   if (keepStatus) {
     ticketNumbers.forEach((_, i) => {
       const st = ticketStatus[i], el = document.getElementById(`tnStatus-${i}`);
@@ -722,33 +722,35 @@ function renderChips() {
     chips = ticketNumbers.map((tn, i) => `<span class="chip ${kindOf(i)}">${esc(tn.value)}${mark(kindOf(i))}</span>`).join('');
   }
   el.innerHTML = chips + (ticketNumbers.length ? `<button type="button" class="link" onclick="toggleNumbers()">${numbersOpen ? 'Hide editor' : 'Edit numbers'}</button>` : '');
+  if (numbersOpen) { const hintEl = document.getElementById('cascadeHint'); if (hintEl) hintEl.textContent = ticketNumbers.length > 1 ? 'Change a number and the ones below it follow on from it — handy for two separate books of tickets.' : ''; }
   const badIdx = ticketNumbers.findIndex((_, i) => kindOf(i) === 'bad');
   const errEl = document.getElementById('ticketErr');
   if (errEl) errEl.innerHTML = badIdx >= 0 ? `<div class="error" style="margin:6px 0 0;padding:8px 10px;font-size:13px">${esc(ticketStatus[badIdx].text)}${numbersOpen ? '' : ' — tap “Edit numbers” to fix it.'}</div>` : '';
 }
 
 const ticketCheckTimers = {};
+// Editing one box mid-run cascades forward: every box after it renumbers to follow straight on from
+// the new value. That's for a seller working through two (or more) separate books of tickets in one
+// sale — edit the box where the second book starts, and the rest of it fills in on its own instead of
+// retyping every remaining box by hand. Boxes before the edited one are never touched.
 function setTicketValue(i, v) {
   ticketNumbers[i].value = v;
   setTicketNumberStatus(i, '');
   clearTimeout(ticketCheckTimers[i]);
-  // Only look a number up once it has all its digits — an edit in progress isn't checked.
-  if (String(v).trim().length < minDigits(currentCampaign().blocks.find(b => b.id === selectedBlockId))) return;
-  ticketCheckTimers[i] = setTimeout(() => checkTicketLive(i, v), 350);
+  const need = minDigits(currentCampaign().blocks.find(b => b.id === selectedBlockId));
+  // Only act once the box has all its digits — an edit in progress isn't checked or cascaded.
+  if (String(v).trim().length < need || !/^\d+$/.test(String(v).trim())) return;
+  ticketCheckTimers[i] = setTimeout(() => cascadeAndCheck(i, v), 350);
 }
-async function checkTicketLive(i, v) {
-  if (!v || String(v).trim() === '') return;
-  const camp = currentCampaign();
-  if (String(v).trim().length < minDigits(camp.blocks.find(b => b.id === selectedBlockId))) return;
-  setTicketNumberStatus(i, '⋯ checking', 'var(--slate)');
-  try {
-    await call('check_ticket', { campaign_id: camp.id, ticket_number: Number(v) });
-    if (String(ticketNumbers[i] && ticketNumbers[i].value) !== String(v)) return;
-    setTicketNumberStatus(i, '✓ available', 'var(--good)');
-  } catch (e) {
-    if (String(ticketNumbers[i] && ticketNumbers[i].value) !== String(v)) return;
-    setTicketNumberStatus(i, e.message, 'var(--bad)');
+function cascadeAndCheck(i, v) {
+  if (String(ticketNumbers[i] && ticketNumbers[i].value) !== String(v)) return; // superseded by a further edit
+  const base = Number(v);
+  for (let j = i + 1; j < ticketNumbers.length; j++) {
+    ticketNumbers[j].value = String(base + (j - i));
+    setTicketNumberStatus(j, '');
   }
+  renderTicketRows(true);
+  checkAllTickets();
 }
 function setTicketNumberStatus(i, text, color) {
   const kind = color === 'var(--good)' ? 'ok' : color === 'var(--bad)' ? 'bad' : '';
