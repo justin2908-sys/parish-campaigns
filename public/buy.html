@@ -269,7 +269,7 @@ function buildShell() {
     ${info.campaign.details_text ? `<div class="sheetbox" id="details" hidden><button type="button" class="close" id="detailsClose" aria-label="Close">✕</button><h2>Prizes &amp; details</h2><div class="dtext">${esc(info.campaign.details_text)}</div>${info.org.address ? `<div class="daddr">${esc(info.org.name)} · ${esc(info.org.address)}</div>` : ''}</div>` : ''}
     <div class="sheetbox" id="confirmCard" hidden>
       <h2>Check your details</h2>
-      <div class="confirmBox"><div class="who">Your ticket will be sent to <b id="cName"></b> at:</div><div class="big" id="cContact"></div><div class="amt" id="cAmt"></div></div>
+      <div class="confirmBox"><div class="who">We don't email or text your ticket — <b id="cName"></b>, you'll need these exact details to find it again:</div><div class="big" id="cContact"></div><div class="amt" id="cAmt"></div></div>
       <div class="warn2" id="cWarn" hidden></div>
       <div class="keep">📲 <b>Important — after you pay, come back to this page</b> (tap the button on SumUp's page) and <b>save your ticket</b> to your phone. Then you'll always have it.</div>
       ${info.campaign.age_restricted ? `<p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">By tapping "Yes, that's right" you confirm you are aged 18 or over — the minimum age to buy a raffle ticket.</p>` : ''}
