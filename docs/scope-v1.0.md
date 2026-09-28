@@ -984,3 +984,12 @@ yet, payment links still awaiting payment); a by-tier breakdown; and a seller ac
 cash confirmed, cash pending, total, sorted busiest first). The server-side data (`dashboard_state`) already
 existed from the original build but had no screen wired up to it — this only adds the missing tab, no backend
 change. Visible to Admin and SuperAdmin, same as Sales/Cash Recon/Needs Attention.
+
+## 37. Find your ticket: mobile/email alone — 2026-09-28 (on dev; preview only)
+
+Used to ask for the buyer's name AND mobile/email, requiring both to match. Now asks only for the mobile
+number or email, exactly as entered while buying — the name field is gone. Every paid purchase under that
+contact is returned (a shared phone or email can cover more than one purchase), each one labelled with whose
+name it was booked under whenever there is more than one result, so nothing is ambiguous. The confirm sheet's
+wording was also corrected: it no longer implies a ticket is emailed or texted — it says plainly that these
+details are how the buyer finds it again.
