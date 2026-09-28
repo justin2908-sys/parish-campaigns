@@ -1002,3 +1002,16 @@ only appear when a campaign has "This is a raffle or lottery" ticked (§35). A c
 dinner) shows just the tier steppers, name and contact, and pays — the buyer never sees or picks a ticket
 number, it's simply assigned to whichever ticket is next in the series. The details button/sheet becomes
 "ℹ️ Details" / "Event details" instead of "Prizes". Nothing about a raffle campaign changed.
+
+## 39. Seller consent — 18+ and their own phone for sending links — 2026-09-28 (on dev; preview only)
+
+The first time (and only the first time) a Seller logs in, before they can do anything else, they must
+confirm two things in plain language: that they are 18 or older, and that sending a payment link by text,
+WhatsApp or email sends it from their own phone — their own number or email, not the church's — and that only
+the fact a link was sent (and when) is recorded, never the message itself. "I don't agree" logs them straight
+out; nothing is recorded for a decline, and they can try again whenever they're ready. Recorded on the account
+as `consent_version` + `consented_at`, checked fresh on every request (a disabled account or a password reset
+already worked this way — this uses the same mechanism). If the wording is ever changed, raising
+`CURRENT_CONSENT_VERSION` in the code makes every Seller accept again next time they log in, even mid-session.
+Admins, SuperAdmins and the Platform Owner are not asked — they're set up directly by a SuperAdmin/Justin, not
+self-registering volunteers.
