@@ -984,3 +984,34 @@ yet, payment links still awaiting payment); a by-tier breakdown; and a seller ac
 cash confirmed, cash pending, total, sorted busiest first). The server-side data (`dashboard_state`) already
 existed from the original build but had no screen wired up to it — this only adds the missing tab, no backend
 change. Visible to Admin and SuperAdmin, same as Sales/Cash Recon/Needs Attention.
+
+## 37. Find your ticket: mobile/email alone — 2026-09-28 (on dev; preview only)
+
+Used to ask for the buyer's name AND mobile/email, requiring both to match. Now asks only for the mobile
+number or email, exactly as entered while buying — the name field is gone. Every paid purchase under that
+contact is returned (a shared phone or email can cover more than one purchase), each one labelled with whose
+name it was booked under whenever there is more than one result, so nothing is ambiguous. The confirm sheet's
+wording was also corrected: it no longer implies a ticket is emailed or texted — it says plainly that these
+details are how the buyer finds it again.
+
+## 38. The public page only looks like a raffle when it is one — 2026-09-28 (on dev; preview only)
+
+The "Assign for me" / "Pick my numbers" choice, the shuffle and lucky-number tools, the "Online numbers run
+from X to Y" callout, the "🎁 Prizes" button and the 18+ confirmation are all raffle/lottery ideas — they now
+only appear when a campaign has "This is a raffle or lottery" ticked (§35). A campaign without it (a picnic, a
+dinner) shows just the tier steppers, name and contact, and pays — the buyer never sees or picks a ticket
+number, it's simply assigned to whichever ticket is next in the series. The details button/sheet becomes
+"ℹ️ Details" / "Event details" instead of "Prizes". Nothing about a raffle campaign changed.
+
+## 39. Seller consent — 18+ and their own phone for sending links — 2026-09-28 (on dev; preview only)
+
+The first time (and only the first time) a Seller logs in, before they can do anything else, they must
+confirm two things in plain language: that they are 18 or older, and that sending a payment link by text,
+WhatsApp or email sends it from their own phone — their own number or email, not the church's — and that only
+the fact a link was sent (and when) is recorded, never the message itself. "I don't agree" logs them straight
+out; nothing is recorded for a decline, and they can try again whenever they're ready. Recorded on the account
+as `consent_version` + `consented_at`, checked fresh on every request (a disabled account or a password reset
+already worked this way — this uses the same mechanism). If the wording is ever changed, raising
+`CURRENT_CONSENT_VERSION` in the code makes every Seller accept again next time they log in, even mid-session.
+Admins, SuperAdmins and the Platform Owner are not asked — they're set up directly by a SuperAdmin/Justin, not
+self-registering volunteers.

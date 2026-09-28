@@ -177,6 +177,7 @@ function render() {
   closeLinksPanel();
   document.getElementById('app').className = '';
   if (!state.session) { renderLogin(); return; }
+  if (state.user.needsConsent) { document.getElementById('headerRight').innerHTML = ''; renderConsentGate(); return; }
   const toAdmin = state.user.role !== 'seller' && state.user.role !== 'platform_owner' && viewMode === 'sell'
     ? `<button onclick="viewMode='admin'; render();">← Admin</button>` : '';
   const sellingNow = state.user.role === 'seller' || (state.user.role !== 'platform_owner' && viewMode === 'sell');
@@ -212,9 +213,35 @@ async function doLogin() {
   const password = document.getElementById('password').value;
   try {
     const data = await call('login', { mobile, password });
-    state.session = data.session; state.user = data.user; viewMode = 'sell';
+    state.session = data.session; state.user = data.user; state.user.needsConsent = !!data.needs_consent; viewMode = 'sell';
     saveState(); scheduleAutoLogout(); render();
   } catch (e) { renderLogin(e.message); }
+}
+
+// A Seller must accept this once — before anything else — the first time they log in, and again
+// if the wording ever changes (CURRENT_CONSENT_VERSION on the server). Declining just logs them out;
+// nothing is recorded for a decline, they can try again whenever they're ready.
+function renderConsentGate() {
+  document.getElementById('app').innerHTML = h`
+    <div class="card">
+      <h2 style="margin-top:0">Before you start selling</h2>
+      <p>Please confirm both of these:</p>
+      <ul style="padding-left:20px;line-height:1.7;margin:0 0 14px">
+        <li>You are <b>18 years old or older</b>.</li>
+        <li>When you send a payment link by text, WhatsApp or email, it goes out from <b>your own phone</b> — your own number or email address, not the church's. The buyer will see it come from you, not from ${esc(churchName())}. We only record that a link was sent, and when — never the message itself.</li>
+      </ul>
+      <button class="primary" onclick="doAcceptConsent()">✅ Yes — I'm 18+ and I understand</button>
+      <button class="secondary" style="margin-top:8px" onclick="logout()">I don't agree — log me out</button>
+      <div id="consentResult"></div>
+    </div>
+  `;
+}
+async function doAcceptConsent() {
+  const el = document.getElementById('consentResult');
+  try {
+    await call('accept_consent');
+    state.user.needsConsent = false; saveState(); render();
+  } catch (e) { el.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 function showBootstrap() {
   document.getElementById('app').innerHTML = h`

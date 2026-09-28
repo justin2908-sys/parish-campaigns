@@ -211,18 +211,35 @@ async function login({ mobile, password }) {
   }
   await rateReset(keyMobile);
   const session = signSession({ uid: user.id, role: user.role, org_id: user.org_id, name: user.name, pf: passwordFingerprint(user.password_hash), exp: Date.now() + 1000 * 60 * 60 * 2 });
-  return { session, user: safeUser(user) };
+  return { session, user: safeUser(user), needs_consent: needsConsent(user) };
 }
+
+// A Seller must accept once — before doing anything else — that they're 18+ and that a payment
+// link they send goes out from their OWN phone (their own WhatsApp/SMS/email account, not the
+// church's). Bumping this number makes every Seller accept again next time they log in — the
+// wording changed, so their earlier agreement no longer covers it.
+const CURRENT_CONSENT_VERSION = 1;
+function needsConsent(u) { return u.role === 'seller' && (u.consent_version || 0) < CURRENT_CONSENT_VERSION; }
 
 // Every authenticated request re-checks that the account still exists, is still active, and
 // still has the password the token was issued for — so disabling someone or resetting their
-// password ends their session immediately instead of at the 2-hour expiry.
-async function assertSessionLive(session) {
-  const { data: u } = await supabase.from('users').select('active, password_hash, role').eq('id', session.uid).maybeSingle();
+// password ends their session immediately instead of at the 2-hour expiry. A Seller who hasn't
+// accepted the current consent is also signed out (skipConsent lets accept_consent itself through).
+async function assertSessionLive(session, { skipConsent } = {}) {
+  const { data: u } = await supabase.from('users').select('active, password_hash, role, consent_version').eq('id', session.uid).maybeSingle();
   // A role change (e.g. SuperAdmin -> Seller) ends the old session at once rather than lingering up to 2 hours.
   if (!u || !u.active || u.role !== session.role || !session.pf || session.pf !== passwordFingerprint(u.password_hash)) {
     throw httpError(401, 'Your session has ended — please log in again.');
   }
+  if (!skipConsent && needsConsent(u)) throw httpError(401, 'Please log in again to review the seller terms.');
+}
+
+// Recorded once the Seller taps "I'm 18+ and I understand". Declining isn't a server action — they
+// simply aren't given a session that can do anything, and can try again whenever they're ready.
+async function acceptConsent(session) {
+  requireRole(session, ['seller']);
+  await supabase.from('users').update({ consent_version: CURRENT_CONSENT_VERSION, consented_at: new Date().toISOString() }).eq('id', session.uid);
+  return { ok: true };
 }
 
 function safeUser(u) { return { id: u.id, mobile: u.mobile, name: u.name, role: u.role, org_id: u.org_id }; }
@@ -1263,20 +1280,19 @@ async function publicPaymentStatus({ payment_id }) {
 }
 
 // "Find my ticket": a buyer who paid but closed SumUp's page before coming back can look their
-// ticket up again from the name and mobile/email they bought with. BOTH must match, it is limited
-// to the one campaign whose page they are on, only link purchases are searched, and it is
-// rate-limited per visitor and per contact — so it can't be used to browse other people's tickets.
+// ticket up again from the mobile/email they bought with — exactly as they entered it, nothing
+// else needed. It is limited to the one campaign whose page they are on, only link purchases are
+// searched, and it is rate-limited per visitor and per contact — so it can't be used to browse
+// other people's tickets. Every purchase under that contact is returned (not just one name), since
+// a shared phone or email can cover more than one purchase — each result shows whose it was.
 const FIND_MAX_PER_HOUR = 10;
-const sameName = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
-async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
+async function publicFindTickets({ campaign_id, contact_value }) {
   if (clientIp && (await rateHit(`find:${clientIp}`, 3600)) > FIND_MAX_PER_HOUR) {
     throw httpError(429, 'Too many searches from your connection — please wait a while and try again.');
   }
-  const name = cleanName(buyer_name, 'Your name');
-  if (!name) throw httpError(400, 'Please enter your name.');
-  const contact = parseContact(contact_value);
+  const contact = parseContact(contact_value, 'Please enter the mobile number or email you bought with.');
   if ((await rateHit(`find:c:${contact.value}`, 3600)) > FIND_MAX_PER_HOUR) {
-    throw httpError(429, 'Too many searches for those details — please wait a while and try again.');
+    throw httpError(429, 'Too many searches for that contact — please wait a while and try again.');
   }
   const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('binned', false).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available.');
@@ -1284,10 +1300,9 @@ async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
   const { data: rows } = await supabase.from('payments').select('id, amount, created_at, payer_name, status, method, sumup_checkout_id, campaign_id')
     .eq('campaign_id', campaign_id).eq('method', 'link').eq('contact_value', contact.value).in('status', ['paid', 'pending'])
     .order('created_at', { ascending: false }).limit(10);
-  const mine = (rows || []).filter(p => sameName(p.payer_name, name));
   const purchases = [];
   let checked = 0;
-  for (const p of mine) {
+  for (const p of rows || []) {
     let status = p.status;
     // Paid a moment ago and our records haven't caught up yet? Ask SumUp (a few at most).
     if (status === 'pending' && checked < 3) { checked++; try { status = await syncCheckout(p); } catch { /* leave it out this time */ } }
@@ -1295,7 +1310,7 @@ async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
     const { data: tix } = await supabase.from('tickets').select('ticket_number, block_id').eq('payment_id', p.id).order('ticket_number');
     const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', campaign_id);
     const prefix = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
-    purchases.push({ payment_id: p.id, amount: Number(p.amount), sold_at: p.created_at, tickets: (tix || []).map(t => `${prefix[t.block_id] || ''}${t.ticket_number}`) });
+    purchases.push({ payment_id: p.id, amount: Number(p.amount), sold_at: p.created_at, payer_name: p.payer_name, tickets: (tix || []).map(t => `${prefix[t.block_id] || ''}${t.ticket_number}`) });
   }
   return { purchases };
 }
@@ -1866,6 +1881,7 @@ const actions = {
 
   login: (s, b) => login(b),
   create_user: (s, b) => createUser(s, b),
+  accept_consent: (s) => acceptConsent(s),
   set_user_active: (s, b) => setUserActive(s, b),
   reset_password: (s, b) => resetPassword(s, b),
   list_users: (s) => listUsers(s),
@@ -1942,7 +1958,7 @@ exports.handler = async (event) => {
     // still fits), there to stop scraping and floods rather than real buyers.
     const limited = () => httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
     // A logged-in request must still belong to an active account with the password the token was made for.
-    if (session && !isPublic && action !== 'sumup_webhook') await assertSessionLive(session);
+    if (session && !isPublic && action !== 'sumup_webhook') await assertSessionLive(session, { skipConsent: action === 'accept_consent' });
     let result;
     if (isPublic && READ_ONLY_PUBLIC.has(action)) {
       // Pure look-ups change nothing, so the flood check and the look-up run at the same time
