@@ -148,7 +148,7 @@ window.__infoP = (function () {
 </head>
 <body>
 <div id="app"><div class="fatal"><div class="card"><p class="note">Loading…</p></div></div></div>
-<div class="veil" id="veil"><div class="big">🎟️</div><div>Taking you to SumUp's secure payment page…</div><div style="font-size:13px;font-weight:500;opacity:.85;max-width:300px">Your numbers are held for you while you pay. <b>After paying, tap the button on SumUp's page to come back — then save your raffle ticket to your phone.</b></div></div>
+<div class="veil" id="veil"><div class="big">🎟️</div><div>Taking you to SumUp's secure payment page…</div><div style="font-size:13px;font-weight:500;opacity:.85;max-width:300px">Your numbers are held for you while you pay. <b>After paying, tap the button on SumUp's page to come back — then save your ticket to your phone.</b></div></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -271,7 +271,8 @@ function buildShell() {
       <h2>Check your details</h2>
       <div class="confirmBox"><div class="who">Your ticket will be sent to <b id="cName"></b> at:</div><div class="big" id="cContact"></div><div class="amt" id="cAmt"></div></div>
       <div class="warn2" id="cWarn" hidden></div>
-      <div class="keep">📲 <b>Important — after you pay, come back to this page</b> (tap the button on SumUp's page) and <b>save your raffle ticket</b> to your phone. Then you'll always have it.</div>
+      <div class="keep">📲 <b>Important — after you pay, come back to this page</b> (tap the button on SumUp's page) and <b>save your ticket</b> to your phone. Then you'll always have it.</div>
+      ${info.campaign.age_restricted ? `<p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">By tapping "Yes, that's right" you confirm you are aged 18 or over — the minimum age to buy a raffle ticket.</p>` : ''}
       <button type="button" class="pay" id="confirmPay">Yes, that's right — pay</button>
       <button type="button" class="shuf alt" id="confirmEdit" style="width:100%;margin-top:8px">✏️ Change my details</button>
     </div>

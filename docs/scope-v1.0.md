@@ -934,3 +934,53 @@ or "Change my details". It warns — without blocking — about a likely typo: a
 gmail.con, hotmial.com…, with the suggested spelling) or a UK mobile with the wrong number of digits. The same
 sheet carries the reminder to come back to the page after paying (tap the button on SumUp's page) and save the
 raffle ticket to the phone; the "Taking you to SumUp" screen repeats it.
+
+## 34. A sale never forgets its own ticket number — 2026-09-27 (on dev; preview only)
+
+Voiding a sale (or an automatic void, e.g. two attempts racing for the same number) deliberately frees the
+ticket and unlinks it from that payment — otherwise the ticket could never go back on sale. Until now that
+also erased the only record of which number the sale had been for, so a voided or auto-voided row on Sales /
+Needs Attention showed no ticket number at all.
+
+Every sale now records its own ticket number(s) permanently on the payment itself, at the moment they're
+claimed (or, if a specific number was requested and the claim then lost a race, at the moment it fails) — this
+is separate from the live link to the `tickets` table, so it survives a later void. Sales / Needs Attention /
+the campaign report now always show the number(s) a sale was for. The one case that's still correctly blank:
+an "any available number" auto-assigned sale that failed because too few tickets were left — no specific
+number was ever chosen, so there's genuinely nothing to show.
+
+The campaign report also no longer drops a voided sale from the CSV entirely (it used to vanish once its
+ticket row was freed) — it's now appended at the end against the number it was for.
+
+Not retroactive: a sale already voided before this shipped has no snapshot to fall back on, so it stays blank.
+
+## 35. A self-service, public-only campaign; and not every campaign is a raffle — 2026-09-27 (on dev; preview only)
+
+**Public only.** A new checkbox on Add Campaign, "Public site only — don't show this campaign to Sellers", and
+a toggle on any existing campaign ("Hide from Sellers" / "Show to Sellers" in Admin → Campaigns). A public-only
+campaign never appears in a Seller's campaign list — it's for a purely self-service purchase (a picnic
+registration, say), with no seller involvement. Admins/SuperAdmins are unaffected and can still see, edit and
+report on it, and can still sell it from the Sell screen themselves if ever needed. A campaign like this needs
+no physical series at all — one online series is enough, since names/mobile/email are already mandatory on
+every online sale.
+
+**Age-restricted.** A second checkbox, "This is a raffle or lottery — buyers must confirm they're 18 or over",
+checked by default (so the existing Raffle2026 is unaffected). The public buy page's 18+ confirmation, and the
+generic "ticket" wording on that page and its loading screen, now come from this setting rather than assuming
+every campaign is a raffle — a paid, non-gambling event (a dinner, a picnic) can turn it off. A picnic campaign
+would tick "Public only" and untick "This is a raffle or lottery".
+
+**Priority when two campaigns run together.** A Seller's Sell screen remembers whichever campaign they last
+used; failing that, the oldest active one they can see comes first. A public-only campaign is never in that
+list at all, so it can never compete with the campaign a Seller actually sells in person.
+
+## 36. Overview tab restored — 2026-09-27 (on dev; preview only)
+
+The Admin/SuperAdmin summary from the BBQ site — how a campaign (or all of them) is doing, and each seller's
+own totals — has its own tab again, "Overview", between Campaigns and Sales. Same "Viewing: All Campaigns / a
+specific one" selector as Sales and Needs Attention. Shows: tickets sold-or-reserved vs. still available (and
+physical tickets currently awaiting a card payment); money collected (card & machine, cash reconciled vs. not
+yet, payment links still awaiting payment); a by-tier breakdown; and a seller activity table (card & machine,
+cash confirmed, cash pending, total, sorted busiest first). The server-side data (`dashboard_state`) already
+existed from the original build but had no screen wired up to it — this only adds the missing tab, no backend
+change. Visible to Admin and SuperAdmin, same as Sales/Cash Recon/Needs Attention.
