@@ -139,7 +139,7 @@ window.__infoP = (function () {
   .warn2 { margin:0 0 10px; padding:10px 12px; border-radius:12px; background:var(--bad-dim); color:var(--bad); font-size:14.5px; font-weight:600; }
   .linkbtn { background:none; border:none; color:var(--wine); text-decoration:underline; text-underline-offset:3px; font-size:13.5px; font-weight:600; padding:6px; }
   .found { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; margin-top:8px; border-radius:12px; background:var(--gold-dim); border:1px solid #DCCB98; color:var(--ink); text-decoration:none; font-size:15px; }
-  .found span { color:var(--muted); font-size:12.5px; white-space:nowrap; }
+  .found span { color:var(--muted); font-size:12.5px; text-align:right; }
   @media (max-height:700px) { .mid.picking { min-height:120px; } .bundleHead { margin:8px 0 6px; } .bundle { padding:7px 2px 6px; } .bundle b { font-size:23px; } }
   @media (max-height:600px) { .top .church { display:none; } .top h1 { font-size:21px; } .seg button { padding:7px 4px; } .fine { font-size:11.5px; } .thanks { font-size:12px; } .card { padding:8px; } .mid.picking { min-height:100px; } }
   .fatal { max-width:480px; margin:40px auto; padding:0 16px; }
@@ -279,11 +279,8 @@ function buildShell() {
     <div class="sheetbox" id="findCard" hidden>
       <button type="button" class="close" id="findClose" aria-label="Close">✕</button>
       <h2>Find your ticket</h2>
-      <p class="note" style="margin:0 0 10px">Type your name and mobile or email exactly as you did when you bought.</p>
-      <div class="two">
-        <label class="sr" for="fName">Your name</label><input id="fName" placeholder="Your name" autocomplete="name">
-        <label class="sr" for="fContact">Mobile or email</label><input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email">
-      </div>
+      <p class="note" style="margin:0 0 10px">Type the mobile number or email exactly as you entered it when you bought.</p>
+      <label class="sr" for="fContact">Mobile or email</label><input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email" style="width:100%">
       <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
       <div id="findOut" role="status" aria-live="polite"></div>
     </div>`;
@@ -302,7 +299,7 @@ function buildShell() {
   $('confirmPay').onclick = doPay;
   $('confirmEdit').onclick = () => { $('confirmCard').hidden = true; const i = $('contactInput'); i.focus(); i.select(); };
   $('findToggle').onclick = () => { // carry over what they've already typed, then open the sheet
-    if (!$('fName').value) $('fName').value = $('buyerName').value; if (!$('fContact').value) $('fContact').value = $('contactInput').value;
+    if (!$('fContact').value) $('fContact').value = $('contactInput').value;
     $('findCard').hidden = false;
   };
   $('findClose').onclick = () => { $('findCard').hidden = true; };
@@ -555,16 +552,19 @@ async function swapTaken() {
 // A buyer who paid but closed SumUp's page before coming back can get their ticket page again.
 async function findTicket() {
   const out = $('findOut'), btn = $('findBtn');
-  const buyer_name = $('fName').value.trim(), contact_value = $('fContact').value.trim();
-  if (!buyer_name || !contact_value) { out.innerHTML = `<div class="err">Please enter both your name and your mobile or email.</div>`; return; }
+  const contact_value = $('fContact').value.trim();
+  if (!contact_value) { out.innerHTML = `<div class="err">Please enter the mobile number or email you bought with.</div>`; return; }
   btn.disabled = true; out.innerHTML = `<p class="note" style="margin-top:10px">Looking…</p>`;
   try {
-    const { purchases } = await call('public_find_tickets', { campaign_id: campaignId, buyer_name, contact_value });
+    const { purchases } = await call('public_find_tickets', { campaign_id: campaignId, contact_value });
     if (!purchases.length) {
-      out.innerHTML = `<div class="err" style="margin-top:10px">We couldn't find a paid ticket for those details. Check the spelling is exactly as you entered it. If you paid just now, wait a minute and try again.</div>`;
+      out.innerHTML = `<div class="err" style="margin-top:10px">We couldn't find a paid ticket for that number or email. Check it's spelt exactly as you entered it when you bought. If you paid just now, wait a minute and try again.</div>`;
     } else {
+      // A shared phone or email can cover more than one purchase (or buyer) — the name only needs
+      // showing when there's more than one result to tell apart.
+      const showNames = purchases.length > 1;
       out.innerHTML = `<p class="note" style="margin:12px 0 6px">Found — tap to open and save it:</p>` + purchases.map(p =>
-        `<a class="found" href="/ticket.html?payment_id=${encodeURIComponent(p.payment_id)}">🎟️ <b>${esc(p.tickets.join(', '))}</b><span>${money(p.amount)} · ${esc(new Date(p.sold_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }))}</span></a>`).join('');
+        `<a class="found" href="/ticket.html?payment_id=${encodeURIComponent(p.payment_id)}">🎟️ <b>${esc(p.tickets.join(', '))}</b><span>${showNames ? esc(p.payer_name || '') + ' · ' : ''}${money(p.amount)} · ${esc(new Date(p.sold_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }))}</span></a>`).join('');
     }
   } catch (e) { out.innerHTML = `<div class="err" style="margin-top:10px">${esc(e.message)}</div>`; }
   finally { btn.disabled = false; }

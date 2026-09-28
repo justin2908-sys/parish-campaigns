@@ -1263,20 +1263,19 @@ async function publicPaymentStatus({ payment_id }) {
 }
 
 // "Find my ticket": a buyer who paid but closed SumUp's page before coming back can look their
-// ticket up again from the name and mobile/email they bought with. BOTH must match, it is limited
-// to the one campaign whose page they are on, only link purchases are searched, and it is
-// rate-limited per visitor and per contact — so it can't be used to browse other people's tickets.
+// ticket up again from the mobile/email they bought with — exactly as they entered it, nothing
+// else needed. It is limited to the one campaign whose page they are on, only link purchases are
+// searched, and it is rate-limited per visitor and per contact — so it can't be used to browse
+// other people's tickets. Every purchase under that contact is returned (not just one name), since
+// a shared phone or email can cover more than one purchase — each result shows whose it was.
 const FIND_MAX_PER_HOUR = 10;
-const sameName = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
-async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
+async function publicFindTickets({ campaign_id, contact_value }) {
   if (clientIp && (await rateHit(`find:${clientIp}`, 3600)) > FIND_MAX_PER_HOUR) {
     throw httpError(429, 'Too many searches from your connection — please wait a while and try again.');
   }
-  const name = cleanName(buyer_name, 'Your name');
-  if (!name) throw httpError(400, 'Please enter your name.');
-  const contact = parseContact(contact_value);
+  const contact = parseContact(contact_value, 'Please enter the mobile number or email you bought with.');
   if ((await rateHit(`find:c:${contact.value}`, 3600)) > FIND_MAX_PER_HOUR) {
-    throw httpError(429, 'Too many searches for those details — please wait a while and try again.');
+    throw httpError(429, 'Too many searches for that contact — please wait a while and try again.');
   }
   const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('binned', false).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available.');
@@ -1284,10 +1283,9 @@ async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
   const { data: rows } = await supabase.from('payments').select('id, amount, created_at, payer_name, status, method, sumup_checkout_id, campaign_id')
     .eq('campaign_id', campaign_id).eq('method', 'link').eq('contact_value', contact.value).in('status', ['paid', 'pending'])
     .order('created_at', { ascending: false }).limit(10);
-  const mine = (rows || []).filter(p => sameName(p.payer_name, name));
   const purchases = [];
   let checked = 0;
-  for (const p of mine) {
+  for (const p of rows || []) {
     let status = p.status;
     // Paid a moment ago and our records haven't caught up yet? Ask SumUp (a few at most).
     if (status === 'pending' && checked < 3) { checked++; try { status = await syncCheckout(p); } catch { /* leave it out this time */ } }
@@ -1295,7 +1293,7 @@ async function publicFindTickets({ campaign_id, buyer_name, contact_value }) {
     const { data: tix } = await supabase.from('tickets').select('ticket_number, block_id').eq('payment_id', p.id).order('ticket_number');
     const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', campaign_id);
     const prefix = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
-    purchases.push({ payment_id: p.id, amount: Number(p.amount), sold_at: p.created_at, tickets: (tix || []).map(t => `${prefix[t.block_id] || ''}${t.ticket_number}`) });
+    purchases.push({ payment_id: p.id, amount: Number(p.amount), sold_at: p.created_at, payer_name: p.payer_name, tickets: (tix || []).map(t => `${prefix[t.block_id] || ''}${t.ticket_number}`) });
   }
   return { purchases };
 }
