@@ -1015,3 +1015,18 @@ already worked this way — this uses the same mechanism). If the wording is eve
 `CURRENT_CONSENT_VERSION` in the code makes every Seller accept again next time they log in, even mid-session.
 Admins, SuperAdmins and the Platform Owner are not asked — they're set up directly by a SuperAdmin/Justin, not
 self-registering volunteers.
+
+## 40. New Campaign is a wizard; a third audience — Sellers only, with online tickets — 2026-09-28 (on dev; preview only)
+
+Add Campaign is now six short steps instead of one long form: **1. Basics** (name, raffle-or-not) →
+**2. Tickets** (Physical / Online / Both) → **3. Audience** (Public site / Sellers / Both — narrowed to
+"Sellers" automatically when Tickets is Physical-only, since there's no public page without an online series)
+→ **4. Tiers** → **5. Ticket blocks** (pre-filtered to the type(s) chosen in step 2) → **6. Details & review**,
+with an Edit link on every line of the summary that jumps straight back to that step — nothing already typed
+is lost going back and forth. "Cancel" abandons the wizard.
+
+**New capability this required:** a campaign can now have online tickets that Sellers sell in person, with the
+public buy page switched off entirely (not just hidden from Sellers) — `campaigns.public_page_enabled`, set at
+creation or toggled after ("Turn off/on public page" next to "Hide/Show from Sellers" in the campaigns table).
+Every public-facing action (browsing, checking a number, buying) now also requires this; turning it on is
+refused if the campaign has no online series at all.
