@@ -1184,10 +1184,11 @@ async function renderCampaignsTab() {
           <td>${esc(c.name)}</td>
           <td>${esc(tierSummary(c))}</td>
           <td>${esc(blockSummary(c))}</td>
-          <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span>${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
+          <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span>${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
             ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
             <button class="small" onclick="toggleCampaignVisibility('${c.id}', ${!c.public_only})" title="${c.public_only ? 'Sellers currently cannot see this campaign' : 'Sellers can currently see this campaign'}">${c.public_only?'Show to Sellers':'Hide from Sellers'}</button>
+            ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="toggleCampaignPublicPage('${c.id}', ${!c.public_page_enabled})">${c.public_page_enabled?'Turn off public page':'Turn on public page'}</button>` : ''}
             <button class="small" onclick="doEditCampaignDetails('${c.id}')">${c.details_text ? 'Details ✓' : 'Add details'}</button>
             ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="doCopyPublicLink('${c.id}')">Copy public link</button>` : ''}
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
@@ -1221,19 +1222,8 @@ async function renderCampaignsTab() {
     ${state.user.role==='superadmin' ? `
     <div class="card">
       <h3 style="margin-top:0">Add New Campaign</h3>
-      <label>Name</label><input id="cName" placeholder="e.g. Christmas Dinner 2026">
-      <label>Price tiers</label>
-      <div id="tierRows">${draftTiers.map((t,i)=>tierRowHtml(t,i)).join('')}</div>
-      <button class="ghost" onclick="addTierRow()">+ Add another tier</button>
-      <label>Ticket blocks <span class="muted">— physical, digital, or a mix (hybrid)</span></label>
-      <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i)).join('')}</div>
-      <button class="ghost" onclick="addBlockRow()">+ Add another block</button>
-      <label>Campaign details <span class="muted">(optional — prizes, draw date, tagline, anything included in every ticket message for this campaign)</span></label>
-      <textarea id="cDetails" rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="e.g. 1st Prize — £1,200 · 2nd Prize — £500 · 3rd Prize — £300&#10;Draw Date: 20 December 2026&#10;&quot;Give a little, help a lot&quot; — every penny raised supports our church building fund.&#10;Winning numbers published on the church website &amp; notice board; winners contacted via the church office."></textarea>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-weight:500"><input type="checkbox" id="cAgeRestricted" checked style="width:auto;margin:0"> This is a raffle or lottery — buyers must confirm they're 18 or over</label>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:500"><input type="checkbox" id="cPublicOnly" style="width:auto;margin:0"> Public site only — don't show this campaign to Sellers</label>
-      <button class="primary" style="margin-top:12px" onclick="createCampaign()">Create Campaign</button>
-      <div id="createResult"></div>
+      <p class="muted">A short set of questions — raffle or not, who can buy it, prices, and the tickets themselves.</p>
+      <button class="primary" onclick="openCampaignWizard()">+ New Campaign</button>
     </div>` : ''}
   `;
 }
@@ -1274,14 +1264,14 @@ function tierRowHtml(t,i) {
 // pre-populated the same way. A digital ("Online") block can also carry a display prefix
 // (e.g. "O"), shown before the raw number to buyers; a physical block never gets one, since
 // a physical ticket must show exactly the number printed on it (non-negotiable #8).
-function blockRowHtml(b,i) {
+function blockRowHtml(b,i,locked) {
   const isDigital = b.type==='digital';
   return `<div class="block-row" style="flex-wrap:wrap">
     <div style="flex:0 0 auto"><label>${i===0?'Type':''}</label>
-      <div class="toggle" style="width:150px">
+      ${locked ? `<div style="padding:11px 0;font-weight:600;color:var(--slate)">${isDigital?'💻 Online':'🎫 Physical'}</div>` : `<div class="toggle" style="width:150px">
         <button type="button" class="${!isDigital?'active':''}" onclick="setBlockType(${i},'physical')">Physical</button>
         <button type="button" class="${isDigital?'active alt':''}" onclick="setBlockType(${i},'digital')">Digital</button>
-      </div>
+      </div>`}
     </div>
     <div style="flex:1 1 100px"><label>${i===0?'Label':''}</label><input value="${esc(b.label)}" placeholder="${isDigital?'e.g. Online':'e.g. Main'}" oninput="draftBlocks[${i}].label=this.value"></div>
     <div style="flex:1 1 80px"><label>${i===0?'Start #':''}</label><input type="number" value="${b.range_start}" oninput="draftBlocks[${i}].range_start=this.value"></div>
@@ -1291,14 +1281,134 @@ function blockRowHtml(b,i) {
   </div>
   ${isDigital ? `<div class="hint" style="margin:-2px 0 8px">Buyers can pick a specific number in this range ("lucky number") or get any available one — both live-checked, same as physical.</div>` : ''}`;
 }
-function setBlockType(i,type) { draftBlocks[i].type = type; renderCampaignsTab(); }
-function addTierRow() { draftTiers.push({name:'',price:''}); renderCampaignsTab(); }
-function removeTierRow(i) { if (draftTiers.length<=1) return; draftTiers.splice(i,1); renderCampaignsTab(); }
-function addBlockRow() { draftBlocks.push({type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}); renderCampaignsTab(); }
-function removeBlockRow(i) { if (draftBlocks.length<=1) return; draftBlocks.splice(i,1); renderCampaignsTab(); }
+function setBlockType(i,type) { draftBlocks[i].type = type; drawWizard(); }
+function addTierRow() { draftTiers.push({name:'',price:''}); drawWizard(); }
+function removeTierRow(i) { if (draftTiers.length<=1) return; draftTiers.splice(i,1); drawWizard(); }
+function addBlockRow() { draftBlocks.push({type: wiz.type==='both' ? 'physical' : wiz.type, label:'', range_start:'', range_end:'', number_prefix:''}); drawWizard(); }
+function removeBlockRow(i) { if (draftBlocks.length<=1) return; draftBlocks.splice(i,1); drawWizard(); }
 
-async function createCampaign() {
-  const resEl = document.getElementById('createResult');
+// ---- New Campaign wizard: a short guided sequence instead of one long form. Going back and
+// changing an earlier answer is always safe — nothing already typed is lost, and the step that
+// depends on it (Ticket blocks depends on Type; Audience depends on Type too) adjusts itself.
+const WIZ_STEPS = ['Basics', 'Tickets', 'Audience', 'Tiers', 'Ticket blocks', 'Details & review'];
+let wizStep = 1, wiz = null;
+function openCampaignWizard() {
+  wiz = { name: '', isRaffle: true, type: 'physical', audience: 'sellers', detailsText: '' };
+  draftTiers = [{ name: '', price: '' }, { name: '', price: '' }];
+  draftBlocks = [{ type: 'physical', label: '', range_start: '', range_end: '', number_prefix: '' }];
+  wizStep = 1;
+  drawWizard();
+}
+function closeCampaignWizard() { const el = document.getElementById('wizardPanel'); if (el) el.remove(); wiz = null; }
+function wizCanGoPublic() { return wiz.type !== 'physical'; }   // a public page only ever lists ONLINE tickets
+// Keeps the ticket-block rows in step 5 consistent with whatever Type was chosen in step 2 — a row
+// of a now-disallowed type is dropped rather than silently kept and rejected later by the server.
+function syncWizBlocksToType() {
+  const allowed = wiz.type === 'both' ? ['physical', 'digital'] : [wiz.type];
+  draftBlocks = draftBlocks.filter(b => allowed.includes(b.type));
+  if (!draftBlocks.length) draftBlocks = [{ type: allowed[0], label: '', range_start: '', range_end: '', number_prefix: '' }];
+}
+function setWizRaffle(v) { wiz.isRaffle = v; drawWizard(); }
+function setWizType(t) {
+  wiz.type = t;
+  if (!wizCanGoPublic() && wiz.audience !== 'sellers') wiz.audience = 'sellers';
+  syncWizBlocksToType();
+  drawWizard();
+}
+function setWizAudience(a) { wiz.audience = a; drawWizard(); }
+function goToWizStep(n) { wizStep = n; drawWizard(); }
+function wizValidate(step) {
+  if (step === 1) return wiz.name.trim() ? '' : 'Give the campaign a name.';
+  if (step === 4) return draftTiers.some(t => t.name.trim() !== '' && t.price !== '') ? '' : 'Add at least one price tier.';
+  if (step === 5) {
+    const usable = draftBlocks.filter(b => b.range_start !== '' && b.range_end !== '');
+    if (!usable.length) return 'Add at least one ticket block with a first and last number.';
+    if (wizCanGoPublic() && wiz.audience !== 'sellers' && !usable.some(b => b.type === 'digital')) {
+      return 'A public buy page needs at least one Online block.';
+    }
+  }
+  return '';
+}
+function wizNext() {
+  const err = wizValidate(wizStep);
+  const errEl = document.getElementById('wizErr');
+  if (err) { if (errEl) errEl.innerHTML = `<div class="error">${esc(err)}</div>`; return; }
+  wizStep = Math.min(WIZ_STEPS.length, wizStep + 1);
+  drawWizard();
+}
+function wizBack() { wizStep = Math.max(1, wizStep - 1); drawWizard(); }
+
+function wizStepHtml() {
+  if (wizStep === 1) return `
+    <label>Campaign name</label><input id="wName" value="${esc(wiz.name)}" placeholder="e.g. Christmas Dinner 2026" oninput="wiz.name=this.value">
+    <label style="margin-top:14px">What is this campaign?</label>
+    <div class="toggle" style="width:100%">
+      <button type="button" class="${wiz.isRaffle?'active':''}" onclick="setWizRaffle(true)">🎟️ Raffle or lottery</button>
+      <button type="button" class="${!wiz.isRaffle?'active alt':''}" onclick="setWizRaffle(false)">🎫 Ticket-selling event</button>
+    </div>
+    <p class="muted" style="margin-top:8px">${wiz.isRaffle ? "Buyers can pick a lucky number, and must confirm they're 18 or over before paying." : 'Buyers just get the next ticket — no numbers to choose, no age check.'}</p>`;
+  if (wizStep === 2) return `
+    <label>What kind of tickets?</label>
+    <div class="toggle" style="width:100%;flex-wrap:wrap">
+      <button type="button" style="flex:1 1 110px" class="${wiz.type==='physical'?'active':''}" onclick="setWizType('physical')">🎫 Physical</button>
+      <button type="button" style="flex:1 1 110px" class="${wiz.type==='digital'?'active alt':''}" onclick="setWizType('digital')">💻 Online</button>
+      <button type="button" style="flex:1 1 110px" class="${wiz.type==='both'?'active alt':''}" onclick="setWizType('both')">🔀 Both</button>
+    </div>
+    <p class="muted" style="margin-top:8px">${({ physical: 'Printed tickets, handed over by a Seller.', digital: 'No printed tickets — assigned automatically, sold by a Seller and/or the public page.', both: 'A mix of printed and online tickets in the same campaign.' })[wiz.type]}</p>`;
+  if (wizStep === 3) { const canPublic = wizCanGoPublic(); return `
+    <label>Who can buy it?</label>
+    <div class="toggle" style="width:100%;flex-wrap:wrap">
+      ${canPublic ? `<button type="button" style="flex:1 1 110px" class="${wiz.audience==='public'?'active':''}" onclick="setWizAudience('public')">🌐 Public site</button>` : ''}
+      <button type="button" style="flex:1 1 110px" class="${wiz.audience==='sellers'?'active':''}" onclick="setWizAudience('sellers')">🧑‍🤝‍🧑 Sellers</button>
+      ${canPublic ? `<button type="button" style="flex:1 1 110px" class="${wiz.audience==='both'?'active alt':''}" onclick="setWizAudience('both')">🔀 Both</button>` : ''}
+    </div>
+    ${!canPublic
+      ? `<p class="muted" style="margin-top:8px">Physical-only campaigns are always sold in person by a Seller — there's no public buy page without an Online series. Go back to Tickets to add one if you want this on the public site.</p>`
+      : `<p class="muted" style="margin-top:8px">${({ public: 'Hidden from Sellers — only the public buy page sells it.', sellers: "Sellers sell it from their Sell screen; there's no public buy page.", both: 'Sellers can sell it, and the public buy page is also live.' })[wiz.audience]}</p>`}`; }
+  if (wizStep === 4) return `
+    <label>Price tiers</label>
+    <div id="tierRows">${draftTiers.map((t,i)=>tierRowHtml(t,i)).join('')}</div>
+    <button type="button" class="ghost" onclick="addTierRow()">+ Add another tier</button>`;
+  if (wizStep === 5) { const locked = wiz.type !== 'both'; return `
+    <label>Ticket blocks ${locked ? '' : '<span class="muted">— physical, digital, or a mix</span>'}</label>
+    <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i,locked)).join('')}</div>
+    <button type="button" class="ghost" onclick="addBlockRow()">+ Add another block</button>`; }
+  // step 6
+  const audienceLabel = { public: 'Public site only', sellers: 'Sellers only', both: 'Sellers + public site' }[wiz.audience];
+  const tierList = draftTiers.filter(t=>t.name.trim()&&t.price!=='').map(t=>`${esc(t.name)} £${Number(t.price).toFixed(2)}`).join(', ') || '—';
+  const blockList = draftBlocks.filter(b=>b.range_start!==''&&b.range_end!=='').map(b=>`${b.type==='digital'?'Online':'Physical'} ${b.range_start}–${b.range_end}`).join(', ') || '—';
+  return `
+    <label>Campaign details <span class="muted">(optional — ${wiz.isRaffle ? 'prizes, draw date, tagline' : 'what it is, timing, anything worth telling buyers'})</span></label>
+    <textarea id="wDetails" rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" oninput="wiz.detailsText=this.value" placeholder="${wiz.isRaffle ? "e.g. 1st Prize — £1,200 · 2nd Prize — £500 · 3rd Prize — £300\nDraw Date: 20 December 2026" : 'e.g. Bring a chair — games and BBQ from 12pm.'}">${esc(wiz.detailsText)}</textarea>
+    <div class="card" style="background:var(--brass-dim);margin-top:14px">
+      <div class="stat"><span>Name</span><b>${esc(wiz.name)||'—'}</b></div>
+      <div class="stat"><span>Type <button type="button" class="link" onclick="goToWizStep(1)">Edit</button></span><b>${wiz.isRaffle?'Raffle or lottery':'Ticket-selling event'}</b></div>
+      <div class="stat"><span>Tickets <button type="button" class="link" onclick="goToWizStep(2)">Edit</button></span><b>${({physical:'Physical',digital:'Online',both:'Both'})[wiz.type]}</b></div>
+      <div class="stat"><span>Audience <button type="button" class="link" onclick="goToWizStep(3)">Edit</button></span><b>${audienceLabel}</b></div>
+      <div class="stat"><span>Tiers <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${tierList}</b></div>
+      <div class="stat"><span>Blocks <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${blockList}</b></div>
+    </div>
+    <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard()">Create Campaign</button>
+    <div id="wizCreateResult"></div>`;
+}
+function drawWizard() {
+  let el = document.getElementById('wizardPanel');
+  if (!el) { el = document.createElement('div'); el.id = 'wizardPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:40;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
+      <h3 style="margin:0">New Campaign</h3><button type="button" class="small" onclick="closeCampaignWizard()">Cancel</button>
+    </div>
+    <p class="muted" style="margin:0 0 14px">Step ${wizStep} of ${WIZ_STEPS.length}: ${WIZ_STEPS[wizStep-1]}</p>
+    <div class="card">${wizStepHtml()}</div>
+    <div id="wizErr"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      ${wizStep > 1 ? `<button type="button" class="secondary" style="flex:1" onclick="wizBack()">← Back</button>` : ''}
+      ${wizStep < WIZ_STEPS.length ? `<button type="button" class="primary" style="flex:1" onclick="wizNext()">Next →</button>` : ''}
+    </div>
+  </div>`;
+}
+async function doCreateCampaignWizard() {
+  const resEl = document.getElementById('wizCreateResult');
   try {
     const tiers = draftTiers.filter(t=>t.name.trim()!=='' && t.price!=='').map(t=>({name:t.name.trim(), price:Number(t.price)}));
     const blocks = draftBlocks.filter(b=>b.range_start!=='' && b.range_end!=='').map(b => ({
@@ -1307,12 +1417,12 @@ async function createCampaign() {
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
     await call('create_campaign', {
-      name: document.getElementById('cName').value.trim(), tiers, blocks, details_text: document.getElementById('cDetails').value,
-      age_restricted: document.getElementById('cAgeRestricted').checked,
-      public_only: document.getElementById('cPublicOnly').checked,
+      name: wiz.name.trim(), tiers, blocks, details_text: wiz.detailsText,
+      age_restricted: wiz.isRaffle,
+      public_only: wiz.audience === 'public',
+      public_page_enabled: wiz.audience !== 'sellers',
     }, 60000);
-    draftTiers = [{name:'',price:''},{name:'',price:''}];
-    draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
+    closeCampaignWizard();
     renderCampaignsTab();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
@@ -1335,6 +1445,7 @@ async function doAddSeries() {
 }
 async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function toggleCampaignVisibility(id, public_only) { try { await call('set_campaign_visibility', { campaign_id: id, public_only }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
+async function toggleCampaignPublicPage(id, public_page_enabled) { try { await call('set_campaign_visibility', { campaign_id: id, public_page_enabled }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function downloadCampaignReport(id) {
   try {
     const { csv, filename } = await call('export_campaign_report', { campaign_id: id }, 60000);

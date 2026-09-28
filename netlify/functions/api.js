@@ -376,11 +376,17 @@ async function setCampaignDetails(session, { campaign_id, details_text }) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted }) {
+async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
   if (!blocks || !blocks.length) throw httpError(400, 'Add at least one ticket block');
+  // A public buy page (whether public-only, or public-and-Sellers) needs somewhere to sell from —
+  // it only ever lists ONLINE tickets. Checked before anything is created, same as everything else here.
+  const wantsPublicPage = public_page_enabled === undefined ? true : !!public_page_enabled;
+  if (wantsPublicPage && !blocks.some(b => b.type === 'digital')) {
+    throw httpError(400, 'A public buy page needs at least one online series — add one, or turn the public page off for this campaign.');
+  }
   // Checked BEFORE anything is created, so a mistake leaves nothing half-built behind.
   const ranges = blocks.map((b, i) => {
     if (!['physical', 'digital'].includes(b.type)) throw httpError(400, `Unknown block type: ${b.type}`);
@@ -413,6 +419,7 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
       // age_restricted: the public page's 18+ confirmation, on by default (a raffle/lottery needs it);
       // an ordinary paid event that isn't gambling (a dinner, a picnic) can turn it off.
       age_restricted: age_restricted === undefined ? true : !!age_restricted,
+      public_page_enabled: wantsPublicPage,
     })
     .select().single();
   if (campErr) throw httpError(400, campErr.message);
@@ -635,11 +642,22 @@ async function restoreCampaign(session, { campaign_id }) {
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
-// Flip whether a campaign shows on the Seller's Sell screen, after it's already been created.
-async function setCampaignVisibility(session, { campaign_id, public_only }) {
+// Changes who can buy a campaign after it's already been created: hidden from Sellers (public_only)
+// and/or whether the public buy page works at all (public_page_enabled) — either may be given alone.
+async function setCampaignVisibility(session, { campaign_id, public_only, public_page_enabled }) {
   requireOrgRole(session, ['superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
-  const { error } = await supabase.from('campaigns').update({ public_only: !!public_only }).eq('id', campaign_id);
+  const patch = {};
+  if (public_only !== undefined) patch.public_only = !!public_only;
+  if (public_page_enabled !== undefined) {
+    if (public_page_enabled) {
+      const { data: blocks } = await supabase.from('ticket_blocks').select('id').eq('campaign_id', campaign_id).eq('type', 'digital').limit(1);
+      if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online series — add one before turning the public page on.');
+    }
+    patch.public_page_enabled = !!public_page_enabled;
+  }
+  if (!Object.keys(patch).length) throw httpError(400, 'Nothing to change');
+  const { error } = await supabase.from('campaigns').update(patch).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
@@ -989,7 +1007,7 @@ async function publicCampaignInfo({ campaign_id }) {
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
   const [{ data: campaign }, { data: tiers }, { data: blocks }] = await Promise.all([
-    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, organizations(name, address, thank_you_text)').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle(),
+    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, organizations(name, address, thank_you_text)').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
   ]);
@@ -1005,7 +1023,7 @@ async function publicCampaignInfo({ campaign_id }) {
 
 // Live "is this lucky number free" check for the public page — online tickets only.
 async function publicCheckTicket({ campaign_id, ticket_number }) {
-  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const { data } = await supabase.from('tickets').select('status, ticket_blocks!inner(type)')
     .eq('campaign_id', campaign_id).eq('ticket_number', ticket_number).eq('ticket_blocks.type', 'digital').maybeSingle();
@@ -1017,7 +1035,7 @@ async function publicCheckTicket({ campaign_id, ticket_number }) {
 // The same check for several numbers in one request (the buy page's basket, max 20 — the
 // per-purchase cap). Online tickets only. One result per number, in the order asked.
 async function publicCheckTickets({ campaign_id, ticket_numbers }) {
-  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   if (!Array.isArray(ticket_numbers) || !ticket_numbers.length) throw httpError(400, 'No ticket numbers to check');
   if (ticket_numbers.length > MAX_PUBLIC_PURCHASE_QTY) throw httpError(400, `Check at most ${MAX_PUBLIC_PURCHASE_QTY} numbers at a time`);
@@ -1040,7 +1058,7 @@ async function publicCheckTickets({ campaign_id, ticket_numbers }) {
 // until they pay, and the purchase itself re-checks every number atomically.
 async function publicRandomNumbers({ campaign_id, block_id, count, exclude }) {
   const [{ data: campaign }] = await Promise.all([
-    supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle(),
+    supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     sweepIfDue().catch(() => { /* housekeeping only */ }),
   ]);
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
@@ -1084,7 +1102,7 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
     const replay = await replaySale(client_ref, null);
     if (replay) return replay;
   }
-  const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('active', true).eq('binned', false).maybeSingle();
+  const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
   const { data: onlineBlocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id).eq('type', 'digital');
