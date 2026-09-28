@@ -211,18 +211,35 @@ async function login({ mobile, password }) {
   }
   await rateReset(keyMobile);
   const session = signSession({ uid: user.id, role: user.role, org_id: user.org_id, name: user.name, pf: passwordFingerprint(user.password_hash), exp: Date.now() + 1000 * 60 * 60 * 2 });
-  return { session, user: safeUser(user) };
+  return { session, user: safeUser(user), needs_consent: needsConsent(user) };
 }
+
+// A Seller must accept once — before doing anything else — that they're 18+ and that a payment
+// link they send goes out from their OWN phone (their own WhatsApp/SMS/email account, not the
+// church's). Bumping this number makes every Seller accept again next time they log in — the
+// wording changed, so their earlier agreement no longer covers it.
+const CURRENT_CONSENT_VERSION = 1;
+function needsConsent(u) { return u.role === 'seller' && (u.consent_version || 0) < CURRENT_CONSENT_VERSION; }
 
 // Every authenticated request re-checks that the account still exists, is still active, and
 // still has the password the token was issued for — so disabling someone or resetting their
-// password ends their session immediately instead of at the 2-hour expiry.
-async function assertSessionLive(session) {
-  const { data: u } = await supabase.from('users').select('active, password_hash, role').eq('id', session.uid).maybeSingle();
+// password ends their session immediately instead of at the 2-hour expiry. A Seller who hasn't
+// accepted the current consent is also signed out (skipConsent lets accept_consent itself through).
+async function assertSessionLive(session, { skipConsent } = {}) {
+  const { data: u } = await supabase.from('users').select('active, password_hash, role, consent_version').eq('id', session.uid).maybeSingle();
   // A role change (e.g. SuperAdmin -> Seller) ends the old session at once rather than lingering up to 2 hours.
   if (!u || !u.active || u.role !== session.role || !session.pf || session.pf !== passwordFingerprint(u.password_hash)) {
     throw httpError(401, 'Your session has ended — please log in again.');
   }
+  if (!skipConsent && needsConsent(u)) throw httpError(401, 'Please log in again to review the seller terms.');
+}
+
+// Recorded once the Seller taps "I'm 18+ and I understand". Declining isn't a server action — they
+// simply aren't given a session that can do anything, and can try again whenever they're ready.
+async function acceptConsent(session) {
+  requireRole(session, ['seller']);
+  await supabase.from('users').update({ consent_version: CURRENT_CONSENT_VERSION, consented_at: new Date().toISOString() }).eq('id', session.uid);
+  return { ok: true };
 }
 
 function safeUser(u) { return { id: u.id, mobile: u.mobile, name: u.name, role: u.role, org_id: u.org_id }; }
@@ -1864,6 +1881,7 @@ const actions = {
 
   login: (s, b) => login(b),
   create_user: (s, b) => createUser(s, b),
+  accept_consent: (s) => acceptConsent(s),
   set_user_active: (s, b) => setUserActive(s, b),
   reset_password: (s, b) => resetPassword(s, b),
   list_users: (s) => listUsers(s),
@@ -1940,7 +1958,7 @@ exports.handler = async (event) => {
     // still fits), there to stop scraping and floods rather than real buyers.
     const limited = () => httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
     // A logged-in request must still belong to an active account with the password the token was made for.
-    if (session && !isPublic && action !== 'sumup_webhook') await assertSessionLive(session);
+    if (session && !isPublic && action !== 'sumup_webhook') await assertSessionLive(session, { skipConsent: action === 'accept_consent' });
     let result;
     if (isPublic && READ_ONLY_PUBLIC.has(action)) {
       // Pure look-ups change nothing, so the flood check and the look-up run at the same time
