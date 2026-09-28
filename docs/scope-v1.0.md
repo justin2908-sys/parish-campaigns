@@ -993,3 +993,12 @@ contact is returned (a shared phone or email can cover more than one purchase), 
 name it was booked under whenever there is more than one result, so nothing is ambiguous. The confirm sheet's
 wording was also corrected: it no longer implies a ticket is emailed or texted — it says plainly that these
 details are how the buyer finds it again.
+
+## 38. The public page only looks like a raffle when it is one — 2026-09-28 (on dev; preview only)
+
+The "Assign for me" / "Pick my numbers" choice, the shuffle and lucky-number tools, the "Online numbers run
+from X to Y" callout, the "🎁 Prizes" button and the 18+ confirmation are all raffle/lottery ideas — they now
+only appear when a campaign has "This is a raffle or lottery" ticked (§35). A campaign without it (a picnic, a
+dinner) shows just the tier steppers, name and contact, and pays — the buyer never sees or picks a ticket
+number, it's simply assigned to whichever ticket is next in the series. The details button/sheet becomes
+"ℹ️ Details" / "Event details" instead of "Prizes". Nothing about a raffle campaign changed.
