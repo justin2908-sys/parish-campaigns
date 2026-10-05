@@ -1189,6 +1189,7 @@ async function renderCampaignsTab() {
             ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
             <button class="small" onclick="toggleCampaignVisibility('${c.id}', ${!c.public_only})" title="${c.public_only ? 'Sellers currently cannot see this campaign' : 'Sellers can currently see this campaign'}">${c.public_only?'Show to Sellers':'Hide from Sellers'}</button>
             ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="toggleCampaignPublicPage('${c.id}', ${!c.public_page_enabled})">${c.public_page_enabled?'Turn off public page':'Turn on public page'}</button>` : ''}
+            <button class="small" onclick="openSeriesEditor('${c.id}')">Edit series</button>
             <button class="small" onclick="doEditCampaignDetails('${c.id}')">${c.details_text ? 'Details ✓' : 'Add details'}</button>
             ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="doCopyPublicLink('${c.id}')">Copy public link</button>` : ''}
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
@@ -1425,6 +1426,58 @@ async function doCreateCampaignWizard() {
     closeCampaignWizard();
     renderCampaignsTab();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+// ---- Edit series: change where a series ends (cut back or stretch) ----
+let seriesEdit = null;
+function closeSeriesEditor() { const el = document.getElementById('seriesPanel'); if (el) el.remove(); seriesEdit = null; renderCampaignsTab(); }
+async function openSeriesEditor(campaignId) {
+  const keepMsgs = (seriesEdit && seriesEdit.id === campaignId) ? seriesEdit.msgs : {};   // a "Done — …" note survives the refresh after saving
+  seriesEdit = { id: campaignId, loading: true, msgs: keepMsgs };
+  drawSeriesEditor();
+  try {
+    const [{ campaigns }, { usage }] = await Promise.all([call('list_campaigns', { include_inactive: true }), call('campaign_block_usage', { campaign_id: campaignId })]);
+    seriesEdit = { id: campaignId, campaign: campaigns.find(c => c.id === campaignId), usage, msgs: keepMsgs };
+  } catch (e) { seriesEdit = { id: campaignId, error: e.message, msgs: {} }; }
+  drawSeriesEditor();
+}
+function drawSeriesEditor() {
+  let el = document.getElementById('seriesPanel');
+  if (!seriesEdit) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'seriesPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:40;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const c = seriesEdit.campaign;
+  const body = seriesEdit.error ? `<div class="error">${esc(seriesEdit.error)}</div>`
+    : seriesEdit.loading || !c ? '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>'
+    : c.blocks.map(b => {
+        const u = (seriesEdit.usage || []).find(x => x.block_id === b.id) || { in_use: 0, highest_in_use: null };
+        const prefix = b.number_prefix || '';
+        const low = u.highest_in_use !== null ? u.highest_in_use : b.range_start;
+        return `<div class="card">
+          <b>${esc(b.label)}</b> <span class="muted">· ${b.type==='digital'?'online':'physical'} · ${prefix}${b.range_start}–${prefix}${b.range_end} (${b.range_end - b.range_start + 1} tickets)</span>
+          <div class="muted" style="margin:6px 0">${u.in_use ? `${u.in_use} sold or reserved — the highest is ${prefix}${u.highest_in_use}, so the lowest you can end this series at is ${low}.` : 'Nothing sold or reserved yet — you can end it anywhere from ' + b.range_start + ' up.'}</div>
+          <label>Last number</label>
+          <input id="serEnd-${b.id}" type="number" inputmode="numeric" value="${b.range_end}">
+          <button class="primary" style="margin-top:8px" onclick="doSaveSeriesEnd('${b.id}', ${b.range_start}, ${b.range_end})">Save</button>
+          <div>${seriesEdit.msgs[b.id] || ''}</div>
+        </div>`;
+      }).join('');
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><h3 style="margin:0">Edit series${c ? ' — ' + esc(c.name) : ''}</h3><button class="small" onclick="closeSeriesEditor()">Close</button></div>
+    <p class="muted" style="margin:0 0 12px">Cut a series back or stretch it. Only tickets nobody has sold or reserved can be removed; a stretch can't run into another series' numbers.</p>
+    ${body}
+  </div>`;
+}
+async function doSaveSeriesEnd(blockId, rangeStart, oldEnd) {
+  const input = document.getElementById('serEnd-' + blockId);
+  const newEnd = Number(input.value);
+  if (input.value === '' || !Number.isInteger(newEnd)) { seriesEdit.msgs[blockId] = '<div class="error">Enter the last number as a whole number.</div>'; drawSeriesEditor(); return; }
+  if (newEnd < oldEnd && !confirm(`Remove tickets ${newEnd + 1} to ${oldEnd} (${oldEnd - newEnd} tickets)? They are all unsold, so nothing already sold is affected — but they won't be available to sell afterwards.`)) return;
+  try {
+    const r = await call('edit_block_end', { block_id: blockId, range_end: newEnd }, 60000);
+    const msg = r.removed ? `Done — ${r.removed} unsold tickets removed. The series now ends at ${r.range_end}.` : `Done — ${r.added} tickets added. The series now ends at ${r.range_end}.`;
+    const keep = seriesEdit.msgs; keep[blockId] = `<div class="info">${esc(msg)}</div>`;
+    seriesEdit.msgs = keep;
+    await openSeriesEditor(seriesEdit.id);
+  } catch (e) { seriesEdit.msgs[blockId] = `<div class="error">${esc(e.message)}</div>`; drawSeriesEditor(); }
 }
 async function doAddSeries() {
   const resEl = document.getElementById('addSeriesResult');

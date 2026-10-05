@@ -507,6 +507,78 @@ async function addBlockToCampaign(session, { campaign_id, type, label, range_sta
   return { ok: true, block };
 }
 
+// What's already sold or reserved in each of a campaign's series — the Edit series screen shows it so
+// nobody has to guess how far a series can be cut back.
+async function campaignBlockUsage(session, { campaign_id }) {
+  requireOrgRole(session, ['admin', 'superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id').eq('campaign_id', campaign_id);
+  const usage = await Promise.all((blocks || []).map(async (b) => {
+    const [{ count }, { data: top }] = await Promise.all([
+      supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('block_id', b.id).neq('status', 'unsold'),
+      supabase.from('tickets').select('ticket_number').eq('block_id', b.id).neq('status', 'unsold').order('ticket_number', { ascending: false }).limit(1),
+    ]);
+    return { block_id: b.id, in_use: count || 0, highest_in_use: top && top.length ? top[0].ticket_number : null };
+  }));
+  return { usage };
+}
+
+// Changes where an existing series ENDS — cut it back (100 -> 50) or stretch it (100 -> 150).
+// Cutting back only ever removes tickets nobody has sold or reserved, and refuses otherwise (the
+// lowest you can go is the highest number already in use), done in one step in the database so a
+// sale landing at the same moment can't leave a half-trimmed series. Stretching can't run into any
+// number already used in the campaign, same rule as adding a series.
+async function editBlockEnd(session, { block_id, range_end }) {
+  requireOrgRole(session, ['superadmin']);
+  const { data: block } = await supabase.from('ticket_blocks').select('id, campaign_id, label, range_start, range_end').eq('id', block_id).maybeSingle();
+  if (!block) throw httpError(404, 'Series not found');
+  await requireCampaignsInOwnOrg(session, [block.campaign_id]);
+  const { data: campaign } = await supabase.from('campaigns').select('binned').eq('id', block.campaign_id).maybeSingle();
+  if (campaign && campaign.binned) throw httpError(400, 'This campaign is in the Recycle Bin — restore it first');
+  const newEnd = Number(range_end);
+  if (range_end === '' || range_end === null || !Number.isInteger(newEnd)) throw httpError(400, 'Enter the last number as a whole number.');
+  if (newEnd < block.range_start) throw httpError(400, `The last number can't be below the first (${block.range_start}).`);
+  if (newEnd === block.range_end) throw httpError(400, `That series already ends at ${newEnd} — nothing to change.`);
+  if (newEnd - block.range_start + 1 > MAX_SERIES_SIZE) throw httpError(400, `A series can hold at most ${MAX_SERIES_SIZE.toLocaleString()} tickets`);
+
+  if (newEnd < block.range_end) {
+    const { count } = await supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('block_id', block.id).gt('ticket_number', newEnd).neq('status', 'unsold');
+    if (count) {
+      const { data: top } = await supabase.from('tickets').select('ticket_number').eq('block_id', block.id).neq('status', 'unsold').order('ticket_number', { ascending: false }).limit(1);
+      const highest = top && top.length ? top[0].ticket_number : block.range_start;
+      throw httpError(400, `${count} ticket${count === 1 ? '' : 's'} between ${newEnd + 1} and ${block.range_end} ${count === 1 ? 'is' : 'are'} already sold or reserved, so the series can't be cut back that far. The lowest you can go is ${highest}.`);
+    }
+    const { error } = await supabase.rpc('shrink_block', { p_block_id: block.id, p_new_end: newEnd });
+    if (error) {
+      if (String(error.message).includes('IN_USE')) throw httpError(409, 'One of those tickets was just sold or reserved, so nothing was changed — check the series and try again.');
+      throw httpError(500, 'Could not shorten the series: ' + error.message);
+    }
+    return { ok: true, removed: block.range_end - newEnd, range_end: newEnd };
+  }
+
+  const from = block.range_end + 1;
+  const { data: clash } = await supabase.from('tickets').select('ticket_number').eq('campaign_id', block.campaign_id).gte('ticket_number', from).lte('ticket_number', newEnd).order('ticket_number');
+  if (clash && clash.length) {
+    const first = clash[0].ticket_number, last = clash[clash.length - 1].ticket_number;
+    throw httpError(400, `${first === last ? `Number ${first} is` : `Numbers ${first}–${last} are`} already used by another series in this campaign, so this one can't stretch that far.`);
+  }
+  const rows = [];
+  for (let n = from; n <= newEnd; n++) rows.push({ campaign_id: block.campaign_id, block_id: block.id, ticket_number: n });
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error: e2 } = await supabase.from('tickets').insert(rows.slice(i, i + 500));
+    if (e2) {
+      await supabase.from('tickets').delete().eq('block_id', block.id).gt('ticket_number', block.range_end);
+      throw httpError(500, 'Could not add the extra tickets, nothing was changed: ' + e2.message);
+    }
+  }
+  const { error: e3 } = await supabase.from('ticket_blocks').update({ range_end: newEnd }).eq('id', block.id);
+  if (e3) {
+    await supabase.from('tickets').delete().eq('block_id', block.id).gt('ticket_number', block.range_end);
+    throw httpError(500, 'Could not update the series, nothing was changed: ' + e3.message);
+  }
+  return { ok: true, added: newEnd - block.range_end, range_end: newEnd };
+}
+
 const STALE_MINUTES = 35; // SumUp hosted checkouts are valid ~30 min; give a small buffer
 
 // Base URL of this deployment, used to tell SumUp where to send payment notifications.
@@ -1915,6 +1987,8 @@ const actions = {
   set_campaign_visibility: (s, b) => setCampaignVisibility(s, b),
   sell_screen: (s, b) => sellScreen(s, b),
   add_block_to_campaign: (s, b) => addBlockToCampaign(s, b),
+  edit_block_end: (s, b) => editBlockEnd(s, b),
+  campaign_block_usage: (s, b) => campaignBlockUsage(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),
   list_binned_campaigns: (s) => listBinnedCampaigns(s),
