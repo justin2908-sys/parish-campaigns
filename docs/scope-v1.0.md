@@ -1030,3 +1030,17 @@ public buy page switched off entirely (not just hidden from Sellers) — `campai
 creation or toggled after ("Turn off/on public page" next to "Hide/Show from Sellers" in the campaigns table).
 Every public-facing action (browsing, checking a number, buying) now also requires this; turning it on is
 refused if the campaign has no online series at all.
+
+## 41. Edit series — cut a series back or stretch it — 2026-10-05 (on dev; preview only)
+
+Campaigns tab → **Edit series** (SuperAdmin): for each series of a campaign it shows how many tickets are sold
+or reserved and the highest number among them, with a "Last number" box.
+- **Cut back** (e.g. 1–100 → 1–50): only unsold, unreserved tickets can go. If any ticket in the part being
+  removed is sold, paid, held by an unpaid payment link or awaiting cash reconciliation, it is refused, naming
+  the lowest number the series can end at (the highest number in use). Done in a single database step
+  (`shrink_block`), so a sale landing at the same moment can't leave a half-trimmed series — it rolls back.
+  A confirmation asks first, since the removed numbers can't then be sold.
+- **Stretch** (1–100 → 1–150): adds the extra numbers as unsold, unless they would run into a number already used
+  by another series in the campaign (same rule as adding a series).
+- Public page, shuffle and number checks follow automatically (they read the tickets themselves).
+Not changed here: the first number and the display prefix — changing those would alter tickets already issued.

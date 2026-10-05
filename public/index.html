@@ -1431,11 +1431,12 @@ async function doCreateCampaignWizard() {
 let seriesEdit = null;
 function closeSeriesEditor() { const el = document.getElementById('seriesPanel'); if (el) el.remove(); seriesEdit = null; renderCampaignsTab(); }
 async function openSeriesEditor(campaignId) {
-  seriesEdit = { id: campaignId, loading: true, msgs: {} };
+  const keepMsgs = (seriesEdit && seriesEdit.id === campaignId) ? seriesEdit.msgs : {};   // a "Done — …" note survives the refresh after saving
+  seriesEdit = { id: campaignId, loading: true, msgs: keepMsgs };
   drawSeriesEditor();
   try {
     const [{ campaigns }, { usage }] = await Promise.all([call('list_campaigns', { include_inactive: true }), call('campaign_block_usage', { campaign_id: campaignId })]);
-    seriesEdit = { id: campaignId, campaign: campaigns.find(c => c.id === campaignId), usage, msgs: (seriesEdit && seriesEdit.msgs) || {} };
+    seriesEdit = { id: campaignId, campaign: campaigns.find(c => c.id === campaignId), usage, msgs: keepMsgs };
   } catch (e) { seriesEdit = { id: campaignId, error: e.message, msgs: {} }; }
   drawSeriesEditor();
 }
