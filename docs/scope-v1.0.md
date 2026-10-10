@@ -1063,3 +1063,18 @@ buttons: Status & visibility (active, shown to Sellers, public page + copy link)
 online, each saved separately), Series (+ Edit series), Details (edit in place), and More (report, recycle bin).
 The table keeps only Settings, Activate/Deactivate and Report. "Add a series to an existing campaign" is still
 its own card further down the Campaigns tab. Not yet in Settings (future): rename, raffle/event type, tiers.
+
+## 43. Sell screen never scrolls; a proper "Sell tickets" button in Admin — 2026-10-10 (on dev; preview only)
+
+**No-scroll Sell screen.** The sale form itself already fit a phone screen; the page only scrolled when something
+long opened *inline* underneath it. Those now open over the form instead, with their own scrolling:
+- **Recent sales** (tap "N sales this session") opens as a sheet over the bottom of the screen — measured: the page
+  used to overflow by 318px with four sales listed; now 0.
+- **Edit numbers** (the per-ticket editor) opens as a sheet, not ten rows pushed into the page.
+- **Stats detail** floats over the form instead of pushing it down.
+Plus tighter spacing on short screens (≤600px usable height: single-line header, smaller fields and error box) so
+even ten typed tickets + a recent-sales bar + an error message fit on a small phone (was 53px over; now fits).
+Test method: headless browser at phone sizes, page `scrollHeight` against `innerHeight`.
+
+**Admin "Sell tickets" button** is now a gold, raised, full-width button with an arrow (it was a pale box that
+looked like a label). Gold rather than the dark green so it can't be mistaken for the selected tab.
