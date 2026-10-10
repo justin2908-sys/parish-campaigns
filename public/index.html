@@ -807,16 +807,26 @@ function paymentButtonsHtml() {
   const remaining = a ? a.remaining : 0;
   const cashPending = scoped && pendingUndo.method === 'cash';
   const machinePending = scoped && pendingUndo.method === 'machine';
-  const busy = saleInFlight; // a sale is being recorded right now — lock all three so nothing double-fires
+  const busy = saleInFlight; // a sale is being recorded right now — lock all of them so nothing double-fires
+  const allowed = allowedPayMethods(camp);
   const linkBtn = `<button style="background:var(--tier-c)" title="Pay by Link — a payment link is sent to the buyer" ${scoped || busy ? 'disabled' : ''} onclick="submitSale('link')">Link</button>`;
-  return `
+  const cashBtn = `
     <button style="${cashPending?'background:var(--ink)':'background:var(--good)'}" title="Cash taken" ${(scoped && !cashPending) || busy ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
       ${cashPending ? `Undo (${remaining}s)` : 'Cash'}
-    </button>
+    </button>`;
+  const machineBtn = `
     <button style="${machinePending?'background:var(--ink)':'background:var(--slate)'}" title="Pay at Machine — paid on the card machine, you're logging it" ${(scoped && !machinePending) || busy ? 'disabled' : ''} onclick="${machinePending?`doUndo(${pendingUndo.activityId})`:`submitSale('machine')`}">
       ${machinePending ? `Undo (${remaining}s)` : 'Machine'}
-    </button>
-    ${linkBtn}`;
+    </button>`;
+  // Only the buttons the Admin has switched on for this kind of ticket (physical or online).
+  return (allowed.includes('cash') ? cashBtn : '') + (allowed.includes('machine') ? machineBtn : '') + (allowed.includes('link') ? linkBtn : '');
+}
+// Which payment buttons the Admin allows for the series being sold from right now (set per campaign,
+// separately for physical and online tickets). Falls back to all three if nothing is configured.
+function allowedPayMethods(camp) {
+  const block = camp && camp.blocks.find(b => b.id === selectedBlockId);
+  const list = camp && (block && block.type === 'digital' ? camp.online_payment_methods : camp.physical_payment_methods);
+  return Array.isArray(list) && list.length ? list : ['cash', 'machine', 'link'];
 }
 function updatePaymentButtons() { const el = document.getElementById('paymentButtons'); if (el) el.innerHTML = paymentButtonsHtml(); }
 
@@ -829,6 +839,7 @@ async function submitSale(method) {
   const block = camp.blocks.find(b => b.id === selectedBlockId);
   const autoMode = block && block.type === 'digital';
   const errEl = document.getElementById('submitError');
+  if (!allowedPayMethods(camp).includes(method)) { errEl.innerHTML = `<div class="error">That payment option isn't switched on for this campaign.</div>`; return; }
   if (!ticketNumbers.length) { errEl.innerHTML = `<div class="error">Enter at least one ticket count first.</div>`; return; }
   if (!autoMode) {
     const need = minDigits(block);
@@ -1186,14 +1197,9 @@ async function renderCampaignsTab() {
           <td>${esc(blockSummary(c))}</td>
           <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span>${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
-            ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
-            <button class="small" onclick="toggleCampaignVisibility('${c.id}', ${!c.public_only})" title="${c.public_only ? 'Sellers currently cannot see this campaign' : 'Sellers can currently see this campaign'}">${c.public_only?'Show to Sellers':'Hide from Sellers'}</button>
-            ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="toggleCampaignPublicPage('${c.id}', ${!c.public_page_enabled})">${c.public_page_enabled?'Turn off public page':'Turn on public page'}</button>` : ''}
-            <button class="small" onclick="openSeriesEditor('${c.id}')">Edit series</button>
-            <button class="small" onclick="doEditCampaignDetails('${c.id}')">${c.details_text ? 'Details ✓' : 'Add details'}</button>
-            ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="doCopyPublicLink('${c.id}')">Copy public link</button>` : ''}
-            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
-            <button class="small" onclick="doBinCampaign('${c.id}','${esc(c.name).replace(/'/g,"\\'")}')">Bin</button>` : ''}
+            ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="openCampaignSettings('${c.id}')">⚙ Settings</button>
+            <button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
+            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
           </td>
         </tr>`).join('')}
       </table>
@@ -1389,6 +1395,7 @@ function wizStepHtml() {
       <div class="stat"><span>Tiers <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${tierList}</b></div>
       <div class="stat"><span>Blocks <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${blockList}</b></div>
     </div>
+    <p class="muted" style="margin:10px 0 0">Sellers get ${wiz.type !== 'digital' ? '<b>Cash</b> and <b>Machine</b> for printed tickets' : ''}${wiz.type === 'both' ? ', and ' : ''}${wiz.type !== 'physical' ? '<b>Cash, Machine and Pay by link</b> for online tickets' : ''}. You can change that any time from the campaign's ⚙ Settings.</p>
     <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard()">Create Campaign</button>
     <div id="wizCreateResult"></div>`;
 }
@@ -1422,14 +1429,123 @@ async function doCreateCampaignWizard() {
       age_restricted: wiz.isRaffle,
       public_only: wiz.audience === 'public',
       public_page_enabled: wiz.audience !== 'sellers',
+      // Sellers' payment buttons: printed tickets are paid for on the spot, so no payment link by default
+      // (changeable any time in the campaign's Settings).
+      physical_payment_methods: ['cash', 'machine'],
+      online_payment_methods: ['cash', 'machine', 'link'],
     }, 60000);
     closeCampaignWizard();
     renderCampaignsTab();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
+// ---- Campaign settings: everything about ONE campaign on one screen ----
+// Replaces a crowd of small buttons in the campaigns table. Each section saves on its own.
+let cset = null;
+const PAY_METHODS = [
+  ['cash', 'Cash', 'The Seller takes cash and logs it; you reconcile it later.'],
+  ['machine', 'Machine', 'Paid on the card machine; the Seller just logs it.'],
+  ['link', 'Pay by link', "A payment link is sent to the buyer's phone or email."],
+];
+function closeCampaignSettings() { const el = document.getElementById('settingsPanel'); if (el) el.remove(); cset = null; renderCampaignsTab(); }
+async function openCampaignSettings(id) {
+  const msgs = (cset && cset.id === id) ? cset.msgs : {};
+  cset = { id, loading: true, msgs };
+  drawCampaignSettings();
+  try {
+    const { campaigns } = await call('list_campaigns', { include_inactive: true });
+    const campaign = campaigns.find(c => c.id === id);
+    if (!campaign) throw new Error('Campaign not found');
+    cset = { id, campaign, msgs };
+  } catch (e) { cset = { id, error: e.message, msgs }; }
+  drawCampaignSettings();
+}
+// Change one thing about this campaign (a status or visibility switch), then show the result.
+async function csetDo(action, params) {
+  try { await call(action, { campaign_id: cset.id, ...params }); } catch (e) { alert(e.message); }
+  openCampaignSettings(cset.id);
+}
+function payGroupHtml(kind, title, blurb, current) {
+  return `<div class="card">
+    <b>${title}</b>
+    <div class="muted" style="margin:2px 0 4px">${blurb}</div>
+    ${PAY_METHODS.map(([k, label, desc]) => `<label style="display:flex;align-items:flex-start;gap:10px;margin:10px 0;font-weight:500"><input type="checkbox" class="pay-${kind}" value="${k}" ${current.includes(k) ? 'checked' : ''} style="width:auto;margin:4px 0 0"><span>${label}<br><span class="muted" style="font-weight:400">${desc}</span></span></label>`).join('')}
+    <button class="primary" onclick="doSavePayOptions('${kind}')">Save</button>
+    <div id="cmsg-pay-${kind}">${cset.msgs['pay-' + kind] || ''}</div>
+  </div>`;
+}
+function drawCampaignSettings() {
+  let el = document.getElementById('settingsPanel');
+  if (!cset) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'settingsPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:38;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const c = cset.campaign;
+  let body;
+  if (cset.error) body = `<div class="error">${esc(cset.error)}</div>`;
+  else if (cset.loading || !c) body = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
+  else {
+    const hasPhysical = c.blocks.some(b => b.type === 'physical'), hasOnline = c.blocks.some(b => b.type === 'digital');
+    const row = 'style="flex-wrap:wrap;gap:6px;align-items:center"';
+    body = `
+      <div class="card">
+        <b>Status &amp; visibility</b>
+        <div class="stat" ${row}><span>Status</span><span><span class="badge ${c.active ? 'ok' : 'bad'}">${c.active ? 'Active' : 'Inactive'}</span> <button class="small" onclick="csetDo('set_campaign_active',{active:${!c.active}})">${c.active ? 'Deactivate' : 'Activate'}</button></span></div>
+        <div class="stat" ${row}><span>Shown to Sellers</span><span>${c.public_only ? 'No' : 'Yes'} <button class="small" onclick="csetDo('set_campaign_visibility',{public_only:${!c.public_only}})">${c.public_only ? 'Show to Sellers' : 'Hide from Sellers'}</button></span></div>
+        ${hasOnline ? `<div class="stat" ${row}><span>Public buy page</span><span>${c.public_page_enabled ? 'On' : 'Off'} <button class="small" onclick="csetDo('set_campaign_visibility',{public_page_enabled:${!c.public_page_enabled}})">${c.public_page_enabled ? 'Turn off' : 'Turn on'}</button>${c.public_page_enabled ? ` <button class="small" onclick="doCopyPublicLink('${c.id}')">Copy link</button>` : ''}</span></div>` : ''}
+        <div class="stat" ${row}><span>Type</span><b>${c.age_restricted ? 'Raffle or lottery (18+ check)' : 'Ticket-selling event'}</b></div>
+      </div>
+      ${hasPhysical ? payGroupHtml('physical', 'Payment options — physical tickets', 'What a Seller can tap when selling printed tickets. They are usually paid for on the spot, so Pay by link is often not needed.', c.physical_payment_methods || ['cash', 'machine', 'link']) : ''}
+      ${hasOnline ? payGroupHtml('online', 'Payment options — online tickets', 'What a Seller can tap when selling online tickets. The public buy page is not affected — it always pays by link.', c.online_payment_methods || ['cash', 'machine', 'link']) : ''}
+      <div class="card">
+        <b>Series</b>
+        ${c.blocks.map(b => `<div class="muted" style="margin:6px 0">${esc(b.label)} · ${b.type === 'digital' ? 'online' : 'physical'} · ${esc(b.number_prefix || '')}${b.range_start}–${esc(b.number_prefix || '')}${b.range_end}</div>`).join('')}
+        <button class="small" onclick="openSeriesEditor('${c.id}')">Edit series</button>
+        <p class="muted" style="margin:8px 0 0">To add another series, use "Add a series to an existing campaign" further down the Campaigns tab.</p>
+      </div>
+      <div class="card">
+        <b>Details</b> <span class="muted">— ${c.age_restricted ? 'prizes, draw date, tagline' : 'what it is, timing, anything worth telling buyers'}; included in every ticket message</span>
+        <textarea id="csetDetails" rows="4" style="width:100%;margin-top:8px;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit">${esc(c.details_text || '')}</textarea>
+        <button class="primary" style="margin-top:8px" onclick="doSaveCsetDetails()">Save details</button>
+        <div id="cmsg-details">${cset.msgs.details || ''}</div>
+      </div>
+      <div class="card">
+        <b>More</b>
+        <div class="tiny-actions" style="margin-top:8px">
+          <button class="small" onclick="downloadCampaignReport('${c.id}')">Download report</button>
+          <button class="small" onclick="doBinFromSettings()">Move to Recycle Bin</button>
+        </div>
+      </div>`;
+  }
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px"><h3 style="margin:0">${c ? esc(c.name) : 'Campaign'} — settings</h3><button class="small" onclick="closeCampaignSettings()">Close</button></div>
+    ${body}
+  </div>`;
+}
+async function doSavePayOptions(kind) {
+  const vals = [...document.querySelectorAll('.pay-' + kind + ':checked')].map(i => i.value);
+  const msgEl = document.getElementById('cmsg-pay-' + kind);
+  if (!vals.length) { msgEl.innerHTML = '<div class="error">Pick at least one payment option.</div>'; return; }
+  try {
+    await call('set_payment_options', { campaign_id: cset.id, [kind]: vals });
+    cset.msgs['pay-' + kind] = `<div class="info">Saved — Sellers now see: ${esc(vals.map(v => PAY_METHODS.find(p => p[0] === v)[1]).join(', '))}.</div>`;
+  } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  openCampaignSettings(cset.id);
+}
+async function doSaveCsetDetails() {
+  const msgEl = document.getElementById('cmsg-details');
+  try {
+    await call('set_campaign_details', { campaign_id: cset.id, details_text: document.getElementById('csetDetails').value });
+    cset.msgs.details = '<div class="info">Saved.</div>';
+  } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  openCampaignSettings(cset.id);
+}
+async function doBinFromSettings() {
+  const c = cset.campaign;
+  if (!confirm(`Move "${c.name}" to the Recycle Bin? Data is kept, not deleted.`)) return;
+  try { await call('bin_campaign', { campaign_id: c.id }); closeCampaignSettings(); } catch (e) { alert(e.message); }
+}
+
 // ---- Edit series: change where a series ends (cut back or stretch) ----
 let seriesEdit = null;
-function closeSeriesEditor() { const el = document.getElementById('seriesPanel'); if (el) el.remove(); seriesEdit = null; renderCampaignsTab(); }
+function closeSeriesEditor() { const el = document.getElementById('seriesPanel'); if (el) el.remove(); seriesEdit = null; if (cset) openCampaignSettings(cset.id); else renderCampaignsTab(); }
 async function openSeriesEditor(campaignId) {
   const keepMsgs = (seriesEdit && seriesEdit.id === campaignId) ? seriesEdit.msgs : {};   // a "Done — …" note survives the refresh after saving
   seriesEdit = { id: campaignId, loading: true, msgs: keepMsgs };
