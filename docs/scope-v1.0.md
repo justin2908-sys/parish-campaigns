@@ -1078,3 +1078,17 @@ Test method: headless browser at phone sizes, page `scrollHeight` against `inner
 
 **Admin "Sell tickets" button** is now a gold, raised, full-width button with an arrow (it was a pale box that
 looked like a label). Gold rather than the dark green so it can't be mistaken for the selected tab.
+
+## 44. Starting ticket quantity per campaign — 2026-10-10 (on dev; preview only)
+
+A raffle is sold in fives, so the Sell screen can now start every sale with the ticket count already filled in.
+`campaigns.default_ticket_qty` (whole number 0–50; 0 = start empty, the old behaviour, which is what every
+existing campaign has until changed). Set in ⚙ Settings → **Sell screen** → "Tickets pre-selected for each sale".
+- Applies to the Seller Sell screen, on both the physical and the online series, and **after each sale it goes
+  back to that number** for the next one. The Seller can still change it.
+- Single price tier only. With several tiers (Adult/Child) there's no sensible "5 of which", so those start at 0
+  and Settings says so.
+- The wizard sets 5 for a campaign marked as a raffle, 0 otherwise (shown on the review step).
+- Not changed: the public buy page still starts at none, so a buyer chooses.
+Side fix: an online series now builds its ticket rows as soon as a count is present, so a count carried across a
+series switch is immediately sellable instead of showing "5" with nothing behind it.
