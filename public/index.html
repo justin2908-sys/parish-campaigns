@@ -380,6 +380,13 @@ async function doAddOrgAdmin() {
 
 // ================= SELLER =================
 let sellCounts = {}, selectedBlockId = null, startNumValue = '', buyerNameValue = '', ticketNumbers = [];
+// What each ticket count starts at for a new sale: zero, except that an Admin can set a campaign to start at
+// e.g. 5 (a raffle sold in fives). Only for a single price tier — with Adult/Child there's no sensible "5 of".
+function freshCounts(camp) {
+  const counts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+  if (camp.tiers.length === 1 && camp.default_ticket_qty > 0) counts[camp.tiers[0].id] = camp.default_ticket_qty;
+  return counts;
+}
 let pendingUndo = null, shareMenuOpenFor = null, tickHandle = null, linkPollHandle = null, activity = [];
 let contactValue = '';
 
@@ -422,7 +429,7 @@ function drawSeller(screen) {
   const camp = currentCampaign();
   const stats = screen.stats;
   if (ticketNumbers.__campaignId !== camp.id) {
-    sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+    sellCounts = freshCounts(camp);
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
     selectedBlockId = camp.blocks[0] ? camp.blocks[0].id : null;
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
@@ -484,6 +491,9 @@ function drawSeller(screen) {
     <div id="feed"></div>
   `;
   renderStats(); renderTicketRows(); updateTotal(); renderFeed();
+  // A starting quantity (or a count kept across a series switch) needs its ticket rows built right away,
+  // otherwise an online sale would show "5" but have nothing to sell until the count was touched.
+  if (!ticketNumbers.length && Object.values(sellCounts).some(v => v > 0)) regenerateTicketNumbers();
 }
 
 // ---- Compact Sell screen helpers ----
@@ -934,7 +944,7 @@ async function submitSale(method) {
     }
     activity.unshift(entry);
 
-    sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+    sellCounts = freshCounts(camp);   // back to the campaign's starting quantity for the next sale
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
     saleInFlight = false;
@@ -1441,7 +1451,7 @@ function wizStepHtml() {
       <div class="stat"><span>Tiers <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${tierList}</b></div>
       <div class="stat"><span>Blocks <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${blockList}</b></div>
     </div>
-    <p class="muted" style="margin:10px 0 0">Sellers get ${wiz.type !== 'digital' ? '<b>Cash</b> and <b>Machine</b> for printed tickets' : ''}${wiz.type === 'both' ? ', and ' : ''}${wiz.type !== 'physical' ? '<b>Cash, Machine and Pay by link</b> for online tickets' : ''}. You can change that any time from the campaign's ⚙ Settings.</p>
+    <p class="muted" style="margin:10px 0 0">Sellers get ${wiz.type !== 'digital' ? '<b>Cash</b> and <b>Machine</b> for printed tickets' : ''}${wiz.type === 'both' ? ', and ' : ''}${wiz.type !== 'physical' ? '<b>Cash, Machine and Pay by link</b> for online tickets' : ''}.${wiz.isRaffle && draftTiers.filter(t => t.name.trim() && t.price !== '').length === 1 ? ' Each sale starts at <b>5 tickets</b> on the Sell screen.' : ''} You can change that any time from the campaign's ⚙ Settings.</p>
     <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard()">Create Campaign</button>
     <div id="wizCreateResult"></div>`;
 }
@@ -1479,6 +1489,8 @@ async function doCreateCampaignWizard() {
       // (changeable any time in the campaign's Settings).
       physical_payment_methods: ['cash', 'machine'],
       online_payment_methods: ['cash', 'machine', 'link'],
+      // A raffle is sold in fives: the Sell screen starts each sale at 5 (single price tier only; change in Settings).
+      default_ticket_qty: wiz.isRaffle ? 5 : 0,
     }, 60000);
     closeCampaignWizard();
     renderCampaignsTab();
@@ -1541,6 +1553,16 @@ function drawCampaignSettings() {
       ${hasPhysical ? payGroupHtml('physical', 'Payment options — physical tickets', 'What a Seller can tap when selling printed tickets. They are usually paid for on the spot, so Pay by link is often not needed.', c.physical_payment_methods || ['cash', 'machine', 'link']) : ''}
       ${hasOnline ? payGroupHtml('online', 'Payment options — online tickets', 'What a Seller can tap when selling online tickets. The public buy page is not affected — it always pays by link.', c.online_payment_methods || ['cash', 'machine', 'link']) : ''}
       <div class="card">
+        <b>Sell screen</b>
+        <div class="muted" style="margin:2px 0 6px">How many tickets are already filled in at the start of every sale. A Seller can still change it; 0 starts empty.</div>
+        ${c.tiers.length === 1 ? `
+          <label>Tickets pre-selected for each sale</label>
+          <input id="csetQty" type="number" min="0" max="50" inputmode="numeric" value="${c.default_ticket_qty || 0}">
+          <button class="primary" style="margin-top:8px" onclick="doSaveDefaultQty()">Save</button>
+          <div id="cmsg-qty">${cset.msgs.qty || ''}</div>`
+        : `<div class="muted">This only applies to a campaign with a single price tier. This one has ${c.tiers.length}, so Sellers start at 0.</div>`}
+      </div>
+      <div class="card">
         <b>Series</b>
         ${c.blocks.map(b => `<div class="muted" style="margin:6px 0">${esc(b.label)} · ${b.type === 'digital' ? 'online' : 'physical'} · ${esc(b.number_prefix || '')}${b.range_start}–${esc(b.number_prefix || '')}${b.range_end}</div>`).join('')}
         <button class="small" onclick="openSeriesEditor('${c.id}')">Edit series</button>
@@ -1572,6 +1594,16 @@ async function doSavePayOptions(kind) {
   try {
     await call('set_payment_options', { campaign_id: cset.id, [kind]: vals });
     cset.msgs['pay-' + kind] = `<div class="info">Saved — Sellers now see: ${esc(vals.map(v => PAY_METHODS.find(p => p[0] === v)[1]).join(', '))}.</div>`;
+  } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  openCampaignSettings(cset.id);
+}
+async function doSaveDefaultQty() {
+  const msgEl = document.getElementById('cmsg-qty');
+  const raw = document.getElementById('csetQty').value, n = Number(raw);
+  if (raw === '' || !Number.isInteger(n) || n < 0 || n > 50) { msgEl.innerHTML = '<div class="error">Pick a whole number from 0 to 50 (0 = start empty).</div>'; return; }
+  try {
+    await call('set_default_ticket_qty', { campaign_id: cset.id, quantity: n });
+    cset.msgs.qty = `<div class="info">Saved — ${n ? `each sale now starts at ${n} ticket${n === 1 ? '' : 's'}` : 'each sale now starts empty'}.</div>`;
   } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   openCampaignSettings(cset.id);
 }
