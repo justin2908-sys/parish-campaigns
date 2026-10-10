@@ -1044,3 +1044,22 @@ or reserved and the highest number among them, with a "Last number" box.
   by another series in the campaign (same rule as adding a series).
 - Public page, shuffle and number checks follow automatically (they read the tickets themselves).
 Not changed here: the first number and the display prefix — changing those would alter tickets already issued.
+
+## 42. Payment options per campaign, and a Settings screen per campaign — 2026-10-10 (on dev; preview only)
+
+**Why:** Sellers report Pay by link is almost never used for physical tickets (people pay on the spot, cash or
+machine); it does make sense for online tickets.
+
+**Payment options.** Each campaign has two lists — which of Cash / Machine / Pay by link a Seller gets for its
+PHYSICAL tickets, and which for its ONLINE tickets (`physical_payment_methods`, `online_payment_methods`).
+Sell screen shows only the enabled buttons for the series being sold from (switching Physical ↔ Online redraws
+them). Enforced on the server too (a hidden button is not the control): a sale by a method that isn't switched
+on is refused, saying what to use instead. At least one must stay on. Not affected: the public buy page (always
+pays by link), links already issued (they still work and can be re-sent). Existing campaigns keep all three until
+an Admin changes them; the wizard defaults new campaigns to Cash + Machine for physical and all three for online.
+
+**Settings screen.** Campaigns tab → ⚙ Settings opens one screen per campaign instead of a row of small
+buttons: Status & visibility (active, shown to Sellers, public page + copy link), Payment options (physical /
+online, each saved separately), Series (+ Edit series), Details (edit in place), and More (report, recycle bin).
+The table keeps only Settings, Activate/Deactivate and Report. "Add a series to an existing campaign" is still
+its own card further down the Campaigns tab. Not yet in Settings (future): rename, raffle/event type, tiers.
