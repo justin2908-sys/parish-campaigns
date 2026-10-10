@@ -100,8 +100,29 @@
     .namecontact { margin-top:8px; } .namecontact input { padding:10px 11px; } .totalline { margin-top:6px; } .totalline b { font-size:27px; }
     .pay3 button { padding:13px 4px; } .feedbar { padding:9px 12px; margin-bottom:6px; } .chips { margin-top:6px; }
   }
-  @media (max-height:600px) { header h1.brand .wm { display:none; } .saletitle { font-size:17px; } .totalline b { font-size:24px; } .pay3 button { padding:11px 4px; font-size:16.5px; } }
+  @media (max-height:600px) {
+    header { padding:5px 12px; } header h1.brand .eb { display:none; } header h1.brand .wm { display:block; font-size:18px; margin:0; } header button { padding:7px 11px; }
+    .saletitle { font-size:17px; } .totalline b { font-size:24px; } .pay3 button { padding:11px 4px; font-size:16.5px; }
+    #app.sell { padding:6px 10px 6px; } .sell .card { padding:8px; margin-bottom:6px; } .statsbar { padding:6px 12px; margin-bottom:6px; }
+    .selrow select { padding:8px 10px; } .stepper button, .stepper input { height:40px; } .qty-row { margin-top:5px; }
+    .sell input.compact { margin-top:6px; padding:8px 12px; } .namecontact { margin-top:6px; } .namecontact input { padding:8px 10px; }
+    .totalline { margin-top:4px; } .feedbar { padding:7px 12px; margin-bottom:4px; } .chips { margin-top:4px; }
+    .sell .error { padding:8px 10px; margin:6px 0 0; font-size:14px; }
+  }
   .sheet .share-link { padding:16px 4px; font-size:16.5px; }
+  /* Anything that can grow long on the Sell screen (recent sales, the ticket-number editor) opens as a
+     sheet over the bottom with its own scrolling, and the stats detail floats over the form — so the
+     page itself never has to scroll. */
+  .sheetbig { max-height:72vh; max-height:72dvh; display:flex; flex-direction:column; }
+  .sheethead { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; flex:none; }
+  .sheetscroll { overflow-y:auto; -webkit-overflow-scrolling:touch; min-height:0; }
+  .sheetscroll .card { margin-bottom:8px; }
+  #statsWrap { position:relative; }
+  .statsdrop { position:absolute; left:0; right:0; z-index:15; box-shadow:0 12px 30px rgba(0,0,0,.22); }
+  /* Admin screen: the way back to selling — has to look like the button it is. */
+  .sellbtn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; margin:0 0 14px; padding:16px; font-size:19px; font-weight:700; letter-spacing:.01em; color:var(--ink); border:none; border-radius:14px; background:linear-gradient(180deg,#DDBA66,#B8913A); box-shadow:0 4px 0 #8B6A22; }
+  .sellbtn:active { transform:translateY(2px); box-shadow:0 2px 0 #8B6A22; }
+  .sellbtn .go { font-size:22px; opacity:.85; }
 </style>
 </head>
 <body>
@@ -173,7 +194,7 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;',
 // they switch between their Admin dashboard and the same Sell screen a Seller uses.
 let viewMode = 'sell'; // Sell is everyone's landing page; admins reach the Admin area via a button there
 function render() {
-  const staleSheet = document.getElementById('sheet'); if (staleSheet) staleSheet.remove();
+  for (const id of ['sheet', 'feedSheet', 'numbersSheet']) { const stale = document.getElementById(id); if (stale) stale.remove(); }
   closeLinksPanel();
   document.getElementById('app').className = '';
   if (!state.session) { renderLogin(); return; }
@@ -359,6 +380,13 @@ async function doAddOrgAdmin() {
 
 // ================= SELLER =================
 let sellCounts = {}, selectedBlockId = null, startNumValue = '', buyerNameValue = '', ticketNumbers = [];
+// What each ticket count starts at for a new sale: zero, except that an Admin can set a campaign to start at
+// e.g. 5 (a raffle sold in fives). Only for a single price tier — with Adult/Child there's no sensible "5 of".
+function freshCounts(camp) {
+  const counts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+  if (camp.tiers.length === 1 && camp.default_ticket_qty > 0) counts[camp.tiers[0].id] = camp.default_ticket_qty;
+  return counts;
+}
 let pendingUndo = null, shareMenuOpenFor = null, tickHandle = null, linkPollHandle = null, activity = [];
 let contactValue = '';
 
@@ -401,7 +429,7 @@ function drawSeller(screen) {
   const camp = currentCampaign();
   const stats = screen.stats;
   if (ticketNumbers.__campaignId !== camp.id) {
-    sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+    sellCounts = freshCounts(camp);
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
     selectedBlockId = camp.blocks[0] ? camp.blocks[0].id : null;
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
@@ -463,6 +491,9 @@ function drawSeller(screen) {
     <div id="feed"></div>
   `;
   renderStats(); renderTicketRows(); updateTotal(); renderFeed();
+  // A starting quantity (or a count kept across a series switch) needs its ticket rows built right away,
+  // otherwise an online sale would show "5" but have nothing to sell until the count was touched.
+  if (!ticketNumbers.length && Object.values(sellCounts).some(v => v > 0)) regenerateTicketNumbers();
 }
 
 // ---- Compact Sell screen helpers ----
@@ -484,7 +515,7 @@ function renderStats() {
   el.innerHTML = `<button type="button" class="statsbar" onclick="toggleStats()">
       <span class="statsline"><b>${s.ticketsSoldCount}</b> sold · <b>${pounds(s.cashCollected)}</b> cash · <b>${pounds(s.cardTotal)}</b> card${s.linkPending > 0 ? ` · ⏳ ${pounds(s.linkPending)}` : ''}</span>
       <span>${statsOpen ? '▴' : '▾'}</span></button>
-    ${statsOpen ? `<div class="card">
+    ${statsOpen ? `<div class="card statsdrop">
       <div class="stat"><span>Tickets sold by you</span><b>${s.ticketsSoldCount}</b></div>
       <div class="stat"><span>Cash collected</span><b>£${s.cashCollected.toFixed(2)}</b></div>
       <div class="stat"><span>· Reconciled</span><b>£${s.cashReconciled.toFixed(2)}</b></div>
@@ -698,7 +729,8 @@ function renderTicketRows(keepStatus) {
       </div>
       <div id="tnStatus-${i}" style="font-size:12px;margin:-4px 0 8px 4px;color:var(--slate)"></div>`;
   }).join('') : '';
-  wrap.innerHTML = `${startHint ? `<div class="muted" style="margin-top:8px">${esc(startHint)}</div>` : ''}<div class="chips" id="ticketChips"></div><div id="ticketErr"></div>${numbersOpen ? `<div class="muted" id="cascadeHint" style="font-size:12px;margin:-4px 0 8px 2px"></div>` : ''}${rows}`;
+  wrap.innerHTML = `${startHint ? `<div class="muted" style="margin-top:8px">${esc(startHint)}</div>` : ''}<div class="chips" id="ticketChips"></div><div id="ticketErr"></div>`;
+  drawNumbersSheet(rows);
   if (keepStatus) {
     ticketNumbers.forEach((_, i) => {
       const st = ticketStatus[i], el = document.getElementById(`tnStatus-${i}`);
@@ -709,6 +741,19 @@ function renderTicketRows(keepStatus) {
     renderChips();
     checkAllTickets();
   }
+}
+
+// The per-ticket number editor opens as a sheet over the bottom of the screen with its own scrolling
+// (ten tickets is ten rows — inline, that would push the whole page into a scroll).
+function drawNumbersSheet(rowsHtml) {
+  let el = document.getElementById('numbersSheet');
+  if (!numbersOpen || !ticketNumbers.length) { if (el) el.remove(); return; }
+  const keep = el ? (el.querySelector('.sheetscroll') || {}).scrollTop || 0 : 0;
+  if (!el) { el = document.createElement('div'); el.id = 'numbersSheet'; el.className = 'sheet sheetbig'; el.style.zIndex = '19'; document.body.appendChild(el); }
+  el.innerHTML = `<div class="sheethead"><b>Edit ticket numbers</b><button type="button" class="small" onclick="toggleNumbers()">Done</button></div>
+    <div class="muted" id="cascadeHint" style="font-size:12.5px;margin:0 0 8px">${ticketNumbers.length > 1 ? 'Change a number and the ones below it follow on from it — handy for two separate books of tickets.' : ''}</div>
+    <div class="sheetscroll">${rowsHtml}</div>`;
+  const sc = el.querySelector('.sheetscroll'); if (sc) sc.scrollTop = keep;
 }
 
 // One request for the whole run of numbers (not one per ticket). Only numbers that already have
@@ -807,16 +852,26 @@ function paymentButtonsHtml() {
   const remaining = a ? a.remaining : 0;
   const cashPending = scoped && pendingUndo.method === 'cash';
   const machinePending = scoped && pendingUndo.method === 'machine';
-  const busy = saleInFlight; // a sale is being recorded right now — lock all three so nothing double-fires
+  const busy = saleInFlight; // a sale is being recorded right now — lock all of them so nothing double-fires
+  const allowed = allowedPayMethods(camp);
   const linkBtn = `<button style="background:var(--tier-c)" title="Pay by Link — a payment link is sent to the buyer" ${scoped || busy ? 'disabled' : ''} onclick="submitSale('link')">Link</button>`;
-  return `
+  const cashBtn = `
     <button style="${cashPending?'background:var(--ink)':'background:var(--good)'}" title="Cash taken" ${(scoped && !cashPending) || busy ? 'disabled' : ''} onclick="${cashPending?`doUndo(${pendingUndo.activityId})`:`submitSale('cash')`}">
       ${cashPending ? `Undo (${remaining}s)` : 'Cash'}
-    </button>
+    </button>`;
+  const machineBtn = `
     <button style="${machinePending?'background:var(--ink)':'background:var(--slate)'}" title="Pay at Machine — paid on the card machine, you're logging it" ${(scoped && !machinePending) || busy ? 'disabled' : ''} onclick="${machinePending?`doUndo(${pendingUndo.activityId})`:`submitSale('machine')`}">
       ${machinePending ? `Undo (${remaining}s)` : 'Machine'}
-    </button>
-    ${linkBtn}`;
+    </button>`;
+  // Only the buttons the Admin has switched on for this kind of ticket (physical or online).
+  return (allowed.includes('cash') ? cashBtn : '') + (allowed.includes('machine') ? machineBtn : '') + (allowed.includes('link') ? linkBtn : '');
+}
+// Which payment buttons the Admin allows for the series being sold from right now (set per campaign,
+// separately for physical and online tickets). Falls back to all three if nothing is configured.
+function allowedPayMethods(camp) {
+  const block = camp && camp.blocks.find(b => b.id === selectedBlockId);
+  const list = camp && (block && block.type === 'digital' ? camp.online_payment_methods : camp.physical_payment_methods);
+  return Array.isArray(list) && list.length ? list : ['cash', 'machine', 'link'];
 }
 function updatePaymentButtons() { const el = document.getElementById('paymentButtons'); if (el) el.innerHTML = paymentButtonsHtml(); }
 
@@ -829,6 +884,7 @@ async function submitSale(method) {
   const block = camp.blocks.find(b => b.id === selectedBlockId);
   const autoMode = block && block.type === 'digital';
   const errEl = document.getElementById('submitError');
+  if (!allowedPayMethods(camp).includes(method)) { errEl.innerHTML = `<div class="error">That payment option isn't switched on for this campaign.</div>`; return; }
   if (!ticketNumbers.length) { errEl.innerHTML = `<div class="error">Enter at least one ticket count first.</div>`; return; }
   if (!autoMode) {
     const need = minDigits(block);
@@ -888,7 +944,7 @@ async function submitSale(method) {
     }
     activity.unshift(entry);
 
-    sellCounts = Object.fromEntries(camp.tiers.map(t => [t.id, 0]));
+    sellCounts = freshCounts(camp);   // back to the campaign's starting quantity for the next sale
     startNumValue = ''; buyerNameValue = ''; contactValue = '';
     ticketNumbers = []; ticketNumbers.__campaignId = camp.id;
     saleInFlight = false;
@@ -950,14 +1006,25 @@ function renderFeed() {
   const el = document.getElementById('feed'); if (!el) return;
   const camp = currentCampaign();
   const mine = activity.filter(a => a.campaignId === camp.id);
-  if (!mine.length) { el.innerHTML = ''; renderSheet(); return; }
+  if (!mine.length) { el.innerHTML = ''; drawFeedSheet(null); renderSheet(); return; }
   const awaiting = mine.filter(a => a.method === 'link' && a.status === 'linkpending').length;
   const expired = mine.filter(a => a.method === 'link' && a.status === 'linkfailed').length;
   const bits = [`${mine.length} sale${mine.length === 1 ? '' : 's'} this session`];
   if (awaiting) bits.push(`⏳ ${awaiting} awaiting payment`);
   if (expired) bits.push(`⚠ ${expired} link expired`);
-  el.innerHTML = `<button type="button" class="feedbar ${expired ? 'attn' : ''}" onclick="toggleFeed()"><span>${bits.join(' · ')}</span><span>${feedOpen ? '▴' : '▾'}</span></button>${feedOpen ? feedCardsHtml(mine) : ''}`;
+  el.innerHTML = `<button type="button" class="feedbar ${expired ? 'attn' : ''}" onclick="toggleFeed()"><span>${bits.join(' · ')}</span><span>${feedOpen ? '▴' : '▾'}</span></button>`;
+  drawFeedSheet(feedOpen ? mine : null);
   renderSheet();
+}
+// The list of recent sales opens as a sheet over the bottom of the screen with its own scrolling —
+// never inline, where it would push the sale form up and make the whole page scroll.
+function drawFeedSheet(mine) {
+  let el = document.getElementById('feedSheet');
+  if (!mine) { if (el) el.remove(); return; }
+  const keep = el ? (el.querySelector('.sheetscroll') || {}).scrollTop || 0 : 0;   // stay where you were scrolled to
+  if (!el) { el = document.createElement('div'); el.id = 'feedSheet'; el.className = 'sheet sheetbig'; el.style.zIndex = '18'; document.body.appendChild(el); }
+  el.innerHTML = `<div class="sheethead"><b>Recent sales</b><button type="button" class="small" onclick="toggleFeed()">Close</button></div><div class="sheetscroll">${feedCardsHtml(mine)}</div>`;
+  const sc = el.querySelector('.sheetscroll'); if (sc) sc.scrollTop = keep;
 }
 
 // After a Pay-by-Link sale the send buttons pop up over the form, so the seller can send the
@@ -1095,7 +1162,7 @@ function shareMenuHtml(a) {
 let adminTab = 'campaigns', campaignFilter = '';
 async function renderAdmin() {
   document.getElementById('app').innerHTML = h`
-    <button class="secondary" style="margin-bottom:14px" onclick="viewMode='sell'; render();">🎟️ Sell tickets</button>
+    <button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>
     <div id="retentionBanner"></div>
     <div class="tabs">
       <button class="${adminTab==='campaigns'?'active':''}" data-tab="campaigns" onclick="setAdminTab('campaigns')">Campaigns</button>
@@ -1186,14 +1253,9 @@ async function renderCampaignsTab() {
           <td>${esc(blockSummary(c))}</td>
           <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span>${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
-            ${state.user.role==='superadmin' ? `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
-            <button class="small" onclick="toggleCampaignVisibility('${c.id}', ${!c.public_only})" title="${c.public_only ? 'Sellers currently cannot see this campaign' : 'Sellers can currently see this campaign'}">${c.public_only?'Show to Sellers':'Hide from Sellers'}</button>
-            ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="toggleCampaignPublicPage('${c.id}', ${!c.public_page_enabled})">${c.public_page_enabled?'Turn off public page':'Turn on public page'}</button>` : ''}
-            <button class="small" onclick="openSeriesEditor('${c.id}')">Edit series</button>
-            <button class="small" onclick="doEditCampaignDetails('${c.id}')">${c.details_text ? 'Details ✓' : 'Add details'}</button>
-            ${c.blocks.some(b=>b.type==='digital') ? `<button class="small" onclick="doCopyPublicLink('${c.id}')">Copy public link</button>` : ''}
-            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>
-            <button class="small" onclick="doBinCampaign('${c.id}','${esc(c.name).replace(/'/g,"\\'")}')">Bin</button>` : ''}
+            ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="openCampaignSettings('${c.id}')">⚙ Settings</button>
+            <button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
+            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
           </td>
         </tr>`).join('')}
       </table>
@@ -1389,6 +1451,7 @@ function wizStepHtml() {
       <div class="stat"><span>Tiers <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${tierList}</b></div>
       <div class="stat"><span>Blocks <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${blockList}</b></div>
     </div>
+    <p class="muted" style="margin:10px 0 0">Sellers get ${wiz.type !== 'digital' ? '<b>Cash</b> and <b>Machine</b> for printed tickets' : ''}${wiz.type === 'both' ? ', and ' : ''}${wiz.type !== 'physical' ? '<b>Cash, Machine and Pay by link</b> for online tickets' : ''}.${wiz.isRaffle && draftTiers.filter(t => t.name.trim() && t.price !== '').length === 1 ? ' Each sale starts at <b>5 tickets</b> on the Sell screen.' : ''} You can change that any time from the campaign's ⚙ Settings.</p>
     <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard()">Create Campaign</button>
     <div id="wizCreateResult"></div>`;
 }
@@ -1422,14 +1485,145 @@ async function doCreateCampaignWizard() {
       age_restricted: wiz.isRaffle,
       public_only: wiz.audience === 'public',
       public_page_enabled: wiz.audience !== 'sellers',
+      // Sellers' payment buttons: printed tickets are paid for on the spot, so no payment link by default
+      // (changeable any time in the campaign's Settings).
+      physical_payment_methods: ['cash', 'machine'],
+      online_payment_methods: ['cash', 'machine', 'link'],
+      // A raffle is sold in fives: the Sell screen starts each sale at 5 (single price tier only; change in Settings).
+      default_ticket_qty: wiz.isRaffle ? 5 : 0,
     }, 60000);
     closeCampaignWizard();
     renderCampaignsTab();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
+// ---- Campaign settings: everything about ONE campaign on one screen ----
+// Replaces a crowd of small buttons in the campaigns table. Each section saves on its own.
+let cset = null;
+const PAY_METHODS = [
+  ['cash', 'Cash', 'The Seller takes cash and logs it; you reconcile it later.'],
+  ['machine', 'Machine', 'Paid on the card machine; the Seller just logs it.'],
+  ['link', 'Pay by link', "A payment link is sent to the buyer's phone or email."],
+];
+function closeCampaignSettings() { const el = document.getElementById('settingsPanel'); if (el) el.remove(); cset = null; renderCampaignsTab(); }
+async function openCampaignSettings(id) {
+  const msgs = (cset && cset.id === id) ? cset.msgs : {};
+  cset = { id, loading: true, msgs };
+  drawCampaignSettings();
+  try {
+    const { campaigns } = await call('list_campaigns', { include_inactive: true });
+    const campaign = campaigns.find(c => c.id === id);
+    if (!campaign) throw new Error('Campaign not found');
+    cset = { id, campaign, msgs };
+  } catch (e) { cset = { id, error: e.message, msgs }; }
+  drawCampaignSettings();
+}
+// Change one thing about this campaign (a status or visibility switch), then show the result.
+async function csetDo(action, params) {
+  try { await call(action, { campaign_id: cset.id, ...params }); } catch (e) { alert(e.message); }
+  openCampaignSettings(cset.id);
+}
+function payGroupHtml(kind, title, blurb, current) {
+  return `<div class="card">
+    <b>${title}</b>
+    <div class="muted" style="margin:2px 0 4px">${blurb}</div>
+    ${PAY_METHODS.map(([k, label, desc]) => `<label style="display:flex;align-items:flex-start;gap:10px;margin:10px 0;font-weight:500"><input type="checkbox" class="pay-${kind}" value="${k}" ${current.includes(k) ? 'checked' : ''} style="width:auto;margin:4px 0 0"><span>${label}<br><span class="muted" style="font-weight:400">${desc}</span></span></label>`).join('')}
+    <button class="primary" onclick="doSavePayOptions('${kind}')">Save</button>
+    <div id="cmsg-pay-${kind}">${cset.msgs['pay-' + kind] || ''}</div>
+  </div>`;
+}
+function drawCampaignSettings() {
+  let el = document.getElementById('settingsPanel');
+  if (!cset) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'settingsPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:38;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const c = cset.campaign;
+  let body;
+  if (cset.error) body = `<div class="error">${esc(cset.error)}</div>`;
+  else if (cset.loading || !c) body = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
+  else {
+    const hasPhysical = c.blocks.some(b => b.type === 'physical'), hasOnline = c.blocks.some(b => b.type === 'digital');
+    const row = 'style="flex-wrap:wrap;gap:6px;align-items:center"';
+    body = `
+      <div class="card">
+        <b>Status &amp; visibility</b>
+        <div class="stat" ${row}><span>Status</span><span><span class="badge ${c.active ? 'ok' : 'bad'}">${c.active ? 'Active' : 'Inactive'}</span> <button class="small" onclick="csetDo('set_campaign_active',{active:${!c.active}})">${c.active ? 'Deactivate' : 'Activate'}</button></span></div>
+        <div class="stat" ${row}><span>Shown to Sellers</span><span>${c.public_only ? 'No' : 'Yes'} <button class="small" onclick="csetDo('set_campaign_visibility',{public_only:${!c.public_only}})">${c.public_only ? 'Show to Sellers' : 'Hide from Sellers'}</button></span></div>
+        ${hasOnline ? `<div class="stat" ${row}><span>Public buy page</span><span>${c.public_page_enabled ? 'On' : 'Off'} <button class="small" onclick="csetDo('set_campaign_visibility',{public_page_enabled:${!c.public_page_enabled}})">${c.public_page_enabled ? 'Turn off' : 'Turn on'}</button>${c.public_page_enabled ? ` <button class="small" onclick="doCopyPublicLink('${c.id}')">Copy link</button>` : ''}</span></div>` : ''}
+        <div class="stat" ${row}><span>Type</span><b>${c.age_restricted ? 'Raffle or lottery (18+ check)' : 'Ticket-selling event'}</b></div>
+      </div>
+      ${hasPhysical ? payGroupHtml('physical', 'Payment options — physical tickets', 'What a Seller can tap when selling printed tickets. They are usually paid for on the spot, so Pay by link is often not needed.', c.physical_payment_methods || ['cash', 'machine', 'link']) : ''}
+      ${hasOnline ? payGroupHtml('online', 'Payment options — online tickets', 'What a Seller can tap when selling online tickets. The public buy page is not affected — it always pays by link.', c.online_payment_methods || ['cash', 'machine', 'link']) : ''}
+      <div class="card">
+        <b>Sell screen</b>
+        <div class="muted" style="margin:2px 0 6px">How many tickets are already filled in at the start of every sale. A Seller can still change it; 0 starts empty.</div>
+        ${c.tiers.length === 1 ? `
+          <label>Tickets pre-selected for each sale</label>
+          <input id="csetQty" type="number" min="0" max="50" inputmode="numeric" value="${c.default_ticket_qty || 0}">
+          <button class="primary" style="margin-top:8px" onclick="doSaveDefaultQty()">Save</button>
+          <div id="cmsg-qty">${cset.msgs.qty || ''}</div>`
+        : `<div class="muted">This only applies to a campaign with a single price tier. This one has ${c.tiers.length}, so Sellers start at 0.</div>`}
+      </div>
+      <div class="card">
+        <b>Series</b>
+        ${c.blocks.map(b => `<div class="muted" style="margin:6px 0">${esc(b.label)} · ${b.type === 'digital' ? 'online' : 'physical'} · ${esc(b.number_prefix || '')}${b.range_start}–${esc(b.number_prefix || '')}${b.range_end}</div>`).join('')}
+        <button class="small" onclick="openSeriesEditor('${c.id}')">Edit series</button>
+        <p class="muted" style="margin:8px 0 0">To add another series, use "Add a series to an existing campaign" further down the Campaigns tab.</p>
+      </div>
+      <div class="card">
+        <b>Details</b> <span class="muted">— ${c.age_restricted ? 'prizes, draw date, tagline' : 'what it is, timing, anything worth telling buyers'}; included in every ticket message</span>
+        <textarea id="csetDetails" rows="4" style="width:100%;margin-top:8px;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit">${esc(c.details_text || '')}</textarea>
+        <button class="primary" style="margin-top:8px" onclick="doSaveCsetDetails()">Save details</button>
+        <div id="cmsg-details">${cset.msgs.details || ''}</div>
+      </div>
+      <div class="card">
+        <b>More</b>
+        <div class="tiny-actions" style="margin-top:8px">
+          <button class="small" onclick="downloadCampaignReport('${c.id}')">Download report</button>
+          <button class="small" onclick="doBinFromSettings()">Move to Recycle Bin</button>
+        </div>
+      </div>`;
+  }
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px"><h3 style="margin:0">${c ? esc(c.name) : 'Campaign'} — settings</h3><button class="small" onclick="closeCampaignSettings()">Close</button></div>
+    ${body}
+  </div>`;
+}
+async function doSavePayOptions(kind) {
+  const vals = [...document.querySelectorAll('.pay-' + kind + ':checked')].map(i => i.value);
+  const msgEl = document.getElementById('cmsg-pay-' + kind);
+  if (!vals.length) { msgEl.innerHTML = '<div class="error">Pick at least one payment option.</div>'; return; }
+  try {
+    await call('set_payment_options', { campaign_id: cset.id, [kind]: vals });
+    cset.msgs['pay-' + kind] = `<div class="info">Saved — Sellers now see: ${esc(vals.map(v => PAY_METHODS.find(p => p[0] === v)[1]).join(', '))}.</div>`;
+  } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  openCampaignSettings(cset.id);
+}
+async function doSaveDefaultQty() {
+  const msgEl = document.getElementById('cmsg-qty');
+  const raw = document.getElementById('csetQty').value, n = Number(raw);
+  if (raw === '' || !Number.isInteger(n) || n < 0 || n > 50) { msgEl.innerHTML = '<div class="error">Pick a whole number from 0 to 50 (0 = start empty).</div>'; return; }
+  try {
+    await call('set_default_ticket_qty', { campaign_id: cset.id, quantity: n });
+    cset.msgs.qty = `<div class="info">Saved — ${n ? `each sale now starts at ${n} ticket${n === 1 ? '' : 's'}` : 'each sale now starts empty'}.</div>`;
+  } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  openCampaignSettings(cset.id);
+}
+async function doSaveCsetDetails() {
+  const msgEl = document.getElementById('cmsg-details');
+  try {
+    await call('set_campaign_details', { campaign_id: cset.id, details_text: document.getElementById('csetDetails').value });
+    cset.msgs.details = '<div class="info">Saved.</div>';
+  } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  openCampaignSettings(cset.id);
+}
+async function doBinFromSettings() {
+  const c = cset.campaign;
+  if (!confirm(`Move "${c.name}" to the Recycle Bin? Data is kept, not deleted.`)) return;
+  try { await call('bin_campaign', { campaign_id: c.id }); closeCampaignSettings(); } catch (e) { alert(e.message); }
+}
+
 // ---- Edit series: change where a series ends (cut back or stretch) ----
 let seriesEdit = null;
-function closeSeriesEditor() { const el = document.getElementById('seriesPanel'); if (el) el.remove(); seriesEdit = null; renderCampaignsTab(); }
+function closeSeriesEditor() { const el = document.getElementById('seriesPanel'); if (el) el.remove(); seriesEdit = null; if (cset) openCampaignSettings(cset.id); else renderCampaignsTab(); }
 async function openSeriesEditor(campaignId) {
   const keepMsgs = (seriesEdit && seriesEdit.id === campaignId) ? seriesEdit.msgs : {};   // a "Done — …" note survives the refresh after saving
   seriesEdit = { id: campaignId, loading: true, msgs: keepMsgs };

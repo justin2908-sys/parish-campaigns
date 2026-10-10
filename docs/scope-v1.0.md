@@ -1044,3 +1044,51 @@ or reserved and the highest number among them, with a "Last number" box.
   by another series in the campaign (same rule as adding a series).
 - Public page, shuffle and number checks follow automatically (they read the tickets themselves).
 Not changed here: the first number and the display prefix — changing those would alter tickets already issued.
+
+## 42. Payment options per campaign, and a Settings screen per campaign — 2026-10-10 (on dev; preview only)
+
+**Why:** Sellers report Pay by link is almost never used for physical tickets (people pay on the spot, cash or
+machine); it does make sense for online tickets.
+
+**Payment options.** Each campaign has two lists — which of Cash / Machine / Pay by link a Seller gets for its
+PHYSICAL tickets, and which for its ONLINE tickets (`physical_payment_methods`, `online_payment_methods`).
+Sell screen shows only the enabled buttons for the series being sold from (switching Physical ↔ Online redraws
+them). Enforced on the server too (a hidden button is not the control): a sale by a method that isn't switched
+on is refused, saying what to use instead. At least one must stay on. Not affected: the public buy page (always
+pays by link), links already issued (they still work and can be re-sent). Existing campaigns keep all three until
+an Admin changes them; the wizard defaults new campaigns to Cash + Machine for physical and all three for online.
+
+**Settings screen.** Campaigns tab → ⚙ Settings opens one screen per campaign instead of a row of small
+buttons: Status & visibility (active, shown to Sellers, public page + copy link), Payment options (physical /
+online, each saved separately), Series (+ Edit series), Details (edit in place), and More (report, recycle bin).
+The table keeps only Settings, Activate/Deactivate and Report. "Add a series to an existing campaign" is still
+its own card further down the Campaigns tab. Not yet in Settings (future): rename, raffle/event type, tiers.
+
+## 43. Sell screen never scrolls; a proper "Sell tickets" button in Admin — 2026-10-10 (on dev; preview only)
+
+**No-scroll Sell screen.** The sale form itself already fit a phone screen; the page only scrolled when something
+long opened *inline* underneath it. Those now open over the form instead, with their own scrolling:
+- **Recent sales** (tap "N sales this session") opens as a sheet over the bottom of the screen — measured: the page
+  used to overflow by 318px with four sales listed; now 0.
+- **Edit numbers** (the per-ticket editor) opens as a sheet, not ten rows pushed into the page.
+- **Stats detail** floats over the form instead of pushing it down.
+Plus tighter spacing on short screens (≤600px usable height: single-line header, smaller fields and error box) so
+even ten typed tickets + a recent-sales bar + an error message fit on a small phone (was 53px over; now fits).
+Test method: headless browser at phone sizes, page `scrollHeight` against `innerHeight`.
+
+**Admin "Sell tickets" button** is now a gold, raised, full-width button with an arrow (it was a pale box that
+looked like a label). Gold rather than the dark green so it can't be mistaken for the selected tab.
+
+## 44. Starting ticket quantity per campaign — 2026-10-10 (on dev; preview only)
+
+A raffle is sold in fives, so the Sell screen can now start every sale with the ticket count already filled in.
+`campaigns.default_ticket_qty` (whole number 0–50; 0 = start empty, the old behaviour, which is what every
+existing campaign has until changed). Set in ⚙ Settings → **Sell screen** → "Tickets pre-selected for each sale".
+- Applies to the Seller Sell screen, on both the physical and the online series, and **after each sale it goes
+  back to that number** for the next one. The Seller can still change it.
+- Single price tier only. With several tiers (Adult/Child) there's no sensible "5 of which", so those start at 0
+  and Settings says so.
+- The wizard sets 5 for a campaign marked as a raffle, 0 otherwise (shown on the review step).
+- Not changed: the public buy page still starts at none, so a buyer chooses.
+Side fix: an online series now builds its ticket rows as soon as a count is present, so a count carried across a
+series switch is immediately sellable instead of showing "5" with nothing behind it.

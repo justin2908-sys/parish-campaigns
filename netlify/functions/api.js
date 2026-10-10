@@ -376,7 +376,7 @@ async function setCampaignDetails(session, { campaign_id, details_text }) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled }) {
+async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
@@ -420,6 +420,10 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
       // an ordinary paid event that isn't gambling (a dinner, a picnic) can turn it off.
       age_restricted: age_restricted === undefined ? true : !!age_restricted,
       public_page_enabled: wantsPublicPage,
+      // Left out = all three, as before. The wizard sends its own defaults (no payment link for physical).
+      physical_payment_methods: physical_payment_methods === undefined ? PAYMENT_METHODS : cleanPaymentMethods(physical_payment_methods, 'physical tickets'),
+      online_payment_methods: online_payment_methods === undefined ? PAYMENT_METHODS : cleanPaymentMethods(online_payment_methods, 'online tickets'),
+      default_ticket_qty: default_ticket_qty === undefined ? 0 : cleanDefaultQty(default_ticket_qty),
     })
     .select().single();
   if (campErr) throw httpError(400, campErr.message);
@@ -577,6 +581,46 @@ async function editBlockEnd(session, { block_id, range_end }) {
     throw httpError(500, 'Could not update the series, nothing was changed: ' + e3.message);
   }
   return { ok: true, added: newEnd - block.range_end, range_end: newEnd };
+}
+
+// The payment buttons a Seller can be given, and a plain name for each in messages.
+const PAYMENT_METHODS = ['cash', 'machine', 'link'];
+const PAYMENT_METHOD_NAMES = { cash: 'Cash', machine: 'Machine', link: 'Pay by link' };
+function cleanPaymentMethods(v, what) {
+  if (!Array.isArray(v) || !v.length) throw httpError(400, `Pick at least one payment option for ${what}.`);
+  const out = [...new Set(v.map(String))];
+  if (out.some(m => !PAYMENT_METHODS.includes(m))) throw httpError(400, 'Payment options must be cash, machine or link.');
+  return PAYMENT_METHODS.filter(m => out.includes(m));   // always stored in the same order
+}
+
+// How many tickets a Seller's Sell screen has pre-selected at the start of every sale (e.g. 5 for a raffle
+// sold in fives). Whole number 0–50; 0 means start empty.
+function cleanDefaultQty(v) {
+  const n = Number(v);
+  if (v === '' || v === null || v === undefined || !Number.isInteger(n) || n < 0 || n > 50) throw httpError(400, 'Pick a whole number from 0 to 50 (0 = start empty).');
+  return n;
+}
+async function setDefaultTicketQty(session, { campaign_id, quantity }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const n = cleanDefaultQty(quantity);
+  const { error } = await supabase.from('campaigns').update({ default_ticket_qty: n }).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, default_ticket_qty: n };
+}
+
+// Which payment buttons Sellers get for this campaign's physical tickets and for its online tickets —
+// either may be given alone. (Admins/Sellers only; the public buy page always pays by link.)
+async function setPaymentOptions(session, { campaign_id, physical, online }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const patch = {};
+  if (physical !== undefined) patch.physical_payment_methods = cleanPaymentMethods(physical, 'physical tickets');
+  if (online !== undefined) patch.online_payment_methods = cleanPaymentMethods(online, 'online tickets');
+  if (!Object.keys(patch).length) throw httpError(400, 'Nothing to change');
+  const { error } = await supabase.from('campaigns').update(patch).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, ...patch };
 }
 
 const STALE_MINUTES = 35; // SumUp hosted checkouts are valid ~30 min; give a small buffer
@@ -915,9 +959,11 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   // action is only ever reachable by an authenticated seller/admin/superadmin, so that
   // restriction doesn't apply here.
   let autoAssignBlock = null;
+  const soldTypes = new Set();   // which kinds of ticket (physical / digital) this sale covers
   if (auto_assign_block_id) {
     autoAssignBlock = blocks.find(b => b.id === auto_assign_block_id);
     if (!autoAssignBlock) throw httpError(404, 'Ticket block not found in this campaign');
+    soldTypes.add(autoAssignBlock.type);
   } else if (!ticket_numbers.length || ticket_numbers.length !== totalCount) {
     throw httpError(400, `Entered ${ticket_numbers ? ticket_numbers.length : 0} ticket number(s) but ${totalCount} were specified — these must match.`);
   } else {
@@ -930,6 +976,16 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
     const touchedBlockIds = new Set((existingRows || []).map(r => r.block_id));
     if (blocks.some(b => touchedBlockIds.has(b.id) && b.type === 'digital')) {
       throw httpError(400, 'Choosing a specific online ticket number is only available to buyers on the public purchase page — use "Any available" here instead.');
+    }
+    for (const b of blocks) if (touchedBlockIds.has(b.id)) soldTypes.add(b.type);
+  }
+  // The Admin chooses, per campaign, which payment buttons a Seller gets for physical tickets and for
+  // online tickets (e.g. no "Pay by link" for printed tickets handed over on the spot). Enforced here, not
+  // just by hiding the button. The public buy page is a separate channel and always pays by link.
+  for (const t of soldTypes) {
+    const allowed = (t === 'digital' ? campaign.online_payment_methods : campaign.physical_payment_methods) || PAYMENT_METHODS;
+    if (!allowed.includes(method)) {
+      throw httpError(400, `${PAYMENT_METHOD_NAMES[method]} isn't available for ${t === 'digital' ? 'online' : 'physical'} tickets in this campaign — use ${allowed.map(m => PAYMENT_METHOD_NAMES[m]).join(' or ')} instead.`);
     }
   }
   // Who must be named. A PHYSICAL ticket handed over for cash or the card machine is already in the
@@ -1988,6 +2044,8 @@ const actions = {
   sell_screen: (s, b) => sellScreen(s, b),
   add_block_to_campaign: (s, b) => addBlockToCampaign(s, b),
   edit_block_end: (s, b) => editBlockEnd(s, b),
+  set_payment_options: (s, b) => setPaymentOptions(s, b),
+  set_default_ticket_qty: (s, b) => setDefaultTicketQty(s, b),
   campaign_block_usage: (s, b) => campaignBlockUsage(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),
