@@ -1092,3 +1092,25 @@ existing campaign has until changed). Set in ⚙ Settings → **Sell screen** �
 - Not changed: the public buy page still starts at none, so a buyer chooses.
 Side fix: an online series now builds its ticket rows as soon as a count is present, so a count carried across a
 series switch is immediately sellable instead of showing "5" with nothing behind it.
+
+## 45. Campaign kinds, dates, automatic deletion, draft & preview, privacy notice — 2026-10-11 (on dev; preview only)
+
+Phase 1 of the data-protection / registrations design. Nothing here is live until Justin says publish.
+- **Kind**: every campaign is a `raffle`, a ticketed `event` or (later phases) a `registration`. The New campaign
+  wizard now starts by asking which, and the questions that follow depend on it. Templates ("Raffle", "Ticketed
+  event", …) pre-fill the answers, and **Copy an earlier campaign** starts from a past one (name, series, tiers,
+  payment options) with the dates left blank.
+- **Three dates** (UK calendar days): *Opens on*, *Closes on*, **Keep until** (required). Before it opens the
+  public page and Sell show "Opens on…"; after it closes they show "Closed on…" (people who already paid can still
+  find their ticket). Dates can be changed in ⚙ Settings → Dates. Setting a Keep-until that is already more than
+  90 days past asks for confirmation, because the data would be removed that night.
+- **Automatic deletion**: 90 days after *Keep until* a nightly job (pg_cron `retention-daily`, 03:30) anonymises
+  names, contact details, buyer IP and attendee names on that campaign's sales (`retention_run`). Amounts, ticket
+  numbers and totals stay so reports still reconcile. A banner warns Admins about campaigns with no Keep-until.
+- **Draft & preview**: a campaign can be saved as a **draft** (invisible to the public and sellers). Admins get a
+  private *Preview* link (signed, valid 24 h) showing the public page exactly as buyers will see it; buying is
+  never possible from a preview. **Open campaign** makes a draft live.
+- **Privacy notice**: Church details gains *Privacy notice link* (St Vincent's: the Diocese of Westminster notice)
+  and *Parish contact email*. The public buy page and the ticket page show a short statement plus both.
+- API: `set_campaign_dates`, `open_campaign`, `campaign_preview_link`, `set_org_privacy`; `create_campaign` takes
+  `kind`, dates, `is_draft`; `public_campaign_info` returns `state`, dates and org privacy fields.

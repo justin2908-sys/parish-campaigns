@@ -9,11 +9,11 @@
 // Ask for the campaign at once, while the styles and fonts are still downloading, instead of
 // waiting until the page code below has run — the two waits overlap. boot() picks up the answer.
 window.__infoP = (function () {
-  var id = new URLSearchParams(location.search).get('campaign_id');
+  var qs = new URLSearchParams(location.search), id = qs.get('campaign_id'), prev = qs.get('preview');   // preview = an Admin's private link
   if (!id || !window.fetch) return null;
   var ctl = window.AbortController ? new AbortController() : null;
   if (ctl) setTimeout(function () { ctl.abort(); }, 25000);   // never hang on a weak signal
-  return fetch('/api/public_campaign_info', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaign_id: id }), signal: ctl ? ctl.signal : undefined })
+  return fetch('/api/public_campaign_info', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(prev ? { campaign_id: id, preview: prev } : { campaign_id: id }), signal: ctl ? ctl.signal : undefined })
     .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
     .catch(function () { return null; });
 })();
@@ -197,6 +197,34 @@ function inOnlineRange(n) { return info.blocks.some(b => n >= b.range_start && n
 // picnic) just assigns whichever ticket is next; the buyer never sees or chooses a number at all.
 function isRaffle() { return !!(info && info.campaign && info.campaign.age_restricted); }
 
+const previewToken = new URLSearchParams(location.search).get('preview') || undefined;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function dayText(iso) { const [y, m, d] = String(iso).split('-').map(Number); return `${d} ${MONTH_NAMES[m - 1]} ${y}`; }
+// A line about who to ask and where the privacy notice is — shown where details are collected.
+function privacyHtml() {
+  const o = info.org;
+  const bits = [];
+  if (o.privacy_url) bits.push(`How we process your data, and your rights, are in the <a href="${esc(o.privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>.`);
+  if (o.contact_email) bits.push(`Questions about your details: <a href="mailto:${esc(o.contact_email)}">${esc(o.contact_email)}</a>.`);
+  return `Your details are stored and used by the Parish to issue your ticket and to find it again for you. ${bits.join(' ')}`;
+}
+function closedPageHtml() {
+  const when = info.state === 'not_open' ? `Opens on ${dayText(info.opens_on)}.` : `Closed on ${dayText(info.closes_on)}.`;
+  return `<div class="fatal"><div class="card">
+    <h1 style="font-size:24px;margin:0 0 4px">${esc(info.campaign.name)}</h1>
+    <p class="note">${esc(info.org.name)}</p>
+    <p class="note" style="font-size:18px;margin-top:14px"><b>${esc(when)}</b></p>
+    ${info.state === 'closed' ? '<p class="note">Thank you to everyone who took part.</p>' : ''}
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
+      <b>Already bought? Find your ticket</b>
+      <p class="note" style="margin:4px 0 8px">Type the mobile number or email you used when you bought.</p>
+      <input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email" style="width:100%">
+      <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
+      <div id="findOut" role="status" aria-live="polite"></div>
+    </div>
+    <p class="note" style="font-size:13px;margin-top:14px">${privacyHtml()}</p>
+  </div></div>`;
+}
 async function boot() {
   const app = $('app');
   if (!campaignId) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">This link is missing its campaign reference.</div></div></div>`; return; }
@@ -204,8 +232,10 @@ async function boot() {
     const early = window.__infoP ? await window.__infoP : null;   // already on its way since the top of the page
     if (early && early.ok) info = early.d;
     else if (early) throw new Error(early.d.error || 'Something went wrong');
-    else info = await call('public_campaign_info', { campaign_id: campaignId });   // no early answer (weak signal): ask again with the usual timeout
+    else info = await call('public_campaign_info', { campaign_id: campaignId, preview: previewToken });   // no early answer (weak signal): ask again with the usual timeout
   } catch (e) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">${esc(e.message)}</div></div></div>`; return; }
+  // Before it opens or after it closes the page says so plainly (people who already bought can still find their ticket).
+  if (info.state === 'not_open' || info.state === 'closed') { app.innerHTML = closedPageHtml(); $('findBtn').onclick = findTicket; return; }
   counts = Object.fromEntries(info.tiers.map(t => [t.id, 0]));
   blockId = info.blocks[0].id;
   buildShell();
@@ -222,6 +252,7 @@ function buildShell() {
   $('app').innerHTML = `
     <div class="shell">
       <header class="top">
+        ${info.preview ? `<div style="background:#fff3cd;color:#5c4400;border:1px solid #e6c65c;border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:14px"><b>Preview</b> — only you can see this${info.state && info.state !== 'open' ? ` (it is ${esc(String(info.state).replace('_', ' '))})` : ''}. Nothing can be bought from here.</div>` : ''}
         ${info.org.name ? `<div class="church">${esc(info.org.name)}</div>` : ''}
         <div class="row">
           <h1>${esc(info.campaign.name)}</h1>
@@ -262,6 +293,7 @@ function buildShell() {
           </div>
         </div>
         <p class="fine">🔒 Secure payment by SumUp · link valid 30 minutes. <b>After paying, tap the button on SumUp's page to come back and save your ticket.</b> <button type="button" class="linkbtn" id="findToggle">Already paid? Find your ticket</button></p>
+        <p class="fine" id="privacyLine">${privacyHtml()}</p>
       </div>
       <div class="paybar"><div class="in">
         <div class="sum"><span id="sumText">Choose your tickets</span><b id="sumPrice">£0.00</b></div>
@@ -275,6 +307,7 @@ function buildShell() {
       <div class="confirmBox"><div class="who">We don't email or text your ticket — <b id="cName"></b>, you'll need these exact details to find it again:</div><div class="big" id="cContact"></div><div class="amt" id="cAmt"></div></div>
       <div class="warn2" id="cWarn" hidden></div>
       <div class="keep">📲 <b>Important — after you pay, come back to this page</b> (tap the button on SumUp's page) and <b>save your ticket</b> to your phone. Then you'll always have it.</div>
+      <p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">${privacyHtml()}</p>
       ${info.campaign.age_restricted ? `<p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">By tapping "Yes, that's right" you confirm you are aged 18 or over — the minimum age to buy a raffle ticket.</p>` : ''}
       <button type="button" class="pay" id="confirmPay">Yes, that's right — pay</button>
       <button type="button" class="shuf alt" id="confirmEdit" style="width:100%;margin-top:8px">✏️ Change my details</button>
@@ -390,7 +423,7 @@ async function onSlotClick(e) {
 function heldNumbers() { return slots.filter(x => x != null); }
 
 async function fetchRandom(count, exclude) {
-  const { numbers } = await call('public_random_numbers', { campaign_id: campaignId, block_id: blockId, count, exclude });
+  const { numbers } = await call('public_random_numbers', { campaign_id: campaignId, block_id: blockId, count, exclude, preview: previewToken });
   return numbers;
 }
 async function shuffle(all) {
@@ -443,7 +476,7 @@ async function addLucky() {
   }
   $('luckyAdd').disabled = true;
   try {
-    const { results } = await call('public_check_tickets', { campaign_id: campaignId, ticket_numbers: [num] });
+    const { results } = await call('public_check_tickets', { campaign_id: campaignId, ticket_numbers: [num], preview: previewToken });
     if (!results[0].ok) { msg(nice(results[0].error) + ' — try another.', 'bad'); return; }
     slots[idx] = num; popping.add(idx); inp.value = ''; msg(`${fmt(num)} is yours ✓`, 'good');
     renderSlots(); renderPay(); burst($('luckyAdd')); setTimeout(() => popping.clear(), 600);
@@ -467,6 +500,7 @@ function burst(el) {
 
 /* ---------- pay bar ---------- */
 function nextStep() {
+  if (info.preview) return { ok: false, label: 'Preview only', focus: 'qtyArea' };   // a private preview can never buy anything
   const n = totalQty();
   if (!n) return { ok: false, label: 'Choose your tickets', focus: 'qtyArea' };
   if (mode === 'pick') {
@@ -539,7 +573,7 @@ async function doPay() {
 async function flagTaken() {
   try {
     const held = heldNumbers(); if (!held.length) return;
-    const { results } = await call('public_check_tickets', { campaign_id: campaignId, ticket_numbers: held });
+    const { results } = await call('public_check_tickets', { campaign_id: campaignId, ticket_numbers: held, preview: previewToken });
     taken = new Set(results.filter(r => !r.ok).map(r => r.ticket_number));
     renderSlots();
     if (taken.size) {
