@@ -1114,3 +1114,17 @@ Phase 1 of the data-protection / registrations design. Nothing here is live unti
   and *Parish contact email*. The public buy page and the ticket page show a short statement plus both.
 - API: `set_campaign_dates`, `open_campaign`, `campaign_preview_link`, `set_org_privacy`; `create_campaign` takes
   `kind`, dates, `is_draft`; `public_campaign_info` returns `state`, dates and org privacy fields.
+
+## 46. Every sale needs a name and contact; recording a manual refund — 2026-10-11 (on dev; preview only)
+
+- **Name and mobile/email are required on every sale** — printed or online, cash, machine or link (before, they were
+  optional for printed tickets paid in cash or by machine). Enforced by the server (`record_sale`) as well as the Sell
+  screen, which now shows both boxes as required. Reason: a raffle winner has to be reachable. These details are
+  removed automatically 90 days after the campaign's "keep until" date (§45).
+- **Record a refund** (Admin and SuperAdmin, Admin → Sales): refunds are still made BY HAND, in SumUp or in cash.
+  The button only writes it down — how much (up to the sale amount, default all of it) and a required short note.
+  It does not move money and does not release the tickets. Recording again replaces the earlier entry. Not offered
+  for voided, expired or unpaid-link sales. The Sales list shows a "Refunded £x" tag with the note; the campaign CSV
+  has Refund Amount / Refund Note / Refunded At. Totals and dashboards are unchanged (gross takings).
+  New `payments` columns: `refund_amount`, `refund_note`, `refunded_at`, `refunded_by`. The refund note and the void
+  reason (free text that may hold a name) are cleared by the automatic deletion along with names and contacts.

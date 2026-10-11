@@ -948,6 +948,7 @@ async function exportCampaignReport(session, { campaign_id }) {
     'Ticket Number', 'Display Number', 'Block', 'Tier', 'Ticket Status', 'Buyer Name', 'Method', 'Payment Amount',
     'Payment Status', 'Seller', 'Sold At', 'Cash Confirmed By', 'Cash Confirmed At',
     'Voided', 'Void Reason', 'SumUp Reference', 'SumUp Transaction Code', 'Link Sent To', 'Link Sent Via', 'Link Sent At',
+    'Refund Amount', 'Refund Note', 'Refunded At',
   ];
   const rows = tickets.map(t => {
     const p = t.payment_id ? paymentById[t.payment_id] : null;
@@ -972,6 +973,7 @@ async function exportCampaignReport(session, { campaign_id }) {
       p ? p.contact_value || '' : '',
       p ? p.contact_channel || '' : '',
       p ? p.link_shared_at || '' : '',
+      p && p.refund_amount != null ? Number(p.refund_amount).toFixed(2) : '', p ? p.refund_note || '' : '', p ? p.refunded_at || '' : '',
     ];
   });
   // A voided or expired sale no longer holds any ticket row (voiding deliberately frees the number),
@@ -990,6 +992,7 @@ async function exportCampaignReport(session, { campaign_id }) {
         p.cash_confirmed_by ? userName(p.cash_confirmed_by) : '', p.cash_confirmed_at || '',
         p.voided ? 'Yes' : '', p.void_reason || '', p.sumup_checkout_ref || '', p.sumup_transaction_code || '',
         p.contact_value || '', p.contact_channel || '', p.link_shared_at || '',
+        p.refund_amount != null ? Number(p.refund_amount).toFixed(2) : '', p.refund_note || '', p.refunded_at || '',
       ]);
     }
   }
@@ -1129,19 +1132,17 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
       throw httpError(400, `${PAYMENT_METHOD_NAMES[method]} isn't available for ${t === 'digital' ? 'online' : 'physical'} tickets in this campaign — use ${allowed.map(m => PAYMENT_METHOD_NAMES[m]).join(' or ')} instead.`);
     }
   }
-  // Who must be named. A PHYSICAL ticket handed over for cash or the card machine is already in the
-  // buyer's hand, so name and contact are optional. A payment LINK needs both (that is who it goes to),
-  // and an ONLINE ticket needs both whatever the payment method — it exists only on the buyer's phone,
-  // so we must be able to send it to them and find them again.
+  // Every sale needs the buyer's name and a mobile number or email, whatever the ticket or payment method:
+  // it is how a raffle winner is reached and how a buyer is found again. (They are removed automatically
+  // 90 days after the campaign's "keep until" date.)
   const isOnlineSale = !!(autoAssignBlock && autoAssignBlock.type === 'digital');
-  const needsDetails = method === 'link' || isOnlineSale;
-  if (needsDetails && !buyerName) {
-    throw httpError(400, isOnlineSale ? "An online ticket needs the buyer's name — the ticket lives on their phone." : "Enter the buyer's name — the payment link is sent to them.");
+  if (!buyerName) {
+    throw httpError(400, method === 'link' ? "Enter the buyer's name — the payment link is sent to them." : isOnlineSale ? "An online ticket needs the buyer's name — the ticket lives on their phone." : "Enter the buyer's name.");
   }
-  if (needsDetails && !String(contact_value || '').trim() && method !== 'link') {
-    throw httpError(400, "An online ticket needs the buyer's mobile number or email — that is where their ticket is sent.");
+  if (!String(contact_value || '').trim() && method !== 'link') {
+    throw httpError(400, isOnlineSale ? "An online ticket needs the buyer's mobile number or email — that is where their ticket is sent." : "Enter the buyer's mobile number or email.");
   }
-  const contact = needsDetails ? parseContact(contact_value) : null;
+  const contact = parseContact(contact_value);
 
   const initialStatus = method === 'cash' ? 'cash_pending' : (method === 'machine' ? 'paid' : 'held');
 
@@ -1768,6 +1769,26 @@ async function voidSale(session, { payment_id, reason }) {
   return { ok: true };
 }
 
+// A refund is made BY HAND (in SumUp, or in cash). This only records that it happened, so the books and the
+// buyer's record agree: how much, and a note (e.g. "Refunded in SumUp, application not accepted"). It does not
+// move money and does not release the tickets. Recording it again replaces the earlier note.
+async function recordRefund(session, { payment_id, amount, note }) {
+  requireOrgRole(session, ['admin', 'superadmin']);
+  const text = String(note == null ? '' : note).trim();
+  if (!text) throw httpError(400, 'Add a short note saying why and how it was refunded.');
+  if (text.length > 500) throw httpError(400, 'Keep the refund note under 500 characters.');
+  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).maybeSingle();
+  if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
+  if (payment.status === 'void' || payment.status === 'failed') throw httpError(400, "This sale was voided or never paid, so there's nothing to refund.");
+  if (payment.method === 'link' && payment.status !== 'paid') throw httpError(400, "This payment link hasn't been paid, so there's nothing to refund.");
+  const total = Number(payment.amount);
+  const value = amount === undefined || amount === null || amount === '' ? total : Math.round(Number(amount) * 100) / 100;
+  if (!Number.isFinite(value) || value <= 0 || value > total) throw httpError(400, `The refund must be more than £0 and no more than £${total.toFixed(2)}.`);
+  const { error } = await supabase.from('payments').update({ refund_amount: value, refund_note: text, refunded_at: new Date().toISOString(), refunded_by: session.uid }).eq('id', payment_id);
+  if (error) throw httpError(500, error.message);
+  return { ok: true, refund_amount: value };
+}
+
 // Lump-sum cash reconciliation: oldest-first greedy match against a seller's pending cash payments
 async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
   requireOrgRole(session, ['admin', 'superadmin']);
@@ -1936,6 +1957,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
     seller: sellerLabel(p.seller_id, users),
     method: p.method, amount: p.amount, status: p.status,
     payer_name: p.payer_name, contact_value: p.contact_value, contact_channel: p.contact_channel,
+    refund_amount: p.refund_amount, refund_note: p.refund_note, refunded_at: p.refunded_at,
     created_at: p.created_at,
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
@@ -2215,6 +2237,7 @@ const actions = {
   sumup_check: (s) => sumupCheck(s),  sumup_webhook: (s, b) => sumupWebhook(b),
   undo_sale: (s, b) => undoSale(s, b),
   void_sale: (s, b) => voidSale(s, b),
+  record_refund: (s, b) => recordRefund(s, b),
   cash_recon: (s, b) => cashRecon(s, b),
   dashboard_state: (s, b) => dashboardState(s, b),
   list_recent_payments: (s, b) => listRecentPayments(s, b),
