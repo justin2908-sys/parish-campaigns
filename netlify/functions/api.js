@@ -337,7 +337,7 @@ async function listUsers(session) {
 // campaigns. Read by any org-scoped role (a seller needs them to build a message), set by SuperAdmin.
 async function getOrgSettings(session) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  const { data, error } = await supabase.from('organizations').select('id, name, address, thank_you_text, contact_email, privacy_url').eq('id', session.org_id).single();
+  const { data, error } = await supabase.from('organizations').select('id, name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority, lottery_valid_until').eq('id', session.org_id).single();
   if (error) throw httpError(500, error.message);
   return { organization: data };
 }
@@ -720,6 +720,21 @@ async function setOrgPrivacy(session, { contact_email, privacy_url }) {
   const url = String(privacy_url == null ? '' : privacy_url).trim();
   if (url && (url.length > 500 || !/^https:\/\/[^\s]+\.[^\s]+$/.test(url))) throw httpError(400, 'The privacy notice link must start with https://');
   const { error } = await supabase.from('organizations').update({ contact_email: email || null, privacy_url: url || null }).eq('id', session.org_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// The church's lottery registration with its local council (a registered society lottery): shown on every raffle's
+// public page and ticket. The "valid until" date only drives a warning when a raffle runs past it.
+async function setOrgLottery(session, { lottery_reg_number, lottery_authority, lottery_valid_until }) {
+  requireOrgRole(session, ['superadmin']);
+  const num = String(lottery_reg_number == null ? '' : lottery_reg_number).trim();
+  const auth = String(lottery_authority == null ? '' : lottery_authority).trim();
+  if (num.length > 40) throw httpError(400, 'The registration number is too long.');
+  if (auth.length > 80) throw httpError(400, 'The council name is too long.');
+  if (num && !/^[A-Za-z0-9 ./-]+$/.test(num)) throw httpError(400, 'The registration number can only hold letters, numbers, spaces and - / .');
+  const until = cleanDate(lottery_valid_until, 'The registration end date');
+  const { error } = await supabase.from('organizations').update({ lottery_reg_number: num || null, lottery_authority: auth || null, lottery_valid_until: until }).eq('id', session.org_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
@@ -1277,7 +1292,7 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
   const [{ data: campaign }, { data: tiers }, { data: blocks }] = await Promise.all([
-    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
+    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
   ]);
@@ -1292,7 +1307,9 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   const org = campaign.organizations;
   return {
     campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text, age_restricted: campaign.age_restricted !== false },
-    org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null, contact_email: org ? org.contact_email : null, privacy_url: org ? org.privacy_url : null },
+    org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null, contact_email: org ? org.contact_email : null, privacy_url: org ? org.privacy_url : null,
+      // Only a raffle (a lottery) carries the council registration.
+      lottery: org && campaign.age_restricted !== false && org.lottery_reg_number ? { number: org.lottery_reg_number, authority: org.lottery_authority || null } : null },
     state: isPreview ? 'open' : state,   // a preview always shows the buying page, whatever the dates
     opens_on: campaign.opens_on, closes_on: campaign.closes_on,
     preview: isPreview,
@@ -1534,7 +1551,7 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
 // itself), never from anything the caller claims.
 async function publicPaymentStatus({ payment_id }) {
   if (!payment_id) throw httpError(400, 'payment_id is required');
-  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(name, details_text, org_id)').eq('id', payment_id).maybeSingle();
+  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(name, details_text, org_id, age_restricted)').eq('id', payment_id).maybeSingle();
   if (!payment) throw httpError(404, 'Sale not found');
 
   // Fetched BEFORE syncCheckout deliberately: an expired/failed ONLINE sale gets its ticket
@@ -1558,7 +1575,7 @@ async function publicPaymentStatus({ payment_id }) {
   let status;
   if (payment.method === 'link') status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
   else status = payment.status === 'void' ? 'void' : 'paid';
-  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text, contact_email, privacy_url').eq('id', payment.campaigns.org_id).single();
+  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority').eq('id', payment.campaigns.org_id).single();
 
   return {
     status, // 'paid' | 'pending' | 'failed' | 'void'
@@ -1571,6 +1588,7 @@ async function publicPaymentStatus({ payment_id }) {
     org_address: org ? org.address : '',
     org_contact_email: org ? org.contact_email : null,
     org_privacy_url: org ? org.privacy_url : null,
+    org_lottery: org && payment.campaigns.age_restricted !== false && org.lottery_reg_number ? { number: org.lottery_reg_number, authority: org.lottery_authority || null } : null,
     thank_you: org ? org.thank_you_text : null,
     tickets,
     sold_at: payment.created_at,
@@ -2216,6 +2234,7 @@ const actions = {
   open_campaign: (s, b) => openCampaign(s, b),
   campaign_preview_link: (s, b) => campaignPreviewLink(s, b),
   set_org_privacy: (s, b) => setOrgPrivacy(s, b),
+  set_org_lottery: (s, b) => setOrgLottery(s, b),
   campaign_block_usage: (s, b) => campaignBlockUsage(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),

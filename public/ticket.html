@@ -62,10 +62,11 @@ async function load() {
 
 // The church's saved thank-you (says where the money goes); a plain one by name if it's blank.
 function privacyLine(d) {
+  const lot = d.org_lottery ? `Registered society lottery${d.org_lottery.authority ? ' — ' + esc(d.org_lottery.authority) : ''}, no. ${esc(d.org_lottery.number)}. ` : '';
   const bits = [];
   if (d.org_privacy_url) bits.push(`<a href="${esc(d.org_privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>`);
   if (d.org_contact_email) bits.push(`<a href="mailto:${esc(d.org_contact_email)}">${esc(d.org_contact_email)}</a>`);
-  return bits.length ? `<p class="muted" style="font-size:12.5px;margin:14px 0 0">Your details are held by the Parish only for this ticket. ${bits.join(' · ')}</p>` : '';
+  return (lot || bits.length) ? `<p class="muted" style="font-size:12.5px;margin:14px 0 0">${lot}${bits.length ? 'Your details are held by the Parish only for this ticket. ' + bits.join(' · ') : ''}</p>` : '';
 }
 function thankYouText(d) { return d.thank_you || (d.org_name ? 'Thank you for supporting ' + d.org_name + '.' : 'Thank you for your support!'); }
 function render(d) {

@@ -1128,3 +1128,15 @@ Phase 1 of the data-protection / registrations design. Nothing here is live unti
   has Refund Amount / Refund Note / Refunded At. Totals and dashboards are unchanged (gross takings).
   New `payments` columns: `refund_amount`, `refund_note`, `refunded_at`, `refunded_by`. The refund note and the void
   reason (free text that may hold a name) are cleared by the automatic deletion along with names and contacts.
+
+## 47. Lottery registration shown on raffles — 2026-10-12 (on dev; preview only)
+
+St Vincent's is registered with the London Borough of Hounslow to run society lotteries (certificate no. LBH137701,
+valid 4 March – 31 December 2026, renewal fee due each 1 January). Church details now holds **Lottery registration
+number**, **Registered with** (the council) and **Registration runs until** (optional); St Vincent's is already filled in.
+- Every **raffle** (not ticket events) shows "Registered society lottery — London Borough of Hounslow, no. LBH137701" on
+  its public buy page (and the closed/not-yet-open page) and on the buyer's ticket page. The server only sends it for a raffle.
+- A **warning, never a block**: the wizard's review step and the campaign's Dates card say "Check your lottery
+  registration…" if a raffle closes after the "runs until" date (or has no closing date and the date has passed).
+  The certificate says the registration continues until revoked, so renewal is the organiser's call.
+- API: `set_org_lottery` (SuperAdmin); `public_campaign_info` / `public_payment_status` return the registration for raffles.

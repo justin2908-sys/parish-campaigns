@@ -208,6 +208,11 @@ function privacyHtml() {
   if (o.contact_email) bits.push(`Questions about your details: <a href="mailto:${esc(o.contact_email)}">${esc(o.contact_email)}</a>.`);
   return `Your details are stored and used by the Parish to issue your ticket and to find it again for you. ${bits.join(' ')}`;
 }
+// A raffle is a lottery: it says who registered it. (The server only sends this for a raffle.)
+function lotteryHtml() {
+  const l = info.org.lottery; if (!l) return '';
+  return `Registered society lottery${l.authority ? ' — ' + esc(l.authority) : ''}, no. ${esc(l.number)}. `;
+}
 function closedPageHtml() {
   const when = info.state === 'not_open' ? `Opens on ${dayText(info.opens_on)}.` : `Closed on ${dayText(info.closes_on)}.`;
   return `<div class="fatal"><div class="card">
@@ -222,7 +227,7 @@ function closedPageHtml() {
       <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
       <div id="findOut" role="status" aria-live="polite"></div>
     </div>
-    <p class="note" style="font-size:13px;margin-top:14px">${privacyHtml()}</p>
+    <p class="note" style="font-size:13px;margin-top:14px">${lotteryHtml()}${privacyHtml()}</p>
   </div></div>`;
 }
 async function boot() {
@@ -293,7 +298,7 @@ function buildShell() {
           </div>
         </div>
         <p class="fine">🔒 Secure payment by SumUp · link valid 30 minutes. <b>After paying, tap the button on SumUp's page to come back and save your ticket.</b> <button type="button" class="linkbtn" id="findToggle">Already paid? Find your ticket</button></p>
-        <p class="fine" id="privacyLine">${privacyHtml()}</p>
+        <p class="fine" id="privacyLine">${lotteryHtml()}${privacyHtml()}</p>
       </div>
       <div class="paybar"><div class="in">
         <div class="sum"><span id="sumText">Choose your tickets</span><b id="sumPrice">£0.00</b></div>

@@ -1232,6 +1232,13 @@ async function doOpenCampaign(id) {
   if (!confirm('Open this campaign now? It becomes visible to Sellers (if it is for them) and its public page starts working.')) return;
   try { await call('open_campaign', { campaign_id: id }); if (cset && cset.id === id) openCampaignSettings(id); else renderCampaignsTab(); } catch (e) { alert(e.message); }
 }
+async function doSaveOrgLottery() {
+  const resEl = document.getElementById('orgLotteryResult');
+  try {
+    await call('set_org_lottery', { lottery_reg_number: document.getElementById('orgLotteryNumInput').value, lottery_authority: document.getElementById('orgLotteryAuthInput').value, lottery_valid_until: document.getElementById('orgLotteryUntilInput').value });
+    resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; wizOrg = null;
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
 async function doSaveOrgPrivacy() {
   const resEl = document.getElementById('orgPrivacyResult');
   try {
@@ -1273,6 +1280,14 @@ async function renderCampaignsTab() {
       <input id="orgPrivacyUrlInput" type="url" inputmode="url" placeholder="https://" value="${esc(org.privacy_url||'')}">
       <button class="small" style="margin-top:8px" onclick="doSaveOrgPrivacy()">Save</button>
       <div id="orgPrivacyResult"></div>
+      <label style="margin-top:18px">Lottery registration number <span class="muted">(your registered society lottery — shown on every raffle's public page and ticket)</span></label>
+      <input id="orgLotteryNumInput" maxlength="40" placeholder="e.g. LBH137701" value="${esc(org.lottery_reg_number||'')}">
+      <label style="margin-top:10px">Registered with <span class="muted">(the council)</span></label>
+      <input id="orgLotteryAuthInput" maxlength="80" placeholder="e.g. London Borough of Hounslow" value="${esc(org.lottery_authority||'')}">
+      <label style="margin-top:10px">Registration runs until <span class="muted">(optional — you are warned if a raffle closes after it)</span></label>
+      <input id="orgLotteryUntilInput" type="date" value="${esc(org.lottery_valid_until||'')}">
+      <button class="small" style="margin-top:8px" onclick="doSaveOrgLottery()">Save</button>
+      <div id="orgLotteryResult"></div>
     </div>` : ''}
     ${state.user.role==='superadmin' ? `<div class="card">
       <h3 style="margin-top:0">SumUp connection</h3>
@@ -1393,7 +1408,7 @@ function removeBlockRow(i) { if (draftBlocks.length<=1) return; draftBlocks.spli
 // nothing already typed is lost, and the steps that depend on it (the ticket rows depend on the ticket type,
 // the audience depends on it too) adjust themselves.
 const WIZ_STEPS = ['Start', 'About it', 'Dates', 'Tickets', 'Prices and numbers', 'Review'];
-let wizStep = 1, wiz = null, wizCampaigns = [];
+let wizStep = 1, wiz = null, wizCampaigns = [], wizOrg = null;
 
 // ---- small date helpers (UK calendar days, 'YYYY-MM-DD') ----
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1430,6 +1445,14 @@ const WIZ_TEMPLATES = {
   ],
 };
 
+// A raffle is a lottery, registered with the council for a stated period. Soft warning only: a registration may
+// simply be renewed, so this never blocks anything.
+function lotteryWarning(kind, closesOn, org) {
+  if (kind !== 'raffle' || !org || !org.lottery_valid_until) return '';
+  if (closesOn && closesOn > org.lottery_valid_until) return `Check your lottery registration: it runs until ${fmtDay(org.lottery_valid_until)}, and this raffle closes on ${fmtDay(closesOn)}.`;
+  if (!closesOn && ukTodayISO() > org.lottery_valid_until) return `Check your lottery registration: it ran until ${fmtDay(org.lottery_valid_until)}.`;
+  return '';
+}
 function wizIsRaffle() { return wiz.kind === 'raffle'; }
 // The campaign-specific content, back to a blank slate for the chosen kind (the name is kept).
 function wizResetContent() {
@@ -1447,6 +1470,7 @@ async function openCampaignWizard() {
   wizCampaigns = [];
   drawWizard();
   try { wizCampaigns = (await call('list_campaigns', { include_inactive: true })).campaigns; if (wiz && wizStep === 1) drawWizard(); } catch { /* copying simply isn't offered */ }
+  try { if (!wizOrg) wizOrg = (await call('get_org_settings')).organization; } catch { /* the lottery date check is simply skipped */ }
 }
 function closeCampaignWizard() { const el = document.getElementById('wizardPanel'); if (el) el.remove(); wiz = null; }
 function wizCanGoPublic() { return wiz.type !== 'physical'; }   // a public page only ever lists ONLINE tickets
@@ -1534,8 +1558,9 @@ function wizSummaryHtml() {
   const prices = tiers.map(t => `${esc(t.name)} £${Number(t.price).toFixed(2)}`).join(', ');
   const open = wiz.opens_on ? `Sales open on ${fmtDay(wiz.opens_on)}.` : 'Sales open as soon as you open it.';
   const close = wiz.closes_on ? `They close on ${fmtDay(wiz.closes_on)}.` : 'There is no closing date.';
+  const lot = lotteryWarning(wiz.kind, wiz.closes_on, wizOrg);
   const keep = wiz.keep_until ? `Names and contact details are kept until ${fmtDay(wiz.keep_until)} and removed 90 days later, on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}.` : '';
-  return `<b>${n}</b> is a ${kind}, sold ${who}. ${open} ${close} ${prices || 'No prices yet'}; ${places} ticket${places === 1 ? '' : 's'} in total. ${keep}`;
+  return `<b>${n}</b> is a ${kind}, sold ${who}. ${open} ${close} ${prices || 'No prices yet'}; ${places} ticket${places === 1 ? '' : 's'} in total. ${keep}${lot ? ` <b class="warnText">${lot}</b>` : ''}`;
 }
 
 function wizStepHtml() {
@@ -1667,6 +1692,7 @@ async function openCampaignSettings(id) {
     const campaign = campaigns.find(c => c.id === id);
     if (!campaign) throw new Error('Campaign not found');
     cset = { id, campaign, msgs };
+    try { if (!wizOrg) wizOrg = (await call('get_org_settings')).organization; } catch { /* the lottery date check is simply skipped */ }
   } catch (e) { cset = { id, error: e.message, msgs }; }
   drawCampaignSettings();
 }
@@ -1717,6 +1743,7 @@ function drawCampaignSettings() {
         <input id="csetKeep" type="date" value="${esc(c.keep_until || '')}">
         <button class="primary" style="margin-top:8px" onclick="doSaveCsetDates(false)">Save dates</button>
         <div id="cmsg-dates">${cset.msgs.dates || ''}</div>
+        ${lotteryWarning(c.kind, c.closes_on, wizOrg) ? `<div class="hint" style="margin-top:8px">${esc(lotteryWarning(c.kind, c.closes_on, wizOrg))}</div>` : ''}
       </div>
       ${hasPhysical ? payGroupHtml('physical', 'Payment options — physical tickets', 'What a Seller can tap when selling printed tickets. They are usually paid for on the spot, so Pay by link is often not needed.', c.physical_payment_methods || ['cash', 'machine', 'link']) : ''}
       ${hasOnline ? payGroupHtml('online', 'Payment options — online tickets', 'What a Seller can tap when selling online tickets. The public buy page is not affected — it always pays by link.', c.online_payment_methods || ['cash', 'machine', 'link']) : ''}
