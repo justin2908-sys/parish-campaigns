@@ -621,7 +621,8 @@ function cleanDate(v, what, { required } = {}) {
     return null;
   }
   const s = String(v).trim();
-  const ok = /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T00:00:00Z') : null;   // "2026-13-45" is an Invalid Date, so check before toISOString
+  const ok = !!parsed && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === s;
   if (!ok) throw httpError(400, `${what} isn't a valid date.`);
   const year = Number(s.slice(0, 4));
   if (year < 2020 || year > 2100) throw httpError(400, `${what} looks wrong — check the year.`);
