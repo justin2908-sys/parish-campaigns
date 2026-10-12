@@ -188,7 +188,7 @@ async function call(action, body = {}, timeoutMs = 20000) {
   // The server ends a session when the account is disabled or its password is reset. Go back to
   // the login screen straight away instead of leaving a screen that can't do anything.
   if (res.status === 401 && state.session && action !== 'login') { logout(); throw new Error('Your session has ended — please log in again.'); }
-  if (!res.ok) throw new Error(data.error || 'Something went wrong');
+  if (!res.ok) { const err = new Error(data.error || 'Something went wrong'); if (data.code) err.code = data.code; throw err; }
   return data;
 }
 
@@ -205,9 +205,11 @@ function render() {
   document.getElementById('app').className = '';
   if (!state.session) { renderLogin(); return; }
   if (state.user.needsConsent) { document.getElementById('headerRight').innerHTML = ''; renderConsentGate(); return; }
-  const toAdmin = state.user.role !== 'seller' && state.user.role !== 'platform_owner' && viewMode === 'sell'
+  const staffOnly = state.user.role === 'finance' || state.user.role === 'priest';   // these two never sell
+  if (staffOnly) viewMode = 'admin';
+  const toAdmin = state.user.role !== 'seller' && state.user.role !== 'platform_owner' && !staffOnly && viewMode === 'sell'
     ? `<button onclick="viewMode='admin'; render();">← Admin</button>` : '';
-  const sellingNow = state.user.role === 'seller' || (state.user.role !== 'platform_owner' && viewMode === 'sell');
+  const sellingNow = state.user.role === 'seller' || (state.user.role !== 'platform_owner' && !staffOnly && viewMode === 'sell');
   const linksBtn = sellingNow ? `<button onclick="openLinksPanel()" aria-label="Payment links I have sent">🔗 Links</button>` : '';
   document.getElementById('headerRight').innerHTML = `${toAdmin}${linksBtn}<button onclick="logout()">${toAdmin ? 'Log out' : `Log out (${esc(state.user.name)})`}</button>`;
   if (state.user.role === 'platform_owner') renderPlatformOwner();
@@ -1163,18 +1165,23 @@ function shareMenuHtml(a) {
 
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
+// Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TABS_BY_ROLE = {
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations'],
+  priest: ['registrations'],
+};
 async function renderAdmin() {
+  const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
+  if (!tabs.includes(adminTab)) adminTab = tabs[0];
+  const canSell = state.user.role === 'admin' || state.user.role === 'superadmin';
   document.getElementById('app').innerHTML = h`
-    <button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>
+    ${canSell ? `<button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>` : ''}
     <div id="retentionBanner"></div>
     <div class="tabs">
-      <button class="${adminTab==='campaigns'?'active':''}" data-tab="campaigns" onclick="setAdminTab('campaigns')">Campaigns</button>
-      <button class="${adminTab==='overview'?'active':''}" data-tab="overview" onclick="setAdminTab('overview')">Overview</button>
-      <button class="${adminTab==='sales'?'active':''}" data-tab="sales" onclick="setAdminTab('sales')">Sales</button>
-      <button class="${adminTab==='cash'?'active':''}" data-tab="cash" onclick="setAdminTab('cash')">Cash Recon</button>
-      <button class="${adminTab==='attention'?'active':''}" data-tab="attention" onclick="setAdminTab('attention')">Needs Attention</button>
-      ${state.user.role==='superadmin' ? `<button class="${adminTab==='users'?'active':''}" data-tab="users" onclick="setAdminTab('users')">Users</button>` : ''}
-      ${state.user.role==='superadmin' ? `<button class="${adminTab==='bin'?'active':''}" data-tab="bin" onclick="setAdminTab('bin')">Recycle Bin</button>` : ''}
+      ${tabs.map(t => `<button class="${adminTab===t?'active':''}" data-tab="${t}" onclick="setAdminTab('${t}')">${ADMIN_TAB_LABELS[t]}</button>`).join('')}
     </div>
     <div id="adminContent"></div>
   `;
@@ -1193,7 +1200,7 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, users: renderUsersTab, bin: renderRecycleBinTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -2091,6 +2098,119 @@ async function doResend(paymentId) {
   catch (e) { alert(e.message); }
 }
 
+// ---- Registrations (SuperAdmin, Finance, Priest) ----
+// The registration forms arrive in a later phase. This tab is already behind the real access rules: the server
+// refuses Admins and Sellers, and everyone else first accepts the confidentiality statement below.
+const ROLE_LABELS = { platform_owner: 'Platform Owner', superadmin: 'SuperAdmin', admin: 'Admin', finance: 'Finance', priest: 'Priest', seller: 'Seller' };
+const CONFIDENTIALITY_POINTS = [
+  'The details in registrations can include children and families, and religious information. They are private.',
+  'I will use them only for the purpose they were collected for, and I will not share or discuss them outside the parish team.',
+  'If I download or copy anything, I will keep it secure and delete it when I have finished with it.',
+  'If I think details have been seen by someone who should not see them, I will tell the parish priest or the SuperAdmin straight away.',
+];
+let confRetry = null;
+function renderConfidentialityGate(seq, retry) {
+  confRetry = retry;
+  const el = adminEl(seq); if (!el) return;
+  el.innerHTML = `<div class="card">
+    <h3 style="margin-top:0">Before you see people's details</h3>
+    <p>Please read this and confirm. You only need to do it once.</p>
+    <ul style="padding-left:20px;line-height:1.6;margin:0 0 14px">${CONFIDENTIALITY_POINTS.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+    <button class="primary" onclick="doAcceptConfidentiality()">✅ I understand and agree</button>
+    <div id="confResult"></div>
+  </div>`;
+}
+async function doAcceptConfidentiality() {
+  const el = document.getElementById('confResult');
+  try { await call('accept_confidentiality'); if (confRetry) confRetry(); }
+  catch (e) { if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function renderRegistrationsTab() {
+  const seq = adminSeq;
+  try {
+    await call('registration_responses');
+    const el = adminEl(seq); if (!el) return;
+    el.innerHTML = `<div class="card"><h3 style="margin-top:0">Registrations</h3>
+      <p class="muted" style="margin:0">There are no registration forms yet. When a form is open, the answers will appear here. Only SuperAdmin, Finance and Priest can see them.</p></div>`;
+  } catch (e) {
+    if (e.code === 'confidentiality_required') return renderConfidentialityGate(seq, renderRegistrationsTab);
+    const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`;
+  }
+}
+
+// ---- Data and privacy (SuperAdmin) ----
+// Find everything held about one person (by the mobile number or email they gave), download it, or erase it.
+// Erasing removes the person but keeps the amounts and ticket numbers so the accounts and the draw still add up.
+let pvQuery = '';
+async function renderPrivacyTab() {
+  const seq = adminSeq;
+  let log;
+  try { log = (await call('privacy_log')).requests; }
+  catch (e) {
+    if (e.code === 'confidentiality_required') return renderConfidentialityGate(seq, renderPrivacyTab);
+    const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return;
+  }
+  const el = adminEl(seq); if (!el) return;
+  el.innerHTML = `<div class="card"><h3 style="margin-top:0">Find a person</h3>
+    <p class="muted">Someone has asked what you hold about them, or asked you to remove it. Type the mobile number or email they gave when they bought.</p>
+    <input id="pvQuery" placeholder="Mobile or email" value="${esc(pvQuery)}" autocomplete="off" onkeydown="if(event.key==='Enter')doPrivacySearch()">
+    <button class="primary" style="margin-top:8px" onclick="doPrivacySearch()">Look up</button>
+    <div id="pvResult"></div></div>
+    <div class="card"><h3 style="margin-top:0">Requests so far</h3><div id="pvLog">${privacyLogHtml(log)}</div></div>`;
+}
+function privacyLogHtml(log) {
+  if (!log.length) return '<p class="muted" style="margin:0">Nothing yet. Every look-up, download and erasure is recorded here, without the full number or email.</p>';
+  const word = { search: 'Looked up', export: 'Downloaded', erase: 'Erased' };
+  return `<table><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th>Found</th></tr>${log.map(r => `<tr><td>${esc(new Date(r.created_at).toLocaleString('en-GB'))}</td><td>${esc(r.by)}</td><td>${word[r.kind] || esc(r.kind)}</td><td>${esc(r.subject_masked)}</td><td>${r.found_payments} sale${r.found_payments === 1 ? '' : 's'}</td></tr>`).join('')}</table>`;
+}
+async function refreshPrivacyLog() {
+  try { const { requests } = await call('privacy_log'); const el = document.getElementById('pvLog'); if (el) el.innerHTML = privacyLogHtml(requests); } catch { /* the log is a convenience here */ }
+}
+async function doPrivacySearch() {
+  const out = document.getElementById('pvResult');
+  pvQuery = document.getElementById('pvQuery').value.trim();
+  out.innerHTML = '<p class="muted">Looking…</p>';
+  try {
+    const r = await call('privacy_search', { query: pvQuery });
+    refreshPrivacyLog();
+    if (!r.records.length) { out.innerHTML = `<div class="info" style="margin-top:10px">Nothing is held for ${esc(r.subject)}.</div>`; return; }
+    const running = r.records.filter(x => x.campaign_still_running).length;
+    out.innerHTML = `<p style="margin:12px 0 6px"><b>${r.records.length} sale${r.records.length === 1 ? '' : 's'}</b> for ${esc(r.subject)}</p>
+      ${running ? `<div class="hint">${running} of these ${running === 1 ? 'is' : 'are'} for a campaign that is still running. If you erase a raffle buyer, you can no longer reach them if they win.</div>` : ''}
+      ${r.records.map(x => `<div class="card" style="margin:8px 0;background:var(--paper)">
+        <b>${esc(x.campaign)}</b> · ${esc(new Date(x.created_at).toLocaleDateString('en-GB'))} · £${Number(x.amount).toFixed(2)} · ${esc(x.method)} · ${esc(x.status)}
+        <div class="muted">Name: ${esc(x.name || '— (already removed)')} · Contact: ${esc(x.contact || '— (already removed)')}</div>
+        <div class="muted">Tickets: ${x.tickets.length ? esc(x.tickets.map(t => t.number).join(', ')) : 'none held'}</div>
+        ${x.refund_amount != null ? `<div class="muted">Refund £${Number(x.refund_amount).toFixed(2)}: ${esc(x.refund_note || '')}</div>` : ''}
+        <div class="muted">${x.auto_removal_on ? 'Removed automatically on ' + esc(fmtDay(x.auto_removal_on)) : 'No keep-until date, so never removed automatically'}</div>
+      </div>`).join('')}
+      <button class="small" onclick="doPrivacyExport()">⬇ Download everything (file)</button>
+      <button class="small" style="margin-left:6px" onclick="doPrivacyErase()">Erase these records</button>
+      <div id="pvAction"></div>`;
+  } catch (e) { out.innerHTML = `<div class="error" style="margin-top:10px">${esc(e.message)}</div>`; }
+}
+async function doPrivacyExport() {
+  const el = document.getElementById('pvAction');
+  try {
+    const { export: data } = await call('privacy_export', { query: pvQuery });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `data-held-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    el.innerHTML = '<div class="info" style="margin-top:8px">Downloaded. It holds the full number or email, so keep it secure and delete it when you have sent it.</div>';
+    refreshPrivacyLog();
+  } catch (e) { el.innerHTML = `<div class="error" style="margin-top:8px">${esc(e.message)}</div>`; }
+}
+async function doPrivacyErase() {
+  const el = document.getElementById('pvAction');
+  if (!confirm('Erase the name, contact details and notes on every one of these sales? The amounts and ticket numbers stay. This cannot be undone.')) return;
+  try {
+    const r = await call('privacy_erase', { query: pvQuery, confirm: true });
+    el.innerHTML = `<div class="info" style="margin-top:8px">Erased from ${r.payments_erased} sale${r.payments_erased === 1 ? '' : 's'}.</div>`;
+    refreshPrivacyLog();
+  } catch (e) { el.innerHTML = `<div class="error" style="margin-top:8px">${esc(e.message)}</div>`; }
+}
+
 // ---- Users tab (SuperAdmin only) ----
 async function renderUsersTab() {
   const seq = adminSeq;
@@ -2099,7 +2219,7 @@ async function renderUsersTab() {
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Users</h3>
     <table><tr><th>Name</th><th>Mobile</th><th>Role</th><th>Status</th><th></th></tr>
-    ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${u.role}</td>
+    ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
       <td><span class="badge ${u.active?'ok':'bad'}">${u.active?'Active':'Disabled'}</span></td>
       <td><button class="small" onclick="toggleUserActive('${u.id}', ${!u.active})">${u.active?'Disable':'Enable'}</button>
       <button class="small" onclick="doResetPassword('${u.id}')">Reset PW</button></td></tr>`).join('')}
@@ -2107,7 +2227,7 @@ async function renderUsersTab() {
     <div class="card"><h3 style="margin-top:0">Add User</h3>
     <label>Name</label><input id="uName">
     <label>Mobile</label><input id="uMobile" type="tel">
-    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="superadmin">SuperAdmin</option></select>
+    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="finance">Finance</option><option value="priest">Priest</option><option value="superadmin">SuperAdmin</option></select>
     <label>Password (8+ characters)</label><input id="uPassword" type="password">
     <button class="primary" onclick="doCreateUser()">Create User</button>
     <div id="userResult"></div>

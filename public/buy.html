@@ -206,7 +206,7 @@ function privacyHtml() {
   const bits = [];
   if (o.privacy_url) bits.push(`How we process your data, and your rights, are in the <a href="${esc(o.privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>.`);
   if (o.contact_email) bits.push(`Questions about your details: <a href="mailto:${esc(o.contact_email)}">${esc(o.contact_email)}</a>.`);
-  return `Your details are stored and used by the Parish to issue your ticket and to find it again for you. ${bits.join(' ')}`;
+  return `Your details are stored and used by the Parish to issue your ticket and to find it again for you. Card payments are processed by SumUp. ${bits.join(' ')}`;
 }
 // A raffle is a lottery: it says who registered it. (The server only sends this for a raffle.)
 function lotteryHtml() {

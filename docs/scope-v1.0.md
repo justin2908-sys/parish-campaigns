@@ -1140,3 +1140,25 @@ number**, **Registered with** (the council) and **Registration runs until** (opt
   registration…" if a raffle closes after the "runs until" date (or has no closing date and the date has passed).
   The certificate says the registration continues until revoked, so renewal is the organiser's call.
 - API: `set_org_lottery` (SuperAdmin); `public_campaign_info` / `public_payment_status` return the registration for raffles.
+
+## 48. Phase 3: Finance and Priest roles, scrambled IPs, Data & privacy, confidentiality statement — 2026-10-12 (on dev; preview only)
+
+- **Two new roles** (SuperAdmin creates them in Users): **Finance** and **Priest**. Neither can sell; they live in the Admin
+  area. Finance sees Campaigns (view), Overview, Sales (including Void and Record refund), Cash Recon, Needs Attention and
+  Registrations — the same screens as an Admin, plus Registrations. Priest sees only Registrations. Users, Recycle Bin and
+  Data & privacy stay SuperAdmin-only. The server enforces every one of these, not just the menu. (Creating registration
+  forms and "own forms" arrive with the registration engine.)
+- **Registrations tab** (SuperAdmin, Finance, Priest only; never Admin or Sellers): the door the registration engine will
+  use. Today it says there are no forms yet.
+- **Confidentiality statement**: before first seeing registrations or Data & privacy, SuperAdmin/Finance/Priest accept a
+  short statement once (recorded with the time; changing its version asks everyone again). Wording is in
+  `CONFIDENTIALITY_POINTS` in index.html — Father may wish to adjust it.
+- **No readable IP addresses**: the address is scrambled with a secret key (HMAC) the moment a request arrives; the
+  scramble is what is counted for limits and stored on purchases. The old readable addresses on past purchases were removed.
+- **Data & privacy** (SuperAdmin): type a mobile number or email; see every sale held for it (name, contact, tickets, notes,
+  when it will be removed); **download** it as a file; or **erase** it (name, contact, notes and the scrambled address go;
+  amounts and ticket numbers stay). Phone numbers are matched however they were typed (07…, +44…, 44…). Each look-up,
+  download and erasure is logged with the person's number/email masked (and a one-way fingerprint), never in full.
+  Erasing a raffle buyer's details warns that they can no longer be reached if they win.
+- API: `confidentiality_status`, `accept_confidentiality`, `registration_responses`, `privacy_search`, `privacy_export`,
+  `privacy_erase`, `privacy_log`. New table `privacy_requests`; `users.confidentiality_version/at`.

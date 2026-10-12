@@ -61,6 +61,12 @@ function httpError(status, message) { const e = new Error(message); e.status = s
 // ---------- abuse limits ----------
 // The caller's address as Netlify's edge reports it (the client can't set this header).
 let clientIp = '';
+// The caller's address, scrambled with a secret key (HMAC): enough to count requests per visitor and to cap
+// unpaid purchases, but it can't be turned back into the address, and nothing stores the readable one.
+function scrambleIp(raw) {
+  if (!raw) return '';
+  return 'h:' + crypto.createHmac('sha256', SESSION_SECRET).update('ip:' + raw).digest('hex').slice(0, 24);
+}
 
 // Attempt counters live in the database (rate_limits) because each request may run on a
 // different server instance. If the counter itself is unreachable we let the request through
@@ -256,7 +262,7 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
     targetOrgId = org_id;
   } else {
     requireOrgRole(session, ['superadmin']);
-    if (!['seller', 'admin', 'superadmin'].includes(role)) throw httpError(400, 'Invalid role');
+    if (!['seller', 'admin', 'superadmin', 'finance', 'priest'].includes(role)) throw httpError(400, 'Invalid role');
     targetOrgId = session.org_id;
   }
   assertPasswordStrength(password);
@@ -319,7 +325,7 @@ async function requireCampaignsInOwnOrg(session, campaignIds) {
 }
 
 async function listUsers(session) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const { data: users } = await supabase.from('users').select('id,mobile,name,role,active,created_at').eq('org_id', session.org_id).order('created_at');
   const { data: disabled } = await supabase.from('user_campaigns').select('user_id, campaign_id');
   const { data: campaigns } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id);
@@ -336,7 +342,7 @@ async function listUsers(session) {
 // The church's name, address and thank-you line, shown on every ticket message from any of its
 // campaigns. Read by any org-scoped role (a seller needs them to build a message), set by SuperAdmin.
 async function getOrgSettings(session) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const { data, error } = await supabase.from('organizations').select('id, name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority, lottery_valid_until').eq('id', session.org_id).single();
   if (error) throw httpError(500, error.message);
   return { organization: data };
@@ -843,7 +849,7 @@ async function releaseStalePendingLinkPayments() {
 }
 
 async function listCampaigns(session, { include_inactive } = {}) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   // The database is an ocean away from the server, so every round trip counts: independent
   // queries run side by side rather than one after another. The expired-link sweep doesn't change
   // what this returns (campaigns, prices, series), so it overlaps the first query, and only runs
@@ -943,7 +949,7 @@ function csvEscape(val) {
 }
 
 async function exportCampaignReport(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin']);
+  requireOrgRole(session, ['superadmin', 'finance']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).single();
   if (!campaign) throw httpError(404, 'Campaign not found');
@@ -1682,7 +1688,7 @@ async function undoSale(session, { payment_id }) {
 // Status of a Pay-by-Link sale. The SumUp notification normally updates it first; this asks
 // SumUp directly as a fallback, so the seller's screen is right even if a notification is late.
 async function checkoutStatus(session, { payment_id }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (payment.status === 'paid' || payment.status === 'failed' || payment.status === 'void') return { status: payment.status };
@@ -1766,7 +1772,7 @@ async function logLinkShared(session, { payment_id, channel }) {
 // in SumUp directly. Re-checks with SumUp rather than trusting a possibly-stale DB status,
 // in case a notification was delayed.
 async function voidSale(session, { payment_id, reason }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   if (!reason || !reason.trim()) throw httpError(400, 'A void reason is required');
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
@@ -1792,7 +1798,7 @@ async function voidSale(session, { payment_id, reason }) {
 // buyer's record agree: how much, and a note (e.g. "Refunded in SumUp, application not accepted"). It does not
 // move money and does not release the tickets. Recording it again replaces the earlier note.
 async function recordRefund(session, { payment_id, amount, note }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const text = String(note == null ? '' : note).trim();
   if (!text) throw httpError(400, 'Add a short note saying why and how it was refunded.');
   if (text.length > 500) throw httpError(400, 'Keep the refund note under 500 characters.');
@@ -1810,7 +1816,7 @@ async function recordRefund(session, { payment_id, amount, note }) {
 
 // Lump-sum cash reconciliation: oldest-first greedy match against a seller's pending cash payments
 async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   if (!campaign_id) throw httpError(400, 'A campaign must be selected — cash is reconciled per campaign, not lumped together');
   await requireCampaignsInOwnOrg(session, [campaign_id]);
   const { data: pending } = await supabase.from('payments')
@@ -1869,7 +1875,7 @@ async function syncOpenLinkPayments(campaignIds) {
 }
 
 async function dashboardState(session, { campaign_id } = {}) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   await releaseStalePendingLinkPayments();
 
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
@@ -1960,7 +1966,7 @@ function groupTicketsForDisplay(payment, allTickets, tiers, blocks) {
 }
 
 async function listRecentPayments(session, { campaign_id } = {}) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
   await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
@@ -1984,7 +1990,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
 }
 
 async function listIncompletePayments(session, { campaign_id } = {}) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   await releaseStalePendingLinkPayments();
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
@@ -2014,7 +2020,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
 // can simply be sent again to the right person). A seller can only touch their own sale; nothing
 // that is already paid or voided.
 async function updateLinkContact(session, { payment_id, contact_value }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only change the details on your own sale.');
@@ -2072,7 +2078,7 @@ async function cancelSumupCheckout(checkoutId) {
 // sale of PHYSICAL tickets whose link is dead (expired/failed). Either way a new link is only
 // ever issued when the old one can no longer be paid — never two live links for one sale.
 async function resendPayment(session, { payment_id }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const isSeller = session.role === 'seller';
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id, name)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
@@ -2202,7 +2208,135 @@ async function sellScreen(session, { campaign_id } = {}) {
 }
 
 // ---------- router ----------
+// ---------- Confidentiality statement ----------
+// Anyone who can see people's registrations (which can hold children's details) accepts a short statement once,
+// before the first time they do. Bumping the number makes everyone accept the new wording again.
+const CURRENT_CONFIDENTIALITY_VERSION = 1;
+const CONFIDENTIAL_ROLES = ['superadmin', 'finance', 'priest'];
+async function requireConfidentiality(session) {
+  const { data: u } = await supabase.from('users').select('confidentiality_version').eq('id', session.uid).maybeSingle();
+  if (!u || (u.confidentiality_version || 0) < CURRENT_CONFIDENTIALITY_VERSION) {
+    const e = httpError(403, 'Please read and accept the confidentiality statement first.');
+    e.code = 'confidentiality_required';
+    throw e;
+  }
+}
+async function confidentialityStatus(session) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  const { data: u } = await supabase.from('users').select('confidentiality_version, confidentiality_at').eq('id', session.uid).maybeSingle();
+  return { accepted: !!u && (u.confidentiality_version || 0) >= CURRENT_CONFIDENTIALITY_VERSION, version: CURRENT_CONFIDENTIALITY_VERSION, accepted_at: u ? u.confidentiality_at : null };
+}
+async function acceptConfidentiality(session) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  const { error } = await supabase.from('users').update({ confidentiality_version: CURRENT_CONFIDENTIALITY_VERSION, confidentiality_at: new Date().toISOString() }).eq('id', session.uid);
+  if (error) throw httpError(500, error.message);
+  return { ok: true };
+}
+
+// Registration responses. The registration forms themselves arrive in a later phase; this is the door they
+// will use, so the access rules (SuperAdmin, Finance and Priest only, after the confidentiality statement,
+// never Admin or Sellers) are already in force and tested.
+async function registrationResponses(session) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  await requireConfidentiality(session);
+  return { forms: [] };
+}
+
+// ---------- Data and privacy: find, export and erase everything held about one person ----------
+function maskSubject(c) {
+  if (c.kind === 'email') { const [u, d] = c.value.split('@'); return u.slice(0, 1) + '•••@' + d; }
+  const v = c.value; return v.slice(0, 2) + '•'.repeat(Math.max(3, v.length - 5)) + v.slice(-3);
+}
+function subjectHash(c) { return crypto.createHmac('sha256', SESSION_SECRET).update('subject:' + c.value).digest('hex').slice(0, 24); }
+// A phone number may have been typed 07…, +44… or 44…: look for all of them.
+function contactVariants(c) {
+  if (c.kind === 'email') return [c.value];
+  const digits = c.value.replace(/\D/g, ''), last10 = digits.slice(-10);
+  return [...new Set([c.value, digits, '0' + last10, '+44' + last10, '44' + last10])];
+}
+async function findPersonRecords(session, query) {
+  const c = parseContact(query, 'Enter the mobile number or email to look up.');
+  const { data: camps } = await supabase.from('campaigns').select('id, name, keep_until, closes_on, kind').eq('org_id', session.org_id);
+  const campById = Object.fromEntries((camps || []).map(x => [x.id, x]));
+  const ids = Object.keys(campById);
+  let payments = [];
+  if (ids.length) {
+    const { data } = await supabase.from('payments').select('*').in('campaign_id', ids).in('contact_value', contactVariants(c)).order('created_at', { ascending: false });
+    payments = data || [];
+  }
+  const payIds = payments.map(p => p.id);
+  const { data: tix } = payIds.length ? await supabase.from('tickets').select('payment_id, ticket_number, block_id, attendee_name').in('payment_id', payIds) : { data: [] };
+  const blockIds = [...new Set((tix || []).map(t => t.block_id))];
+  const { data: blocks } = blockIds.length ? await supabase.from('ticket_blocks').select('id, number_prefix').in('id', blockIds) : { data: [] };
+  const prefix = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
+  const today = ukToday();
+  const records = payments.map(p => {
+    const camp = campById[p.campaign_id] || {};
+    return {
+      payment_id: p.id, campaign: camp.name || '', created_at: p.created_at, amount: Number(p.amount), method: p.method, status: p.status,
+      name: p.payer_name, contact: p.contact_value, link_sent_via: p.contact_channel,
+      refund_amount: p.refund_amount, refund_note: p.refund_note, void_reason: p.void_reason,
+      stored_ip_scrambled: p.client_ip,
+      tickets: (tix || []).filter(t => t.payment_id === p.id).map(t => ({ number: `${prefix[t.block_id] || ''}${t.ticket_number}`, attendee_name: t.attendee_name })),
+      keep_until: camp.keep_until, auto_removal_on: camp.keep_until ? addDaysISO(camp.keep_until, RETENTION_DAYS) : null,
+      campaign_still_running: !!(camp.closes_on ? today <= camp.closes_on : !camp.keep_until || today <= camp.keep_until),
+    };
+  });
+  return { c, payments, records, ticketCount: (tix || []).length };
+}
+function addDaysISO(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+async function logPrivacyRequest(session, kind, c, payments, tickets) {
+  await supabase.from('privacy_requests').insert({ org_id: session.org_id, user_id: session.uid, kind, subject_masked: maskSubject(c), subject_hash: subjectHash(c), found_payments: payments, found_tickets: tickets });
+}
+async function privacySearch(session, { query }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  const r = await findPersonRecords(session, query);
+  await logPrivacyRequest(session, 'search', r.c, r.records.length, r.ticketCount);
+  return { subject: maskSubject(r.c), kind: r.c.kind, records: r.records };
+}
+async function privacyExport(session, { query }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  const r = await findPersonRecords(session, query);
+  await logPrivacyRequest(session, 'export', r.c, r.records.length, r.ticketCount);
+  return { export: { generated_at: new Date().toISOString(), subject: r.c.value, kind: r.c.kind, note: 'Everything St Vincent\'s Parish Campaigns holds about this contact detail.', records: r.records } };
+}
+// Erase = remove the person, keep the books: name, contact, scrambled address, attendee names and free-text notes go;
+// amounts, dates, methods and ticket numbers stay so the accounts and the draw still add up.
+async function privacyErase(session, { query, confirm }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  if (confirm !== true) throw httpError(400, 'Confirm that you want to erase these records.');
+  const r = await findPersonRecords(session, query);
+  const ids = r.payments.map(p => p.id);
+  let tix = 0;
+  if (ids.length) {
+    const { error } = await supabase.from('payments').update({ payer_name: null, contact_value: null, client_ip: null, refund_note: null, void_reason: null, contact_channel: null }).in('id', ids);
+    if (error) throw httpError(500, error.message);
+    const { data: t } = await supabase.from('tickets').update({ attendee_name: null }).in('payment_id', ids).not('attendee_name', 'is', null).select('id');
+    tix = (t || []).length;
+  }
+  await logPrivacyRequest(session, 'erase', r.c, ids.length, tix);
+  return { ok: true, payments_erased: ids.length, attendee_names_erased: tix };
+}
+async function privacyLog(session) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  const { data } = await supabase.from('privacy_requests').select('kind, subject_masked, found_payments, found_tickets, created_at, user_id').eq('org_id', session.org_id).order('created_at', { ascending: false }).limit(50);
+  const { data: users } = await supabase.from('users').select('id, name').eq('org_id', session.org_id);
+  const nameOf = Object.fromEntries((users || []).map(u => [u.id, u.name]));
+  return { requests: (data || []).map(x => ({ ...x, by: nameOf[x.user_id] || '', user_id: undefined })) };
+}
+
 const actions = {
+  confidentiality_status: (s) => confidentialityStatus(s),
+  accept_confidentiality: (s) => acceptConfidentiality(s),
+  registration_responses: (s) => registrationResponses(s),
+  privacy_search: (s, b) => privacySearch(s, b),
+  privacy_export: (s, b) => privacyExport(s, b),
+  privacy_erase: (s, b) => privacyErase(s, b),
+  privacy_log: (s) => privacyLog(s),
   bootstrap_platform_owner: (s, b) => bootstrapPlatformOwner(b),
   create_organization: (s, b) => createOrganization(s, b),
   list_organizations: (s) => listOrganizations(s),
@@ -2282,7 +2416,7 @@ exports.handler = async (event) => {
   const configuredHost = process.env.URL ? new URL(process.env.URL).host.toLowerCase() : '';
   baseUrl = (/^[a-z0-9.-]+$/.test(reqHost) && (reqHost.endsWith('.netlify.app') || reqHost === configuredHost))
     ? `https://${reqHost}` : (process.env.URL || `https://${reqHost}`);
-  clientIp = String(event.headers['x-nf-client-connection-ip'] || String(event.headers['x-forwarded-for'] || '').split(',')[0] || '').trim().slice(0, 64);
+  clientIp = scrambleIp(String(event.headers['x-nf-client-connection-ip'] || String(event.headers['x-forwarded-for'] || '').split(',')[0] || '').trim().slice(0, 64));
   const action = event.path.split('/').pop();
   let body = {};
   try { body = JSON.parse(event.body || '{}'); } catch { return json(400, { error: 'Invalid JSON' }); }
@@ -2314,6 +2448,6 @@ exports.handler = async (event) => {
     }
     return json(200, result);
   } catch (e) {
-    return json(e.status || 500, { error: e.message || 'Server error' });
+    return json(e.status || 500, e.code ? { error: e.message || 'Server error', code: e.code } : { error: e.message || 'Server error' });
   }
 };
