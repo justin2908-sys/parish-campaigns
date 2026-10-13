@@ -1176,3 +1176,15 @@ number**, **Registered with** (the council) and **Registration runs until** (opt
 - **Quick-pick bundles** (shown when the quantity is 0) are the starting quantity and its multiples — 5, 10, 20 for a raffle
   that starts at 5 — so a single ticket is only available from the stepper. Campaigns with no starting quantity keep 1, 5, 10, 20.
 - Checked at a 360×660 phone viewport: no page scroll and no scrolling inside the ticket panel.
+
+## 50. Quick-pick buttons always visible; stale Sell screens told to refresh — 2026-10-13 (on dev; preview only)
+
+- **Public buy page:** the 5 / 10 / 20 quick-pick buttons now always show (single-price campaigns), with the one that matches
+  the quantity highlighted; the page still starts at the default (5). On shorter phone screens (under ~640px) the
+  "Buying several?" heading is hidden, and under ~540px the explanatory sentence too, so nothing scrolls.
+- **A Sell screen left open across an update:** a seller's phone can keep running the old screen for hours. The old
+  screen did not send the buyer's contact for printed cash/machine sales, which the server has required since §46, so those sales
+  were refused with "Enter the buyer's mobile number or email." The Sell screen now sends its build date (`APP_BUILD`) with
+  every sale; if it is older than `MIN_SELL_BUILD` the server answers "The app has been updated. Please refresh this page…
+  Nothing has been recorded yet." (409). A retry of a sale that already went through is still answered normally.
+  Raise both dates whenever a sale needs something new from the screen.
