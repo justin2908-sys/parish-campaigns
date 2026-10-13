@@ -45,7 +45,7 @@ window.__infoP = (function () {
   .mid.picking { min-height:150px; }
   .fine { flex:none; margin:0; padding:0 6px; text-align:center; color:var(--slate); font-size:12.5px; line-height:1.35; }
   .fine b { color:var(--pine); font-weight:600; }
-  .fine .linkbtn { display:block; margin:1px auto 0; padding:4px 8px; }
+  .fine .linkbtn { display:inline; margin:0; padding:3px 2px; font-size:inherit; }
   .sheetbox { position:fixed; left:0; right:0; bottom:0; z-index:25; max-width:520px; margin:0 auto; max-height:82vh; max-height:82dvh; overflow-y:auto; background:var(--surface); border-radius:20px 20px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom)); box-shadow:0 -14px 40px rgba(0,0,0,.4); }
   .sheetbox h2 { margin:0 28px 10px 0; font-family:var(--font-caps); font-weight:400; font-size:15px; letter-spacing:.16em; color:var(--brass-strong); text-transform:uppercase; }
   .sheetbox .close { position:absolute; top:10px; right:12px; width:36px; height:36px; border:none; background:var(--pine-dim); color:var(--pine); border-radius:50%; font-size:16px; font-weight:700; }
@@ -213,6 +213,32 @@ function lotteryHtml() {
   const l = info.org.lottery; if (!l) return '';
   return `Registered society lottery${l.authority ? ' — ' + esc(l.authority) : ''}, no. ${esc(l.number)}. `;
 }
+// One short line on the buying page — the lottery number and a privacy link — with everything else a tap away,
+// so the page stays one screen with no scrolling. (A raffle is a lottery, so only a raffle shows the number.)
+function legalLineHtml() {
+  const l = info.org.lottery;
+  return `${l ? `Registered society lottery <button type="button" class="linkbtn inl" data-sheet="lotteryCard">no. ${esc(l.number)}</button> · ` : ''}<button type="button" class="linkbtn inl" data-sheet="privacyCard">Privacy &amp; your data</button>`;
+}
+function legalSheetsHtml() {
+  const l = info.org.lottery, o = info.org;
+  const price = info.tiers.length === 1 ? ` A ticket is ${money(info.tiers[0].price)}.` : '';
+  const lottery = l ? `<div class="sheetbox" id="lotteryCard" hidden>
+      <button type="button" class="close" data-close="lotteryCard" aria-label="Close">✕</button>
+      <h2>Registered society lottery</h2>
+      <p class="note" style="margin:0 0 8px">This raffle is run by <b>${esc(o.name)}</b>${o.address ? `, ${esc(o.address)}` : ''}.</p>
+      <p class="note" style="margin:0 0 8px">The society is registered${l.authority ? ` with <b>${esc(l.authority)}</b>` : ''} to promote lotteries. Registration number: <b>${esc(l.number)}</b>.</p>
+      <p class="note" style="margin:0">You must be 18 or over to buy a ticket.${price}${info.campaign.details_text ? ' The prizes and the draw date are under <b>Prizes</b>.' : ''}</p>
+    </div>` : '';
+  const privacy = `<div class="sheetbox" id="privacyCard" hidden>
+      <button type="button" class="close" data-close="privacyCard" aria-label="Close">✕</button>
+      <h2>Privacy &amp; your data</h2>
+      <p class="note" style="margin:0 0 8px">The Parish keeps your name and your mobile number or email only to issue your ticket and find it again for you${l ? ', and to contact you if you win' : ''}. Card payments are processed by SumUp.</p>
+      <p class="note" style="margin:0 0 8px">Your details are removed automatically about 90 days after ${l ? 'the raffle' : 'it'} ends.</p>
+      ${o.privacy_url ? `<p class="note" style="margin:0 0 8px">How we process your data, and your rights: <a href="${esc(o.privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>.</p>` : ''}
+      ${o.contact_email ? `<p class="note" style="margin:0">Questions about your details: <a href="mailto:${esc(o.contact_email)}">${esc(o.contact_email)}</a>.</p>` : ''}
+    </div>`;
+  return lottery + privacy;
+}
 function closedPageHtml() {
   const when = info.state === 'not_open' ? `Opens on ${dayText(info.opens_on)}.` : `Closed on ${dayText(info.closes_on)}.`;
   return `<div class="fatal"><div class="card">
@@ -242,6 +268,8 @@ async function boot() {
   // Before it opens or after it closes the page says so plainly (people who already bought can still find their ticket).
   if (info.state === 'not_open' || info.state === 'closed') { app.innerHTML = closedPageHtml(); $('findBtn').onclick = findTicket; return; }
   counts = Object.fromEntries(info.tiers.map(t => [t.id, 0]));
+  // The same "tickets pre-selected" setting the Sellers' screen uses (single price only); the buyer can change it.
+  if (info.tiers.length === 1 && info.campaign.default_qty > 0) counts[info.tiers[0].id] = Math.min(info.campaign.default_qty, MAX_QTY);
   blockId = info.blocks[0].id;
   buildShell();
   syncSlots(); renderQty(); renderMode(); renderPay();
@@ -297,8 +325,8 @@ function buildShell() {
             <label class="sr" for="contactInput">Mobile or email</label><input id="contactInput" placeholder="Mobile or email" autocomplete="email" inputmode="email">
           </div>
         </div>
-        <p class="fine">🔒 Secure payment by SumUp · link valid 30 minutes. <b>After paying, tap the button on SumUp's page to come back and save your ticket.</b> <button type="button" class="linkbtn" id="findToggle">Already paid? Find your ticket</button></p>
-        <p class="fine" id="privacyLine">${lotteryHtml()}${privacyHtml()}</p>
+        <p class="fine">🔒 Secure payment by SumUp · <button type="button" class="linkbtn inl" id="findToggle">Already paid? Find your ticket</button></p>
+        <p class="fine" id="legalLine">${legalLineHtml()}</p>
       </div>
       <div class="paybar"><div class="in">
         <div class="sum"><span id="sumText">Choose your tickets</span><b id="sumPrice">£0.00</b></div>
@@ -312,7 +340,7 @@ function buildShell() {
       <div class="confirmBox"><div class="who">We don't email or text your ticket — <b id="cName"></b>, you'll need these exact details to find it again:</div><div class="big" id="cContact"></div><div class="amt" id="cAmt"></div></div>
       <div class="warn2" id="cWarn" hidden></div>
       <div class="keep">📲 <b>Important — after you pay, come back to this page</b> (tap the button on SumUp's page) and <b>save your ticket</b> to your phone. Then you'll always have it.</div>
-      <p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">${privacyHtml()}</p>
+      <p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">Your details are used only for your ticket. <button type="button" class="linkbtn inl" data-sheet="privacyCard">Privacy &amp; your data</button></p>
       ${info.campaign.age_restricted ? `<p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">By tapping "Yes, that's right" you confirm you are aged 18 or over — the minimum age to buy a raffle ticket.</p>` : ''}
       <button type="button" class="pay" id="confirmPay">Yes, that's right — pay</button>
       <button type="button" class="shuf alt" id="confirmEdit" style="width:100%;margin-top:8px">✏️ Change my details</button>
@@ -324,8 +352,12 @@ function buildShell() {
       <label class="sr" for="fContact">Mobile or email</label><input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email" style="width:100%">
       <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
       <div id="findOut" role="status" aria-live="polite"></div>
-    </div>`;
+    </div>
+    ${legalSheetsHtml()}`;
 
+  // The small print lives behind links: tapping one opens its sheet; the ✕ (or the same link) closes it.
+  document.querySelectorAll('[data-sheet]').forEach(b => { b.onclick = () => { $(b.dataset.sheet).hidden = false; }; });
+  document.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => { $(b.dataset.close).hidden = true; }; });
   if ($('detailsBtn')) { $('detailsBtn').onclick = () => { $('details').hidden = false; }; $('detailsClose').onclick = () => { $('details').hidden = true; }; }
   if ($('seg')) $('seg').onclick = (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); };
   if ($('slots')) $('slots').onclick = onSlotClick;
@@ -379,6 +411,13 @@ function syncSlots() {
   while (slots.length < n) slots.push(null);
   renderSlots();
 }
+// Quick-pick sizes. When the campaign has a starting quantity (a raffle sold in fives), the smallest bundle is that
+// number and the others are its multiples (5, 10, 20): a single ticket is still one tap of − away on the stepper.
+function bundleSizes() {
+  const d = info.campaign.default_qty;
+  const list = d > 1 ? [d, d * 2, d * 4] : [1, 5, 10, 20];
+  return list.filter(k => k <= MAX_QTY);
+}
 function renderMode() {
   const n = totalQty();
   if (!isRaffle()) mode = 'auto';   // no lucky-number picking outside a raffle — always the next ticket available
@@ -396,7 +435,7 @@ function renderMode() {
   if (bd) {
     const t = info.tiers[0];
     bd.innerHTML = (!n && info.tiers.length === 1)
-      ? `<div class="bundleHead">👆 Buying several? Tap a bundle, or use − / +</div><div class="bundles">${[1, 5, 10, 20].filter(k => k <= MAX_QTY).map(k => `<button type="button" class="bundle" data-set="${k}" aria-label="Buy ${k} ticket${k > 1 ? 's' : ''} for ${money(t.price * k)}"><b>${k}</b><span>${k === 1 ? 'ticket' : 'tickets'}</span><em>${money(t.price * k)}</em></button>`).join('')}</div>`
+      ? `<div class="bundleHead">👆 Buying several? Tap a bundle, or use − / +</div><div class="bundles" style="grid-template-columns:repeat(${bundleSizes().length},minmax(0,1fr))">${bundleSizes().map(k => `<button type="button" class="bundle" data-set="${k}" aria-label="Buy ${k} ticket${k > 1 ? 's' : ''} for ${money(t.price * k)}"><b>${k}</b><span>${k === 1 ? 'ticket' : 'tickets'}</span><em>${money(t.price * k)}</em></button>`).join('')}</div>`
       : '';
   }
   renderModeLabelsOnly();
