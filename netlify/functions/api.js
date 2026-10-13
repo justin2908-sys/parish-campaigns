@@ -1080,13 +1080,20 @@ async function checkTickets(session, { campaign_id, ticket_numbers }) {
 // client_ref: a random reference the phone generates per sale attempt. If the reply is lost
 // on a weak signal and the seller retries, the same reference makes this return the ORIGINAL
 // sale rather than creating a second one (see replaySale).
-async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, auto_assign_block_id, method, payer_name, contact_value, client_ref }) {
+// The Sell screen sends its build date with every sale. A phone that has had the app open since before an update
+// still runs the old screen, which may leave out something the server now requires, so it is told plainly to
+// refresh instead of getting a confusing error. Raise this date whenever a sale needs something new from the screen.
+const MIN_SELL_BUILD = '2026-10-13';
+async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, auto_assign_block_id, method, payer_name, contact_value, client_ref, build }) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
   client_ref = cleanClientRef(client_ref);
   if (client_ref) {
     const replay = await replaySale(client_ref, session.uid);
     if (replay) return replay;
+  }
+  if (String(build || '') < MIN_SELL_BUILD) {
+    throw httpError(409, 'The app has been updated. Please refresh this page (pull down, or close the app and open it again), then record the sale. Nothing has been recorded yet.');
   }
   if (!['cash', 'machine', 'link'].includes(method)) throw httpError(400, 'Payment method must be cash, machine or link');
   if (!!ticket_numbers === !!auto_assign_block_id) {

@@ -65,6 +65,7 @@ window.__infoP = (function () {
   .bundles { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
   .bundle { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:9px 2px 8px; border-radius:14px; border:1.5px solid #CDB673; background:linear-gradient(180deg,#FBFBF8,#F0E7CC); color:var(--pine); box-shadow:0 3px 0 #B8913A; }
   .bundle:active { transform:translateY(2px); box-shadow:0 1px 0 #B8913A; }
+  .bundle.on { border-color:var(--pine); background:linear-gradient(180deg,#E7EEE6,#D4E1D3); box-shadow:0 3px 0 var(--pine); }
   .bundle b { font-family:var(--font-head); font-size:27px; font-weight:600; line-height:1.05; }
   .bundle span { font-size:13px; font-weight:600; color:var(--slate); }
   .bundle em { font-style:normal; font-size:14px; font-weight:800; color:var(--wine); margin-top:2px; }
@@ -141,7 +142,9 @@ window.__infoP = (function () {
   .found { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px; margin-top:8px; border-radius:12px; background:var(--gold-dim); border:1px solid #DCCB98; color:var(--ink); text-decoration:none; font-size:15px; }
   .found span { color:var(--muted); font-size:12.5px; text-align:right; }
   @media (max-height:700px) { .mid.picking { min-height:120px; } .bundleHead { margin:8px 0 6px; } .bundle { padding:7px 2px 6px; } .bundle b { font-size:23px; } }
-  @media (max-height:600px) { .top .church { display:none; } .top h1 { font-size:21px; } .seg button { padding:7px 4px; } .fine { font-size:11.5px; } .thanks { font-size:12px; } .card { padding:8px; } .mid.picking { min-height:100px; } }
+  @media (max-height:540px) { #autoNote { display:none; } }   /* very short screens: the button below says what they get */
+  @media (max-height:640px) { .bundleHead { display:none; } .bundles { margin-top:6px; } .bundle { padding:6px 2px 5px; } .bundle b { font-size:22px; } }
+  @media (max-height:640px) { .top .church { display:none; } .top h1 { font-size:21px; } .seg button { padding:7px 4px; } .fine { font-size:11.5px; } .thanks { font-size:12px; } .card { padding:8px; } .mid.picking { min-height:100px; } }
   .fatal { max-width:480px; margin:40px auto; padding:0 16px; }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .bit { display:none; } }
 </style>
@@ -426,16 +429,16 @@ function renderMode() {
   if ($('pickPane')) $('pickPane').hidden = mode !== 'pick';
   const midEl = document.querySelector('.mid'); if (midEl) midEl.classList.toggle('picking', mode === 'pick');
   $('autoNote').innerHTML = isRaffle()
-    ? (n ? `We'll pick <b>${n} number${n > 1 ? 's' : ''}</b> for you from the online series (${esc(rangeWords())}) the moment you pay. Prefer to choose? Tap <b>Pick my numbers</b>.`
+    ? (n ? `We'll pick <b>${n} number${n > 1 ? 's' : ''}</b> for you the moment you pay. Prefer to choose? Tap <b>Pick my numbers</b>.`
          : `Choose how many tickets, and we'll pick the numbers for you — or choose your own.`)
     : (n ? `Your <b>${n} ticket${n > 1 ? 's' : ''}</b> will be ready the moment you pay.`
          : `Choose how many tickets you need.`);
-  // Nothing chosen yet: offer one-tap bundles to fill the empty space (single-price campaigns only).
+  // One-tap bundles are always there (single-price campaigns only); the one that matches the quantity is lit.
   const bd = $('bundles');
   if (bd) {
     const t = info.tiers[0];
-    bd.innerHTML = (!n && info.tiers.length === 1)
-      ? `<div class="bundleHead">👆 Buying several? Tap a bundle, or use − / +</div><div class="bundles" style="grid-template-columns:repeat(${bundleSizes().length},minmax(0,1fr))">${bundleSizes().map(k => `<button type="button" class="bundle" data-set="${k}" aria-label="Buy ${k} ticket${k > 1 ? 's' : ''} for ${money(t.price * k)}"><b>${k}</b><span>${k === 1 ? 'ticket' : 'tickets'}</span><em>${money(t.price * k)}</em></button>`).join('')}</div>`
+    bd.innerHTML = (info.tiers.length === 1)
+      ? `<div class="bundleHead">👆 Buying several? Tap a bundle, or use − / +</div><div class="bundles" style="grid-template-columns:repeat(${bundleSizes().length},minmax(0,1fr))">${bundleSizes().map(k => `<button type="button" class="bundle${k === n ? ' on' : ''}" aria-pressed="${k === n}" data-set="${k}" aria-label="Buy ${k} ticket${k > 1 ? 's' : ''} for ${money(t.price * k)}"><b>${k}</b><span>${k === 1 ? 'ticket' : 'tickets'}</span><em>${money(t.price * k)}</em></button>`).join('')}</div>`
       : '';
   }
   renderModeLabelsOnly();
