@@ -123,6 +123,12 @@
   .sellbtn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; margin:0 0 14px; padding:16px; font-size:19px; font-weight:700; letter-spacing:.01em; color:var(--ink); border:none; border-radius:14px; background:linear-gradient(180deg,#DDBA66,#B8913A); box-shadow:0 4px 0 #8B6A22; }
   .sellbtn:active { transform:translateY(2px); box-shadow:0 2px 0 #8B6A22; }
   .sellbtn .go { font-size:22px; opacity:.85; }
+  /* New-campaign wizard: "how do people sign up?" choices */
+  .kindcard { display:flex; flex-direction:column; gap:3px; width:100%; text-align:left; margin-top:8px; padding:13px 14px; border:1.5px solid var(--stone); border-radius:12px; background:var(--surface); color:var(--ink); font-size:15px; }
+  .kindcard b { font-size:16.5px; }
+  .kindcard span { color:var(--slate); font-size:14px; line-height:1.35; }
+  .kindcard.on { border-color:var(--accent); background:var(--accent-dim); }
+  .kindcard:disabled { opacity:.55; }
 </style>
 </head>
 <body>
@@ -182,7 +188,7 @@ async function call(action, body = {}, timeoutMs = 20000) {
   // The server ends a session when the account is disabled or its password is reset. Go back to
   // the login screen straight away instead of leaving a screen that can't do anything.
   if (res.status === 401 && state.session && action !== 'login') { logout(); throw new Error('Your session has ended — please log in again.'); }
-  if (!res.ok) throw new Error(data.error || 'Something went wrong');
+  if (!res.ok) { const err = new Error(data.error || 'Something went wrong'); if (data.code) err.code = data.code; throw err; }
   return data;
 }
 
@@ -199,9 +205,11 @@ function render() {
   document.getElementById('app').className = '';
   if (!state.session) { renderLogin(); return; }
   if (state.user.needsConsent) { document.getElementById('headerRight').innerHTML = ''; renderConsentGate(); return; }
-  const toAdmin = state.user.role !== 'seller' && state.user.role !== 'platform_owner' && viewMode === 'sell'
+  const staffOnly = state.user.role === 'finance' || state.user.role === 'priest';   // these two never sell
+  if (staffOnly) viewMode = 'admin';
+  const toAdmin = state.user.role !== 'seller' && state.user.role !== 'platform_owner' && !staffOnly && viewMode === 'sell'
     ? `<button onclick="viewMode='admin'; render();">← Admin</button>` : '';
-  const sellingNow = state.user.role === 'seller' || (state.user.role !== 'platform_owner' && viewMode === 'sell');
+  const sellingNow = state.user.role === 'seller' || (state.user.role !== 'platform_owner' && !staffOnly && viewMode === 'sell');
   const linksBtn = sellingNow ? `<button onclick="openLinksPanel()" aria-label="Payment links I have sent">🔗 Links</button>` : '';
   document.getElementById('headerRight').innerHTML = `${toAdmin}${linksBtn}<button onclick="logout()">${toAdmin ? 'Log out' : `Log out (${esc(state.user.name)})`}</button>`;
   if (state.user.role === 'platform_owner') renderPlatformOwner();
@@ -447,9 +455,6 @@ function drawSeller(screen) {
   // side, and the three payment buttons in one row. Recent sales sit behind a slim bar.
   lastStats = stats;
   const multiCamp = campaigns.length > 1, multiBlock = camp.blocks.length > 1;
-  // Online tickets live on the buyer's phone, so name + mobile/email are required for them (any payment
-  // method). For a physical ticket (in the buyer's hand) they are optional — except for a payment link.
-  const sellingOnline = ((camp.blocks.find(b => b.id === selectedBlockId) || {}).type === 'digital');
   document.getElementById('app').className = 'sell';
   document.getElementById('app').innerHTML = h`
     <div id="statsWrap"></div>
@@ -479,8 +484,8 @@ function drawSeller(screen) {
       <div id="ticketRows"></div>
 
       <div class="namecontact">
-        <input id="buyerName" aria-label="Buyer name${sellingOnline ? ' (required)' : ' (optional, needed for Pay by Link)'}" placeholder="${sellingOnline ? 'Buyer name *' : 'Name (optional)'}" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
-        <input id="contactInput" aria-label="Buyer's mobile or email${sellingOnline ? ' (required)' : ' (optional, needed for Pay by Link)'}" placeholder="${sellingOnline ? 'Mobile / email *' : 'Mobile / email (optional)'}" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
+        <input id="buyerName" aria-label="Buyer name (required)" placeholder="Buyer name *" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
+        <input id="contactInput" aria-label="Buyer's mobile or email (required)" placeholder="Mobile / email *" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
       </div>
 
       <div class="totalline"><span>Total</span><b id="totalDisplay">£0.00</b></div>
@@ -896,11 +901,11 @@ async function submitSale(method) {
       errEl.innerHTML = `<div class="error">Fix the flagged ticket number(s) before recording this sale.</div>`; return;
     }
   }
-  // Physical + Cash/Machine: name and contact are optional. Link, or any online ticket: both required.
-  const needsDetails = method === 'link' || autoMode;
-  if (needsDetails && (!buyerNameValue.trim() || !contactValue.trim())) {
+  // Every sale needs the buyer's name and a mobile number or email.
+  const needsDetails = true;
+  if (!buyerNameValue.trim() || !contactValue.trim()) {
     const missing = !buyerNameValue.trim() && !contactValue.trim() ? "name and mobile number or email" : !buyerNameValue.trim() ? 'name' : 'mobile number or email';
-    errEl.innerHTML = `<div class="error">Enter the buyer's ${missing} first — ${method === 'link' ? "that's where the payment link goes" : "an online ticket lives on their phone, so we need to be able to send it"}.</div>`; return;
+    errEl.innerHTML = `<div class="error">Enter the buyer's ${missing} first — ${method === 'link' ? "that's where the payment link goes" : autoMode ? "an online ticket lives on their phone, so we need to be able to send it" : "we need to be able to reach the buyer, for example if they win"}.</div>`; return;
   }
   if (saleInFlight) return; // a second tap while the first is still going must do nothing
   errEl.innerHTML = '';
@@ -1160,18 +1165,23 @@ function shareMenuHtml(a) {
 
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
+// Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TABS_BY_ROLE = {
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations'],
+  priest: ['registrations'],
+};
 async function renderAdmin() {
+  const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
+  if (!tabs.includes(adminTab)) adminTab = tabs[0];
+  const canSell = state.user.role === 'admin' || state.user.role === 'superadmin';
   document.getElementById('app').innerHTML = h`
-    <button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>
+    ${canSell ? `<button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>` : ''}
     <div id="retentionBanner"></div>
     <div class="tabs">
-      <button class="${adminTab==='campaigns'?'active':''}" data-tab="campaigns" onclick="setAdminTab('campaigns')">Campaigns</button>
-      <button class="${adminTab==='overview'?'active':''}" data-tab="overview" onclick="setAdminTab('overview')">Overview</button>
-      <button class="${adminTab==='sales'?'active':''}" data-tab="sales" onclick="setAdminTab('sales')">Sales</button>
-      <button class="${adminTab==='cash'?'active':''}" data-tab="cash" onclick="setAdminTab('cash')">Cash Recon</button>
-      <button class="${adminTab==='attention'?'active':''}" data-tab="attention" onclick="setAdminTab('attention')">Needs Attention</button>
-      ${state.user.role==='superadmin' ? `<button class="${adminTab==='users'?'active':''}" data-tab="users" onclick="setAdminTab('users')">Users</button>` : ''}
-      ${state.user.role==='superadmin' ? `<button class="${adminTab==='bin'?'active':''}" data-tab="bin" onclick="setAdminTab('bin')">Recycle Bin</button>` : ''}
+      ${tabs.map(t => `<button class="${adminTab===t?'active':''}" data-tab="${t}" onclick="setAdminTab('${t}')">${ADMIN_TAB_LABELS[t]}</button>`).join('')}
     </div>
     <div id="adminContent"></div>
   `;
@@ -1190,24 +1200,59 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, users: renderUsersTab, bin: renderRecycleBinTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
   const bannerEl = document.getElementById('retentionBanner'); if (!bannerEl) return;
   try {
-    const { count } = await call('retention_flags');
-    if (!count) { bannerEl.innerHTML = ''; return; }
-    bannerEl.innerHTML = `<div class="card"><div class="hint">${count} old record(s) still carry a buyer's name past the retention window.
-      <button class="small" style="margin-top:8px" onclick="doAnonymize()">Anonymize names now</button></div></div>`;
+    const { count, undated } = await call('retention_flags');
+    const parts = [];
+    if (count) parts.push(`<div class="hint">${count} record${count === 1 ? ' still carries' : 's still carry'} a name or contact detail past the ${RETENTION_DAYS_SHOWN}-day limit after their campaign's "keep until" date. They are removed automatically every night.
+      <button class="small" style="margin-top:8px" onclick="doAnonymize()">Remove them now</button></div>`);
+    if (undated && undated.length) parts.push(`<div class="hint">${undated.length === 1 ? 'This campaign has' : 'These campaigns have'} no "keep the details until" date, so ${undated.length === 1 ? 'its' : 'their'} names and contact details are never removed: <b>${undated.map(c => esc(c.name)).join(', ')}</b>. Open ⚙ Settings and set one under Dates.</div>`);
+    bannerEl.innerHTML = parts.length ? `<div class="card">${parts.join('')}</div>` : '';
   } catch { bannerEl.innerHTML = ''; }
 }
 async function doAnonymize() {
-  try { const r = await call('anonymize_old_data', {}, 60000); alert(`Cleared ${r.payments_cleared} payment name(s) and ${r.tickets_cleared} ticket name(s).`); renderRetentionBanner(); }
+  if (!confirm('Remove names and contact details from every campaign that is past its keep-until date plus 90 days? This cannot be undone.')) return;
+  try { const r = await call('anonymize_old_data', {}, 60000); alert(`Removed details from ${r.payments_cleared} sale(s) and ${r.tickets_cleared} ticket holder name(s).`); renderRetentionBanner(); }
   catch (e) { alert(e.message); }
 }
 
 // ---- Campaigns tab ----
+// Where a campaign stands today (UK calendar days) — the same rule the server uses for who may buy.
+function campaignState(c) {
+  if (c.is_draft) return 'draft';
+  if (!c.active) return 'inactive';
+  const today = ukTodayISO();
+  if (c.opens_on && today < c.opens_on) return 'not_open';
+  if (c.closes_on && today > c.closes_on) return 'closed';
+  return 'open';
+}
+function campaignStatusBadge(c) {
+  const s = campaignState(c);
+  const [cls, text] = { draft: ['warn', 'Draft'], inactive: ['bad', 'Inactive'], not_open: ['warn', 'Opens ' + (c.opens_on ? fmtDay(c.opens_on) : '')], closed: ['bad', 'Closed ' + (c.closes_on ? fmtDay(c.closes_on) : '')], open: ['ok', 'Active'] }[s];
+  return `<span class="badge ${cls}">${esc(text)}</span>`;
+}
+async function doOpenCampaign(id) {
+  if (!confirm('Open this campaign now? It becomes visible to Sellers (if it is for them) and its public page starts working.')) return;
+  try { await call('open_campaign', { campaign_id: id }); if (cset && cset.id === id) openCampaignSettings(id); else renderCampaignsTab(); } catch (e) { alert(e.message); }
+}
+async function doSaveOrgLottery() {
+  const resEl = document.getElementById('orgLotteryResult');
+  try {
+    await call('set_org_lottery', { lottery_reg_number: document.getElementById('orgLotteryNumInput').value, lottery_authority: document.getElementById('orgLotteryAuthInput').value, lottery_valid_until: document.getElementById('orgLotteryUntilInput').value });
+    resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; wizOrg = null;
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function doSaveOrgPrivacy() {
+  const resEl = document.getElementById('orgPrivacyResult');
+  try {
+    await call('set_org_privacy', { contact_email: document.getElementById('orgContactEmailInput').value, privacy_url: document.getElementById('orgPrivacyUrlInput').value });
+    resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null;
+  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
 let draftTiers = [{name:'',price:''},{name:'',price:''}];
 let draftBlocks = [{type:'physical', label:'', range_start:'', range_end:'', number_prefix:''}];
 
@@ -1236,6 +1281,20 @@ async function renderCampaignsTab() {
       <textarea id="orgThankYouInput" rows="3" maxlength="400" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="e.g. Thank you for supporting St.Vincent De Paul Church, Osterley. All funds collected go towards the Church building fund.">${esc(org.thank_you_text||'')}</textarea>
       <button class="small" style="margin-top:8px" onclick="doSaveThankYou()">Save</button>
       <div id="orgThankYouResult"></div>
+      <label style="margin-top:14px">Parish contact email <span class="muted">(shown on public pages as the person to ask about your details)</span></label>
+      <input id="orgContactEmailInput" type="email" inputmode="email" placeholder="e.g. parish@example.org" value="${esc(org.contact_email||'')}">
+      <label style="margin-top:10px">Privacy notice link <span class="muted">(shown on public pages; must start with https://)</span></label>
+      <input id="orgPrivacyUrlInput" type="url" inputmode="url" placeholder="https://" value="${esc(org.privacy_url||'')}">
+      <button class="small" style="margin-top:8px" onclick="doSaveOrgPrivacy()">Save</button>
+      <div id="orgPrivacyResult"></div>
+      <label style="margin-top:18px">Lottery registration number <span class="muted">(your registered society lottery — shown on every raffle's public page and ticket)</span></label>
+      <input id="orgLotteryNumInput" maxlength="40" placeholder="e.g. LBH137701" value="${esc(org.lottery_reg_number||'')}">
+      <label style="margin-top:10px">Registered with <span class="muted">(the council)</span></label>
+      <input id="orgLotteryAuthInput" maxlength="80" placeholder="e.g. London Borough of Hounslow" value="${esc(org.lottery_authority||'')}">
+      <label style="margin-top:10px">Registration runs until <span class="muted">(optional — you are warned if a raffle closes after it)</span></label>
+      <input id="orgLotteryUntilInput" type="date" value="${esc(org.lottery_valid_until||'')}">
+      <button class="small" style="margin-top:8px" onclick="doSaveOrgLottery()">Save</button>
+      <div id="orgLotteryResult"></div>
     </div>` : ''}
     ${state.user.role==='superadmin' ? `<div class="card">
       <h3 style="margin-top:0">SumUp connection</h3>
@@ -1251,15 +1310,15 @@ async function renderCampaignsTab() {
           <td>${esc(c.name)}</td>
           <td>${esc(tierSummary(c))}</td>
           <td>${esc(blockSummary(c))}</td>
-          <td><span class="badge ${c.active?'ok':'bad'}">${c.active?'Active':'Inactive'}</span>${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
+          <td>${campaignStatusBadge(c)}${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
             ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="openCampaignSettings('${c.id}')">⚙ Settings</button>
-            <button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>
+            ${c.is_draft ? `<button class="small" onclick="doOpenCampaign('${c.id}')">Open</button>` : `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>`}
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
           </td>
         </tr>`).join('')}
       </table>
-      <p class="muted">Only Active campaigns are selectable on the Sell screen. "Public only" campaigns never appear there for a Seller, whatever their status.</p>
+      <p class="muted">A campaign appears on the Sell screen only while it is open: not a draft, switched on, and between its opening and closing dates. "Public only" campaigns never appear there for a Seller.</p>
     </div>
     ${state.user.role==='superadmin' && campaigns.length ? `
     <div class="card">
@@ -1350,28 +1409,108 @@ function removeTierRow(i) { if (draftTiers.length<=1) return; draftTiers.splice(
 function addBlockRow() { draftBlocks.push({type: wiz.type==='both' ? 'physical' : wiz.type, label:'', range_start:'', range_end:'', number_prefix:''}); drawWizard(); }
 function removeBlockRow(i) { if (draftBlocks.length<=1) return; draftBlocks.splice(i,1); drawWizard(); }
 
-// ---- New Campaign wizard: a short guided sequence instead of one long form. Going back and
-// changing an earlier answer is always safe — nothing already typed is lost, and the step that
-// depends on it (Ticket blocks depends on Type; Audience depends on Type too) adjusts itself.
-const WIZ_STEPS = ['Basics', 'Tickets', 'Audience', 'Tiers', 'Ticket blocks', 'Details & review'];
-let wizStep = 1, wiz = null;
-function openCampaignWizard() {
-  wiz = { name: '', isRaffle: true, type: 'physical', audience: 'sellers', detailsText: '' };
+// ---- New Campaign wizard ----
+// Six short steps. The questions are the ones that are hard to change later; everything else gets a sensible
+// default and lives in the campaign's Settings. Going back and changing an earlier answer is always safe —
+// nothing already typed is lost, and the steps that depend on it (the ticket rows depend on the ticket type,
+// the audience depends on it too) adjust themselves.
+const WIZ_STEPS = ['Start', 'About it', 'Dates', 'Tickets', 'Prices and numbers', 'Review'];
+let wizStep = 1, wiz = null, wizCampaigns = [], wizOrg = null;
+
+// ---- small date helpers (UK calendar days, 'YYYY-MM-DD') ----
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtDay(iso) { const [y, m, d] = String(iso).split('-').map(Number); return `${d} ${MONTHS_SHORT[m - 1]} ${y}`; }
+function addDaysISO(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function ukTodayISO() { return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); }
+const RETENTION_DAYS_SHOWN = 90;   // matches the server; shown to people so they know when details are removed
+
+// Ready-made starting points. Each only fills in answers; the person still reviews every step.
+const WIZ_TEMPLATES = {
+  raffle: [
+    { id: 'blank', label: 'Blank' },
+    { id: 'prizes', label: 'Raffle with prizes', apply() {
+      wiz.type = 'both'; wiz.audience = 'both';
+      wiz.detailsText = '1st Prize — £\n2nd Prize — £\n3rd Prize — £\nDraw Date: ';
+      draftTiers = [{ name: 'Ticket', price: '' }];
+      draftBlocks = [{ type: 'physical', label: 'Main', range_start: '', range_end: '', number_prefix: '' }, { type: 'digital', label: 'Online', range_start: '', range_end: '', number_prefix: '' }];
+    } },
+  ],
+  event: [
+    { id: 'blank', label: 'Blank' },
+    { id: 'dinner', label: 'Parish dinner', apply() {
+      wiz.type = 'digital'; wiz.audience = 'both';
+      wiz.detailsText = 'Date, time and place:\nMenu:';
+      draftTiers = [{ name: 'Adult', price: '' }, { name: 'Child', price: '' }];
+      draftBlocks = [{ type: 'digital', label: 'Online', range_start: '1', range_end: '', number_prefix: '' }];
+    } },
+    { id: 'pilgrimage', label: 'Pilgrimage', apply() {
+      wiz.type = 'digital'; wiz.audience = 'both';
+      wiz.detailsText = 'Dates and itinerary:\nWhat is included:\nMeeting point and time:';
+      draftTiers = [{ name: 'Place', price: '' }];
+      draftBlocks = [{ type: 'digital', label: 'Places', range_start: '1', range_end: '', number_prefix: '' }];
+    } },
+  ],
+};
+
+// A raffle is a lottery, registered with the council for a stated period. Soft warning only: a registration may
+// simply be renewed, so this never blocks anything.
+function lotteryWarning(kind, closesOn, org) {
+  if (kind !== 'raffle' || !org || !org.lottery_valid_until) return '';
+  if (closesOn && closesOn > org.lottery_valid_until) return `Check your lottery registration: it runs until ${fmtDay(org.lottery_valid_until)}, and this raffle closes on ${fmtDay(closesOn)}.`;
+  if (!closesOn && ukTodayISO() > org.lottery_valid_until) return `Check your lottery registration: it ran until ${fmtDay(org.lottery_valid_until)}.`;
+  return '';
+}
+function wizIsRaffle() { return wiz.kind === 'raffle'; }
+// The campaign-specific content, back to a blank slate for the chosen kind (the name is kept).
+function wizResetContent() {
+  wiz.type = 'physical'; wiz.audience = 'sellers'; wiz.detailsText = '';
+  wiz.defaultQty = wizIsRaffle() ? 5 : 0;
+  wiz.physPay = ['cash', 'machine']; wiz.onlPay = ['cash', 'machine', 'link'];
   draftTiers = [{ name: '', price: '' }, { name: '', price: '' }];
   draftBlocks = [{ type: 'physical', label: '', range_start: '', range_end: '', number_prefix: '' }];
+  wiz.copiedFrom = '';
+}
+async function openCampaignWizard() {
+  wiz = { kind: 'raffle', template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '' };
+  wizResetContent();
   wizStep = 1;
+  wizCampaigns = [];
   drawWizard();
+  try { wizCampaigns = (await call('list_campaigns', { include_inactive: true })).campaigns; if (wiz && wizStep === 1) drawWizard(); } catch { /* copying simply isn't offered */ }
+  try { if (!wizOrg) wizOrg = (await call('get_org_settings')).organization; } catch { /* the lottery date check is simply skipped */ }
 }
 function closeCampaignWizard() { const el = document.getElementById('wizardPanel'); if (el) el.remove(); wiz = null; }
 function wizCanGoPublic() { return wiz.type !== 'physical'; }   // a public page only ever lists ONLINE tickets
-// Keeps the ticket-block rows in step 5 consistent with whatever Type was chosen in step 2 — a row
-// of a now-disallowed type is dropped rather than silently kept and rejected later by the server.
+// Keeps the ticket rows in step 5 consistent with whatever ticket type was chosen in step 4 — a row of a
+// now-disallowed type is dropped rather than silently kept and rejected later by the server.
 function syncWizBlocksToType() {
   const allowed = wiz.type === 'both' ? ['physical', 'digital'] : [wiz.type];
   draftBlocks = draftBlocks.filter(b => allowed.includes(b.type));
   if (!draftBlocks.length) draftBlocks = [{ type: allowed[0], label: '', range_start: '', range_end: '', number_prefix: '' }];
 }
-function setWizRaffle(v) { wiz.isRaffle = v; drawWizard(); }
+function setWizKind(k) { if (wiz.kind === k) return; wiz.kind = k; wiz.template = 'blank'; wizResetContent(); drawWizard(); }
+function wizApplyTemplate(id) {
+  const t = (WIZ_TEMPLATES[wiz.kind] || []).find(x => x.id === id);
+  wizResetContent(); wiz.template = id;
+  if (t && t.apply) t.apply();
+  drawWizard();
+}
+// Copy last year's (or any existing campaign): everything except the dates, which must be chosen afresh.
+function wizCopyCampaign(id) {
+  const c = wizCampaigns.find(x => x.id === id); if (!c) return;
+  wiz.kind = c.kind === 'raffle' ? 'raffle' : 'event'; wiz.template = 'blank';
+  wiz.name = c.name + ' (copy)'; wiz.detailsText = c.details_text || '';
+  const hasP = c.blocks.some(b => b.type === 'physical'), hasD = c.blocks.some(b => b.type === 'digital');
+  wiz.type = hasP && hasD ? 'both' : hasD ? 'digital' : 'physical';
+  wiz.audience = !hasD ? 'sellers' : c.public_only ? 'public' : c.public_page_enabled ? 'both' : 'sellers';
+  draftTiers = c.tiers.map(t => ({ name: t.name, price: String(t.price) }));
+  draftBlocks = c.blocks.map(b => ({ type: b.type, label: b.label, range_start: String(b.range_start), range_end: String(b.range_end), number_prefix: b.number_prefix || '' }));
+  wiz.defaultQty = c.default_ticket_qty || 0;
+  wiz.physPay = c.physical_payment_methods || ['cash', 'machine']; wiz.onlPay = c.online_payment_methods || ['cash', 'machine', 'link'];
+  wiz.opens_on = ''; wiz.closes_on = ''; wiz.keep_until = '';
+  wiz.copiedFrom = c.name;
+  drawWizard();
+}
 function setWizType(t) {
   wiz.type = t;
   if (!wizCanGoPublic() && wiz.audience !== 'sellers') wiz.audience = 'sellers';
@@ -1380,15 +1519,24 @@ function setWizType(t) {
 }
 function setWizAudience(a) { wiz.audience = a; drawWizard(); }
 function goToWizStep(n) { wizStep = n; drawWizard(); }
+
+// The same ordering rules the server applies, so a mistake shows up here in plain words first.
+function wizDateProblem() {
+  const { opens_on: o, closes_on: c, keep_until: k } = wiz;
+  if (!k) return 'Pick the date to keep the details until. Names and contact details are removed 90 days after it, so they are never kept for ever.';
+  if (o && c && c < o) return "The closing date can't be before the opening date.";
+  if (c && k < c) return 'Keep the details until a date on or after the closing date.';
+  if (o && k < o) return 'Keep the details until a date on or after the opening date.';
+  return '';
+}
 function wizValidate(step) {
-  if (step === 1) return wiz.name.trim() ? '' : 'Give the campaign a name.';
-  if (step === 4) return draftTiers.some(t => t.name.trim() !== '' && t.price !== '') ? '' : 'Add at least one price tier.';
+  if (step === 2) return wiz.name.trim() ? '' : 'Give the campaign a name.';
+  if (step === 3) return wizDateProblem();
   if (step === 5) {
+    if (!draftTiers.some(t => t.name.trim() !== '' && t.price !== '')) return 'Add at least one price.';
     const usable = draftBlocks.filter(b => b.range_start !== '' && b.range_end !== '');
-    if (!usable.length) return 'Add at least one ticket block with a first and last number.';
-    if (wizCanGoPublic() && wiz.audience !== 'sellers' && !usable.some(b => b.type === 'digital')) {
-      return 'A public buy page needs at least one Online block.';
-    }
+    if (!usable.length) return 'Add at least one set of tickets with a first and last number.';
+    if (wizCanGoPublic() && wiz.audience !== 'sellers' && !usable.some(b => b.type === 'digital')) return 'A public buy page needs at least one online set of tickets.';
   }
   return '';
 }
@@ -1400,59 +1548,95 @@ function wizNext() {
   drawWizard();
 }
 function wizBack() { wizStep = Math.max(1, wizStep - 1); drawWizard(); }
+function wizKeepSameAsClose() { if (!wiz.closes_on) return; wiz.keep_until = wiz.closes_on; const el = document.getElementById('wKeep'); if (el) el.value = wiz.keep_until; wizDatesNote(); }
+// Live note under the dates: when the details will actually be removed. Updates in place (no redraw) so typing isn't interrupted.
+function wizDatesNote() {
+  const el = document.getElementById('wizDelNote'); if (!el) return;
+  el.textContent = wiz.keep_until ? `Names, mobile numbers, emails and IP addresses will be removed on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}, ${RETENTION_DAYS_SHOWN} days after that. Amounts and ticket numbers are kept for the accounts.` : '';
+}
+
+function wizSummaryHtml() {
+  const n = esc(wiz.name.trim() || 'This campaign');
+  const kind = wizIsRaffle() ? 'raffle' : 'ticket event';
+  const who = { public: 'on the public page only', sellers: 'by Sellers only', both: 'by Sellers and on the public page' }[wiz.audience];
+  const tiers = draftTiers.filter(t => t.name.trim() && t.price !== '');
+  const blocks = draftBlocks.filter(b => b.range_start !== '' && b.range_end !== '');
+  const places = blocks.reduce((s, b) => s + (Number(b.range_end) - Number(b.range_start) + 1), 0);
+  const prices = tiers.map(t => `${esc(t.name)} £${Number(t.price).toFixed(2)}`).join(', ');
+  const open = wiz.opens_on ? `Sales open on ${fmtDay(wiz.opens_on)}.` : 'Sales open as soon as you open it.';
+  const close = wiz.closes_on ? `They close on ${fmtDay(wiz.closes_on)}.` : 'There is no closing date.';
+  const lot = lotteryWarning(wiz.kind, wiz.closes_on, wizOrg);
+  const keep = wiz.keep_until ? `Names and contact details are kept until ${fmtDay(wiz.keep_until)} and removed 90 days later, on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}.` : '';
+  return `<b>${n}</b> is a ${kind}, sold ${who}. ${open} ${close} ${prices || 'No prices yet'}; ${places} ticket${places === 1 ? '' : 's'} in total. ${keep}${lot ? ` <b class="warnText">${lot}</b>` : ''}`;
+}
 
 function wizStepHtml() {
-  if (wizStep === 1) return `
-    <label>Campaign name</label><input id="wName" value="${esc(wiz.name)}" placeholder="e.g. Christmas Dinner 2026" oninput="wiz.name=this.value">
-    <label style="margin-top:14px">What is this campaign?</label>
-    <div class="toggle" style="width:100%">
-      <button type="button" class="${wiz.isRaffle?'active':''}" onclick="setWizRaffle(true)">🎟️ Raffle or lottery</button>
-      <button type="button" class="${!wiz.isRaffle?'active alt':''}" onclick="setWizRaffle(false)">🎫 Ticket-selling event</button>
-    </div>
-    <p class="muted" style="margin-top:8px">${wiz.isRaffle ? "Buyers can pick a lucky number, and must confirm they're 18 or over before paying." : 'Buyers just get the next ticket — no numbers to choose, no age check.'}</p>`;
+  if (wizStep === 1) {
+    const tpls = WIZ_TEMPLATES[wiz.kind] || [];
+    return `
+    <label style="margin-top:0">How do people sign up?</label>
+    <button type="button" class="kindcard ${wiz.kind === 'raffle' ? 'on' : ''}" onclick="setWizKind('raffle')"><b>🎟️ Raffle</b><span>People choose numbers, confirm they are 18 or over, and pay. Sellers can sell it in person too.</span></button>
+    <button type="button" class="kindcard ${wiz.kind === 'event' ? 'on' : ''}" onclick="setWizKind('event')"><b>🎫 Ticket event</b><span>People choose how many tickets, give their details and pay. A dinner, an outing, a pilgrimage.</span></button>
+    <button type="button" class="kindcard" disabled><b>📝 Registration</b><span>People give their details first, with an optional payment. Coming soon.</span></button>
+    <label style="margin-top:16px">Start from</label>
+    <div class="toggle" style="flex-wrap:wrap">${tpls.map(t => `<button type="button" style="flex:1 1 110px" class="${wiz.template === t.id && !wiz.copiedFrom ? 'active' : ''}" onclick="wizApplyTemplate('${t.id}')">${esc(t.label)}</button>`).join('')}</div>
+    ${wizCampaigns.length ? `<label>Or copy an earlier campaign <span class="muted">(everything except the dates)</span></label>
+      <select id="wCopy" onchange="if (this.value) wizCopyCampaign(this.value)"><option value="">${wiz.copiedFrom ? 'Copied from ' + esc(wiz.copiedFrom) : 'Choose one…'}</option>${wizCampaigns.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>` : ''}`;
+  }
   if (wizStep === 2) return `
-    <label>What kind of tickets?</label>
+    <label style="margin-top:0">Campaign name</label><input id="wName" value="${esc(wiz.name)}" placeholder="${wizIsRaffle() ? 'e.g. Christmas Raffle 2026' : 'e.g. Parish Dinner 2026'}" oninput="wiz.name=this.value">
+    <label style="margin-top:14px">What should people know? <span class="muted">(optional — ${wizIsRaffle() ? 'prizes, draw date, tagline' : 'what it is, when, where'}; shown on the public page and in every ticket message)</span></label>
+    <textarea id="wDetails" rows="5" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" oninput="wiz.detailsText=this.value" placeholder="${wizIsRaffle() ? 'e.g. 1st Prize — £1,200 · 2nd Prize — £500\nDraw Date: 20 December 2026' : 'e.g. Bring a chair — games and BBQ from 12pm.'}">${esc(wiz.detailsText)}</textarea>`;
+  if (wizStep === 3) return `
+    <label style="margin-top:0">Opens <span class="muted">(optional — blank means as soon as you open it)</span></label>
+    <input type="date" id="wOpens" value="${esc(wiz.opens_on)}" oninput="wiz.opens_on=this.value">
+    <label>Closes <span class="muted">(optional — the last day people can buy)</span></label>
+    <input type="date" id="wCloses" value="${esc(wiz.closes_on)}" oninput="wiz.closes_on=this.value">
+    <label>Keep the details until <b>*</b> <span class="muted">${wizIsRaffle() ? '(for a raffle, usually the draw date)' : '(usually the date of the event)'}</span></label>
+    <input type="date" id="wKeep" value="${esc(wiz.keep_until)}" oninput="wiz.keep_until=this.value; wizDatesNote()">
+    <button type="button" class="link" style="margin-top:6px" onclick="wizKeepSameAsClose()">Same as the closing date</button>
+    <p class="muted" id="wizDelNote" style="margin-top:8px">${wiz.keep_until ? `Names, mobile numbers, emails and IP addresses will be removed on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}, ${RETENTION_DAYS_SHOWN} days after that. Amounts and ticket numbers are kept for the accounts.` : ''}</p>`;
+  if (wizStep === 4) { const canPublic = wizCanGoPublic(); return `
+    <label style="margin-top:0">What kind of tickets?</label>
     <div class="toggle" style="width:100%;flex-wrap:wrap">
-      <button type="button" style="flex:1 1 110px" class="${wiz.type==='physical'?'active':''}" onclick="setWizType('physical')">🎫 Physical</button>
+      <button type="button" style="flex:1 1 110px" class="${wiz.type==='physical'?'active':''}" onclick="setWizType('physical')">🎫 Printed</button>
       <button type="button" style="flex:1 1 110px" class="${wiz.type==='digital'?'active alt':''}" onclick="setWizType('digital')">💻 Online</button>
       <button type="button" style="flex:1 1 110px" class="${wiz.type==='both'?'active alt':''}" onclick="setWizType('both')">🔀 Both</button>
     </div>
-    <p class="muted" style="margin-top:8px">${({ physical: 'Printed tickets, handed over by a Seller.', digital: 'No printed tickets — assigned automatically, sold by a Seller and/or the public page.', both: 'A mix of printed and online tickets in the same campaign.' })[wiz.type]}</p>`;
-  if (wizStep === 3) { const canPublic = wizCanGoPublic(); return `
-    <label>Who can buy it?</label>
+    <p class="muted" style="margin-top:8px">${({ physical: 'Printed tickets, handed over by a Seller.', digital: 'No printed tickets. Each buyer gets theirs on their phone.', both: 'A mix of printed and online tickets in the same campaign.' })[wiz.type]}</p>
+    <label style="margin-top:16px">Who can buy it?</label>
     <div class="toggle" style="width:100%;flex-wrap:wrap">
-      ${canPublic ? `<button type="button" style="flex:1 1 110px" class="${wiz.audience==='public'?'active':''}" onclick="setWizAudience('public')">🌐 Public site</button>` : ''}
+      ${canPublic ? `<button type="button" style="flex:1 1 110px" class="${wiz.audience==='public'?'active':''}" onclick="setWizAudience('public')">🌐 Public page</button>` : ''}
       <button type="button" style="flex:1 1 110px" class="${wiz.audience==='sellers'?'active':''}" onclick="setWizAudience('sellers')">🧑‍🤝‍🧑 Sellers</button>
       ${canPublic ? `<button type="button" style="flex:1 1 110px" class="${wiz.audience==='both'?'active alt':''}" onclick="setWizAudience('both')">🔀 Both</button>` : ''}
     </div>
     ${!canPublic
-      ? `<p class="muted" style="margin-top:8px">Physical-only campaigns are always sold in person by a Seller — there's no public buy page without an Online series. Go back to Tickets to add one if you want this on the public site.</p>`
-      : `<p class="muted" style="margin-top:8px">${({ public: 'Hidden from Sellers — only the public buy page sells it.', sellers: "Sellers sell it from their Sell screen; there's no public buy page.", both: 'Sellers can sell it, and the public buy page is also live.' })[wiz.audience]}</p>`}`; }
-  if (wizStep === 4) return `
-    <label>Price tiers</label>
-    <div id="tierRows">${draftTiers.map((t,i)=>tierRowHtml(t,i)).join('')}</div>
-    <button type="button" class="ghost" onclick="addTierRow()">+ Add another tier</button>`;
+      ? `<p class="muted" style="margin-top:8px">Printed tickets are always sold in person by a Seller. The public page needs online tickets, so choose Online or Both above if you want one.</p>`
+      : `<p class="muted" style="margin-top:8px">${({ public: 'Hidden from Sellers. Only the public buy page sells it.', sellers: 'Sellers sell it from their Sell screen. There is no public page.', both: 'Sellers can sell it, and the public buy page is live too.' })[wiz.audience]}</p>`}`; }
   if (wizStep === 5) { const locked = wiz.type !== 'both'; return `
-    <label>Ticket blocks ${locked ? '' : '<span class="muted">— physical, digital, or a mix</span>'}</label>
+    <label style="margin-top:0">Prices</label>
+    <div id="tierRows">${draftTiers.map((t,i)=>tierRowHtml(t,i)).join('')}</div>
+    <button type="button" class="ghost" onclick="addTierRow()">+ Add another price</button>
+    <label style="margin-top:16px">Ticket numbers ${locked ? '' : '<span class="muted">— printed, online, or both</span>'}</label>
     <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i,locked)).join('')}</div>
-    <button type="button" class="ghost" onclick="addBlockRow()">+ Add another block</button>`; }
-  // step 6
-  const audienceLabel = { public: 'Public site only', sellers: 'Sellers only', both: 'Sellers + public site' }[wiz.audience];
+    <button type="button" class="ghost" onclick="addBlockRow()">+ Add another set of numbers</button>`; }
+  // step 6: review
+  const single = draftTiers.filter(t => t.name.trim() && t.price !== '').length === 1;
+  const audienceLabel = { public: 'Public page only', sellers: 'Sellers only', both: 'Sellers and the public page' }[wiz.audience];
   const tierList = draftTiers.filter(t=>t.name.trim()&&t.price!=='').map(t=>`${esc(t.name)} £${Number(t.price).toFixed(2)}`).join(', ') || '—';
-  const blockList = draftBlocks.filter(b=>b.range_start!==''&&b.range_end!=='').map(b=>`${b.type==='digital'?'Online':'Physical'} ${b.range_start}–${b.range_end}`).join(', ') || '—';
+  const blockList = draftBlocks.filter(b=>b.range_start!==''&&b.range_end!=='').map(b=>`${b.type==='digital'?'Online':'Printed'} ${b.range_start}–${b.range_end}`).join(', ') || '—';
   return `
-    <label>Campaign details <span class="muted">(optional — ${wiz.isRaffle ? 'prizes, draw date, tagline' : 'what it is, timing, anything worth telling buyers'})</span></label>
-    <textarea id="wDetails" rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" oninput="wiz.detailsText=this.value" placeholder="${wiz.isRaffle ? "e.g. 1st Prize — £1,200 · 2nd Prize — £500 · 3rd Prize — £300\nDraw Date: 20 December 2026" : 'e.g. Bring a chair — games and BBQ from 12pm.'}">${esc(wiz.detailsText)}</textarea>
-    <div class="card" style="background:var(--brass-dim);margin-top:14px">
-      <div class="stat"><span>Name</span><b>${esc(wiz.name)||'—'}</b></div>
-      <div class="stat"><span>Type <button type="button" class="link" onclick="goToWizStep(1)">Edit</button></span><b>${wiz.isRaffle?'Raffle or lottery':'Ticket-selling event'}</b></div>
-      <div class="stat"><span>Tickets <button type="button" class="link" onclick="goToWizStep(2)">Edit</button></span><b>${({physical:'Physical',digital:'Online',both:'Both'})[wiz.type]}</b></div>
-      <div class="stat"><span>Audience <button type="button" class="link" onclick="goToWizStep(3)">Edit</button></span><b>${audienceLabel}</b></div>
-      <div class="stat"><span>Tiers <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${tierList}</b></div>
-      <div class="stat"><span>Blocks <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${blockList}</b></div>
-    </div>
-    <p class="muted" style="margin:10px 0 0">Sellers get ${wiz.type !== 'digital' ? '<b>Cash</b> and <b>Machine</b> for printed tickets' : ''}${wiz.type === 'both' ? ', and ' : ''}${wiz.type !== 'physical' ? '<b>Cash, Machine and Pay by link</b> for online tickets' : ''}.${wiz.isRaffle && draftTiers.filter(t => t.name.trim() && t.price !== '').length === 1 ? ' Each sale starts at <b>5 tickets</b> on the Sell screen.' : ''} You can change that any time from the campaign's ⚙ Settings.</p>
-    <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard()">Create Campaign</button>
+    <div class="card" style="background:var(--brass-dim);margin:0 0 12px"><p style="margin:0;line-height:1.5">${wizSummaryHtml()}</p></div>
+    <div class="stat"><span>Kind <button type="button" class="link" onclick="goToWizStep(1)">Edit</button></span><b>${wizIsRaffle() ? 'Raffle' : 'Ticket event'}</b></div>
+    <div class="stat"><span>Name <button type="button" class="link" onclick="goToWizStep(2)">Edit</button></span><b>${esc(wiz.name) || '—'}</b></div>
+    <div class="stat"><span>Dates <button type="button" class="link" onclick="goToWizStep(3)">Edit</button></span><b>${wiz.opens_on ? fmtDay(wiz.opens_on) : 'any time'} to ${wiz.closes_on ? fmtDay(wiz.closes_on) : 'no end'}</b></div>
+    <div class="stat"><span>Tickets <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${({physical:'Printed',digital:'Online',both:'Printed and online'})[wiz.type]} · ${audienceLabel}</b></div>
+    <div class="stat"><span>Prices <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${tierList}</b></div>
+    <div class="stat"><span>Numbers <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${blockList}</b></div>
+    <p class="muted" style="margin:10px 0 0">Sellers get ${wiz.type !== 'digital' ? '<b>' + wiz.physPay.map(m => ({cash:'Cash',machine:'Machine',link:'Pay by link'})[m]).join(', ') + '</b> for printed tickets' : ''}${wiz.type === 'both' ? ', and ' : ''}${wiz.type !== 'physical' ? '<b>' + wiz.onlPay.map(m => ({cash:'Cash',machine:'Machine',link:'Pay by link'})[m]).join(', ') + '</b> for online tickets' : ''}.${single && wiz.defaultQty > 0 ? ` Each sale starts at <b>${wiz.defaultQty} ticket${wiz.defaultQty === 1 ? '' : 's'}</b> on the Sell screen.` : ''} You can change any of that later in the campaign's ⚙ Settings.</p>
+    <p class="muted" style="margin:10px 0 0">Saving as a draft means only you can see it, through a private preview, until you open it.</p>
+    <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard(true)">Save as draft</button>
+    <button type="button" class="secondary" onclick="doCreateCampaignWizard(false)">Open it now instead</button>
     <div id="wizCreateResult"></div>`;
 }
 function drawWizard() {
@@ -1471,7 +1655,7 @@ function drawWizard() {
     </div>
   </div>`;
 }
-async function doCreateCampaignWizard() {
+async function doCreateCampaignWizard(asDraft) {
   const resEl = document.getElementById('wizCreateResult');
   try {
     const tiers = draftTiers.filter(t=>t.name.trim()!=='' && t.price!=='').map(t=>({name:t.name.trim(), price:Number(t.price)}));
@@ -1480,20 +1664,21 @@ async function doCreateCampaignWizard() {
       range_start:Number(b.range_start), range_end:Number(b.range_end),
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
-    await call('create_campaign', {
+    const r = await call('create_campaign', {
       name: wiz.name.trim(), tiers, blocks, details_text: wiz.detailsText,
-      age_restricted: wiz.isRaffle,
+      kind: wiz.kind,
+      opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
+      is_draft: !!asDraft,
       public_only: wiz.audience === 'public',
       public_page_enabled: wiz.audience !== 'sellers',
-      // Sellers' payment buttons: printed tickets are paid for on the spot, so no payment link by default
-      // (changeable any time in the campaign's Settings).
-      physical_payment_methods: ['cash', 'machine'],
-      online_payment_methods: ['cash', 'machine', 'link'],
-      // A raffle is sold in fives: the Sell screen starts each sale at 5 (single price tier only; change in Settings).
-      default_ticket_qty: wiz.isRaffle ? 5 : 0,
+      // Sellers' payment buttons and the Sell screen's starting quantity (single price only); changeable any time in Settings.
+      physical_payment_methods: wiz.physPay,
+      online_payment_methods: wiz.onlPay,
+      default_ticket_qty: tiers.length === 1 ? wiz.defaultQty : 0,
     }, 60000);
     closeCampaignWizard();
-    renderCampaignsTab();
+    await renderCampaignsTab();
+    if (asDraft && r.campaign) openCampaignSettings(r.campaign.id);   // straight to Preview / Open
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 // ---- Campaign settings: everything about ONE campaign on one screen ----
@@ -1514,6 +1699,7 @@ async function openCampaignSettings(id) {
     const campaign = campaigns.find(c => c.id === id);
     if (!campaign) throw new Error('Campaign not found');
     cset = { id, campaign, msgs };
+    try { if (!wizOrg) wizOrg = (await call('get_org_settings')).organization; } catch { /* the lottery date check is simply skipped */ }
   } catch (e) { cset = { id, error: e.message, msgs }; }
   drawCampaignSettings();
 }
@@ -1545,10 +1731,26 @@ function drawCampaignSettings() {
     body = `
       <div class="card">
         <b>Status &amp; visibility</b>
-        <div class="stat" ${row}><span>Status</span><span><span class="badge ${c.active ? 'ok' : 'bad'}">${c.active ? 'Active' : 'Inactive'}</span> <button class="small" onclick="csetDo('set_campaign_active',{active:${!c.active}})">${c.active ? 'Deactivate' : 'Activate'}</button></span></div>
+        ${c.is_draft ? `<div class="hint" style="margin:8px 0 4px">This is a <b>draft</b>. Only you can see it, through the private preview. Sellers and the public cannot see it until you open it.</div>` : ''}
+        <div class="stat" ${row}><span>Status</span><span>${campaignStatusBadge(c)} ${c.is_draft ? `<button class="small" onclick="doOpenCampaign('${c.id}')">Open campaign</button>` : `<button class="small" onclick="csetDo('set_campaign_active',{active:${!c.active}})">${c.active ? 'Deactivate' : 'Activate'}</button>`}</span></div>
+        ${hasOnline && c.public_page_enabled ? `<div class="stat" ${row}><span>See it as the public will</span><span><button class="small" onclick="doPreviewCampaign('${c.id}')">Preview</button></span></div>` : ''}
         <div class="stat" ${row}><span>Shown to Sellers</span><span>${c.public_only ? 'No' : 'Yes'} <button class="small" onclick="csetDo('set_campaign_visibility',{public_only:${!c.public_only}})">${c.public_only ? 'Show to Sellers' : 'Hide from Sellers'}</button></span></div>
         ${hasOnline ? `<div class="stat" ${row}><span>Public buy page</span><span>${c.public_page_enabled ? 'On' : 'Off'} <button class="small" onclick="csetDo('set_campaign_visibility',{public_page_enabled:${!c.public_page_enabled}})">${c.public_page_enabled ? 'Turn off' : 'Turn on'}</button>${c.public_page_enabled ? ` <button class="small" onclick="doCopyPublicLink('${c.id}')">Copy link</button>` : ''}</span></div>` : ''}
-        <div class="stat" ${row}><span>Type</span><b>${c.age_restricted ? 'Raffle or lottery (18+ check)' : 'Ticket-selling event'}</b></div>
+        <div class="stat" ${row}><span>Kind</span><b>${c.kind === 'raffle' || (!c.kind && c.age_restricted) ? 'Raffle (18+ check)' : c.kind === 'registration' ? 'Registration' : 'Ticket event'}</b></div>
+      </div>
+      <div class="card">
+        <b>Dates</b>
+        <div class="muted" style="margin:2px 0 6px">Sales stop outside the opening and closing dates. Names and contact details are removed ${RETENTION_DAYS_SHOWN} days after "keep until".</div>
+        ${c.keep_until ? '' : `<div class="hint" style="margin:6px 0">This campaign has no "keep until" date, so its names and contact details are never removed. Set one below.</div>`}
+        <label>Opens <span class="muted">(optional)</span></label>
+        <input id="csetOpens" type="date" value="${esc(c.opens_on || '')}">
+        <label>Closes <span class="muted">(optional — the last day people can buy)</span></label>
+        <input id="csetCloses" type="date" value="${esc(c.closes_on || '')}">
+        <label>Keep the details until <b>*</b></label>
+        <input id="csetKeep" type="date" value="${esc(c.keep_until || '')}">
+        <button class="primary" style="margin-top:8px" onclick="doSaveCsetDates(false)">Save dates</button>
+        <div id="cmsg-dates">${cset.msgs.dates || ''}</div>
+        ${lotteryWarning(c.kind, c.closes_on, wizOrg) ? `<div class="hint" style="margin-top:8px">${esc(lotteryWarning(c.kind, c.closes_on, wizOrg))}</div>` : ''}
       </div>
       ${hasPhysical ? payGroupHtml('physical', 'Payment options — physical tickets', 'What a Seller can tap when selling printed tickets. They are usually paid for on the spot, so Pay by link is often not needed.', c.physical_payment_methods || ['cash', 'machine', 'link']) : ''}
       ${hasOnline ? payGroupHtml('online', 'Payment options — online tickets', 'What a Seller can tap when selling online tickets. The public buy page is not affected — it always pays by link.', c.online_payment_methods || ['cash', 'machine', 'link']) : ''}
@@ -1606,6 +1808,29 @@ async function doSaveDefaultQty() {
     cset.msgs.qty = `<div class="info">Saved — ${n ? `each sale now starts at ${n} ticket${n === 1 ? '' : 's'}` : 'each sale now starts empty'}.</div>`;
   } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   openCampaignSettings(cset.id);
+}
+// Dates are saved on their own. Moving "keep until" to a day already more than 90 days gone would remove that
+// campaign's names and contact details at the next nightly clean-up, so the server asks first and this confirms.
+async function doSaveCsetDates(confirmed) {
+  const msgEl = document.getElementById('cmsg-dates');
+  const body = { campaign_id: cset.id, opens_on: document.getElementById('csetOpens').value, closes_on: document.getElementById('csetCloses').value, keep_until: document.getElementById('csetKeep').value };
+  try {
+    const r = await call('set_campaign_dates', { ...body, confirm: !!confirmed });
+    cset.msgs.dates = `<div class="info">Saved. Names and contact details will be removed on ${esc(fmtDay(r.delete_on))}.</div>`;
+  } catch (e) {
+    if (/confirm to remove them/.test(e.message) && !confirmed) { if (confirm(e.message)) return doSaveCsetDates(true); msgEl.innerHTML = ''; return; }
+    msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return;
+  }
+  openCampaignSettings(cset.id);
+}
+// Opens the public page exactly as the public will see it, through a private 24-hour link. Nothing can be bought from it.
+async function doPreviewCampaign(id) {
+  const w = window.open('', '_blank');   // opened first, in the tap, so a pop-up blocker allows it
+  try {
+    const { token } = await call('campaign_preview_link', { campaign_id: id });
+    const url = `${location.origin}/buy.html?campaign_id=${id}&preview=${encodeURIComponent(token)}`;
+    if (w) w.location.href = url; else prompt('Copy this private preview link (it works for 24 hours):', url);
+  } catch (e) { if (w) w.close(); alert(e.message); }
 }
 async function doSaveCsetDetails() {
   const msgEl = document.getElementById('cmsg-details');
@@ -1734,7 +1959,7 @@ async function doRestoreCampaign(id) { try { await call('restore_campaign', { ca
 // ---- Overview tab: how the campaign(s) are doing, and who sold what ----
 async function renderOverviewTab() {
   const seq = adminSeq;
-  const { campaigns } = await call('list_campaigns');
+  const { campaigns } = await call('list_campaigns', { include_inactive: true });   // closed campaigns still need their reports
   const d = await call('dashboard_state', { campaign_id: campaignFilter || undefined });
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   const pct = d.total ? Math.round((d.sold / d.total) * 100) : 0;
@@ -1774,7 +1999,7 @@ async function renderOverviewTab() {
 // ---- Sales tab ----
 async function renderSalesTab() {
   const seq = adminSeq;
-  const { campaigns } = await call('list_campaigns');
+  const { campaigns } = await call('list_campaigns', { include_inactive: true });   // closed campaigns still need their reports
   const { payments } = await call('list_recent_payments', { campaign_id: campaignFilter || undefined });
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><label>Viewing</label>
@@ -1788,10 +2013,18 @@ async function renderSalesTab() {
       <td>${p.tickets.join(' · ')}</td>
       <td>${esc(p.payer_name||'—')}${p.contact_value ? `<br><span class="muted">${esc(p.contact_value)}${p.contact_channel ? ' · via ' + p.contact_channel : ''}</span>` : ''}</td>
       <td>${esc(p.seller)}</td><td>£${Number(p.amount).toFixed(2)}</td><td>${{cash:'Cash',machine:'Machine',link:'Link'}[p.method]||p.method}</td>
-      <td><span class="badge ${p.status==='paid'?'ok':p.status==='pending'?'warn':'bad'}">${p.status==='pending' ? (p.method==='link' ? 'awaiting payment' : p.method==='cash' ? 'cash to reconcile' : 'pending') : p.status==='failed' ? 'link expired' : p.status}</span></td>
-      <td>${p.status!=='void' && !(p.method==='link' && p.status==='paid') ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}</td>
+      <td><span class="badge ${p.status==='paid'?'ok':p.status==='pending'?'warn':'bad'}">${p.status==='pending' ? (p.method==='link' ? 'awaiting payment' : p.method==='cash' ? 'cash to reconcile' : 'pending') : p.status==='failed' ? 'link expired' : p.status}</span>${p.refund_amount != null ? `<br><span class="badge bad">Refunded £${Number(p.refund_amount).toFixed(2)}</span><br><span class="muted">${esc(p.refund_note || '')}</span>` : ''}</td>
+      <td>${p.status!=='void' && !(p.method==='link' && p.status==='paid') ? `<button class="small" onclick="doVoid('${p.id}')">Void</button>` : ''}${p.status!=='void' && p.status!=='failed' && !(p.method==='link' && p.status!=='paid') ? ` <button class="small" onclick="doRefund('${p.id}', ${Number(p.amount)}, ${p.refund_amount != null})">${p.refund_amount != null ? 'Edit refund' : 'Record refund'}</button>` : ''}</td>
     </tr>`).join('')}
     </table></div>`;
+}
+// A refund is made by hand (in SumUp, or in cash); this only writes it down so the records agree.
+async function doRefund(paymentId, total, already) {
+  const amt = prompt(`How much was refunded, in £? (The sale was £${Number(total).toFixed(2)}. Refund it in SumUp or in cash first, then record it here — this does not move any money.)`, Number(total).toFixed(2));
+  if (amt === null) return;
+  const note = prompt('A short note — why, and how it was refunded (e.g. "Application not accepted; refunded in SumUp"):');
+  if (note === null) return;
+  try { await call('record_refund', { payment_id: paymentId, amount: amt, note }); renderSalesTab(); } catch (e) { alert(e.message); }
 }
 async function doVoid(paymentId) {
   const reason = prompt('Reason for voiding this sale? (An unpaid payment link is cancelled too. A payment SumUp has already received can\'t be voided here.)');
@@ -1802,7 +2035,7 @@ async function doVoid(paymentId) {
 // ---- Cash Recon tab ----
 async function renderCashTab() {
   const seq = adminSeq;
-  const { campaigns } = await call('list_campaigns');
+  const { campaigns } = await call('list_campaigns', { include_inactive: true });   // cash from a closed campaign still needs reconciling
   const { users } = await call('list_users');
   const sellers = users.filter(u => u.active); // anyone active can have cash to reconcile
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
@@ -1865,6 +2098,119 @@ async function doResend(paymentId) {
   catch (e) { alert(e.message); }
 }
 
+// ---- Registrations (SuperAdmin, Finance, Priest) ----
+// The registration forms arrive in a later phase. This tab is already behind the real access rules: the server
+// refuses Admins and Sellers, and everyone else first accepts the confidentiality statement below.
+const ROLE_LABELS = { platform_owner: 'Platform Owner', superadmin: 'SuperAdmin', admin: 'Admin', finance: 'Finance', priest: 'Priest', seller: 'Seller' };
+const CONFIDENTIALITY_POINTS = [
+  'The details in registrations can include children and families, and religious information. They are private.',
+  'I will use them only for the purpose they were collected for, and I will not share or discuss them outside the parish team.',
+  'If I download or copy anything, I will keep it secure and delete it when I have finished with it.',
+  'If I think details have been seen by someone who should not see them, I will tell the parish priest or the SuperAdmin straight away.',
+];
+let confRetry = null;
+function renderConfidentialityGate(seq, retry) {
+  confRetry = retry;
+  const el = adminEl(seq); if (!el) return;
+  el.innerHTML = `<div class="card">
+    <h3 style="margin-top:0">Before you see people's details</h3>
+    <p>Please read this and confirm. You only need to do it once.</p>
+    <ul style="padding-left:20px;line-height:1.6;margin:0 0 14px">${CONFIDENTIALITY_POINTS.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+    <button class="primary" onclick="doAcceptConfidentiality()">✅ I understand and agree</button>
+    <div id="confResult"></div>
+  </div>`;
+}
+async function doAcceptConfidentiality() {
+  const el = document.getElementById('confResult');
+  try { await call('accept_confidentiality'); if (confRetry) confRetry(); }
+  catch (e) { if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function renderRegistrationsTab() {
+  const seq = adminSeq;
+  try {
+    await call('registration_responses');
+    const el = adminEl(seq); if (!el) return;
+    el.innerHTML = `<div class="card"><h3 style="margin-top:0">Registrations</h3>
+      <p class="muted" style="margin:0">There are no registration forms yet. When a form is open, the answers will appear here. Only SuperAdmin, Finance and Priest can see them.</p></div>`;
+  } catch (e) {
+    if (e.code === 'confidentiality_required') return renderConfidentialityGate(seq, renderRegistrationsTab);
+    const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`;
+  }
+}
+
+// ---- Data and privacy (SuperAdmin) ----
+// Find everything held about one person (by the mobile number or email they gave), download it, or erase it.
+// Erasing removes the person but keeps the amounts and ticket numbers so the accounts and the draw still add up.
+let pvQuery = '';
+async function renderPrivacyTab() {
+  const seq = adminSeq;
+  let log;
+  try { log = (await call('privacy_log')).requests; }
+  catch (e) {
+    if (e.code === 'confidentiality_required') return renderConfidentialityGate(seq, renderPrivacyTab);
+    const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return;
+  }
+  const el = adminEl(seq); if (!el) return;
+  el.innerHTML = `<div class="card"><h3 style="margin-top:0">Find a person</h3>
+    <p class="muted">Someone has asked what you hold about them, or asked you to remove it. Type the mobile number or email they gave when they bought.</p>
+    <input id="pvQuery" placeholder="Mobile or email" value="${esc(pvQuery)}" autocomplete="off" onkeydown="if(event.key==='Enter')doPrivacySearch()">
+    <button class="primary" style="margin-top:8px" onclick="doPrivacySearch()">Look up</button>
+    <div id="pvResult"></div></div>
+    <div class="card"><h3 style="margin-top:0">Requests so far</h3><div id="pvLog">${privacyLogHtml(log)}</div></div>`;
+}
+function privacyLogHtml(log) {
+  if (!log.length) return '<p class="muted" style="margin:0">Nothing yet. Every look-up, download and erasure is recorded here, without the full number or email.</p>';
+  const word = { search: 'Looked up', export: 'Downloaded', erase: 'Erased' };
+  return `<table><tr><th>When</th><th>Who</th><th>What</th><th>About</th><th>Found</th></tr>${log.map(r => `<tr><td>${esc(new Date(r.created_at).toLocaleString('en-GB'))}</td><td>${esc(r.by)}</td><td>${word[r.kind] || esc(r.kind)}</td><td>${esc(r.subject_masked)}</td><td>${r.found_payments} sale${r.found_payments === 1 ? '' : 's'}</td></tr>`).join('')}</table>`;
+}
+async function refreshPrivacyLog() {
+  try { const { requests } = await call('privacy_log'); const el = document.getElementById('pvLog'); if (el) el.innerHTML = privacyLogHtml(requests); } catch { /* the log is a convenience here */ }
+}
+async function doPrivacySearch() {
+  const out = document.getElementById('pvResult');
+  pvQuery = document.getElementById('pvQuery').value.trim();
+  out.innerHTML = '<p class="muted">Looking…</p>';
+  try {
+    const r = await call('privacy_search', { query: pvQuery });
+    refreshPrivacyLog();
+    if (!r.records.length) { out.innerHTML = `<div class="info" style="margin-top:10px">Nothing is held for ${esc(r.subject)}.</div>`; return; }
+    const running = r.records.filter(x => x.campaign_still_running).length;
+    out.innerHTML = `<p style="margin:12px 0 6px"><b>${r.records.length} sale${r.records.length === 1 ? '' : 's'}</b> for ${esc(r.subject)}</p>
+      ${running ? `<div class="hint">${running} of these ${running === 1 ? 'is' : 'are'} for a campaign that is still running. If you erase a raffle buyer, you can no longer reach them if they win.</div>` : ''}
+      ${r.records.map(x => `<div class="card" style="margin:8px 0;background:var(--paper)">
+        <b>${esc(x.campaign)}</b> · ${esc(new Date(x.created_at).toLocaleDateString('en-GB'))} · £${Number(x.amount).toFixed(2)} · ${esc(x.method)} · ${esc(x.status)}
+        <div class="muted">Name: ${esc(x.name || '— (already removed)')} · Contact: ${esc(x.contact || '— (already removed)')}</div>
+        <div class="muted">Tickets: ${x.tickets.length ? esc(x.tickets.map(t => t.number).join(', ')) : 'none held'}</div>
+        ${x.refund_amount != null ? `<div class="muted">Refund £${Number(x.refund_amount).toFixed(2)}: ${esc(x.refund_note || '')}</div>` : ''}
+        <div class="muted">${x.auto_removal_on ? 'Removed automatically on ' + esc(fmtDay(x.auto_removal_on)) : 'No keep-until date, so never removed automatically'}</div>
+      </div>`).join('')}
+      <button class="small" onclick="doPrivacyExport()">⬇ Download everything (file)</button>
+      <button class="small" style="margin-left:6px" onclick="doPrivacyErase()">Erase these records</button>
+      <div id="pvAction"></div>`;
+  } catch (e) { out.innerHTML = `<div class="error" style="margin-top:10px">${esc(e.message)}</div>`; }
+}
+async function doPrivacyExport() {
+  const el = document.getElementById('pvAction');
+  try {
+    const { export: data } = await call('privacy_export', { query: pvQuery });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `data-held-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    el.innerHTML = '<div class="info" style="margin-top:8px">Downloaded. It holds the full number or email, so keep it secure and delete it when you have sent it.</div>';
+    refreshPrivacyLog();
+  } catch (e) { el.innerHTML = `<div class="error" style="margin-top:8px">${esc(e.message)}</div>`; }
+}
+async function doPrivacyErase() {
+  const el = document.getElementById('pvAction');
+  if (!confirm('Erase the name, contact details and notes on every one of these sales? The amounts and ticket numbers stay. This cannot be undone.')) return;
+  try {
+    const r = await call('privacy_erase', { query: pvQuery, confirm: true });
+    el.innerHTML = `<div class="info" style="margin-top:8px">Erased from ${r.payments_erased} sale${r.payments_erased === 1 ? '' : 's'}.</div>`;
+    refreshPrivacyLog();
+  } catch (e) { el.innerHTML = `<div class="error" style="margin-top:8px">${esc(e.message)}</div>`; }
+}
+
 // ---- Users tab (SuperAdmin only) ----
 async function renderUsersTab() {
   const seq = adminSeq;
@@ -1873,7 +2219,7 @@ async function renderUsersTab() {
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Users</h3>
     <table><tr><th>Name</th><th>Mobile</th><th>Role</th><th>Status</th><th></th></tr>
-    ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${u.role}</td>
+    ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
       <td><span class="badge ${u.active?'ok':'bad'}">${u.active?'Active':'Disabled'}</span></td>
       <td><button class="small" onclick="toggleUserActive('${u.id}', ${!u.active})">${u.active?'Disable':'Enable'}</button>
       <button class="small" onclick="doResetPassword('${u.id}')">Reset PW</button></td></tr>`).join('')}
@@ -1881,7 +2227,7 @@ async function renderUsersTab() {
     <div class="card"><h3 style="margin-top:0">Add User</h3>
     <label>Name</label><input id="uName">
     <label>Mobile</label><input id="uMobile" type="tel">
-    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="superadmin">SuperAdmin</option></select>
+    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="finance">Finance</option><option value="priest">Priest</option><option value="superadmin">SuperAdmin</option></select>
     <label>Password (8+ characters)</label><input id="uPassword" type="password">
     <button class="primary" onclick="doCreateUser()">Create User</button>
     <div id="userResult"></div>

@@ -1092,3 +1092,73 @@ existing campaign has until changed). Set in ⚙ Settings → **Sell screen** �
 - Not changed: the public buy page still starts at none, so a buyer chooses.
 Side fix: an online series now builds its ticket rows as soon as a count is present, so a count carried across a
 series switch is immediately sellable instead of showing "5" with nothing behind it.
+
+## 45. Campaign kinds, dates, automatic deletion, draft & preview, privacy notice — 2026-10-11 (on dev; preview only)
+
+Phase 1 of the data-protection / registrations design. Nothing here is live until Justin says publish.
+- **Kind**: every campaign is a `raffle`, a ticketed `event` or (later phases) a `registration`. The New campaign
+  wizard now starts by asking which, and the questions that follow depend on it. Templates ("Raffle", "Ticketed
+  event", …) pre-fill the answers, and **Copy an earlier campaign** starts from a past one (name, series, tiers,
+  payment options) with the dates left blank.
+- **Three dates** (UK calendar days): *Opens on*, *Closes on*, **Keep until** (required). Before it opens the
+  public page and Sell show "Opens on…"; after it closes they show "Closed on…" (people who already paid can still
+  find their ticket). Dates can be changed in ⚙ Settings → Dates. Setting a Keep-until that is already more than
+  90 days past asks for confirmation, because the data would be removed that night.
+- **Automatic deletion**: 90 days after *Keep until* a nightly job (pg_cron `retention-daily`, 03:30) anonymises
+  names, contact details, buyer IP and attendee names on that campaign's sales (`retention_run`). Amounts, ticket
+  numbers and totals stay so reports still reconcile. A banner warns Admins about campaigns with no Keep-until.
+- **Draft & preview**: a campaign can be saved as a **draft** (invisible to the public and sellers). Admins get a
+  private *Preview* link (signed, valid 24 h) showing the public page exactly as buyers will see it; buying is
+  never possible from a preview. **Open campaign** makes a draft live.
+- **Privacy notice**: Church details gains *Privacy notice link* (St Vincent's: the Diocese of Westminster notice)
+  and *Parish contact email*. The public buy page and the ticket page show a short statement plus both.
+- API: `set_campaign_dates`, `open_campaign`, `campaign_preview_link`, `set_org_privacy`; `create_campaign` takes
+  `kind`, dates, `is_draft`; `public_campaign_info` returns `state`, dates and org privacy fields.
+
+## 46. Every sale needs a name and contact; recording a manual refund — 2026-10-11 (on dev; preview only)
+
+- **Name and mobile/email are required on every sale** — printed or online, cash, machine or link (before, they were
+  optional for printed tickets paid in cash or by machine). Enforced by the server (`record_sale`) as well as the Sell
+  screen, which now shows both boxes as required. Reason: a raffle winner has to be reachable. These details are
+  removed automatically 90 days after the campaign's "keep until" date (§45).
+- **Record a refund** (Admin and SuperAdmin, Admin → Sales): refunds are still made BY HAND, in SumUp or in cash.
+  The button only writes it down — how much (up to the sale amount, default all of it) and a required short note.
+  It does not move money and does not release the tickets. Recording again replaces the earlier entry. Not offered
+  for voided, expired or unpaid-link sales. The Sales list shows a "Refunded £x" tag with the note; the campaign CSV
+  has Refund Amount / Refund Note / Refunded At. Totals and dashboards are unchanged (gross takings).
+  New `payments` columns: `refund_amount`, `refund_note`, `refunded_at`, `refunded_by`. The refund note and the void
+  reason (free text that may hold a name) are cleared by the automatic deletion along with names and contacts.
+
+## 47. Lottery registration shown on raffles — 2026-10-12 (on dev; preview only)
+
+St Vincent's is registered with the London Borough of Hounslow to run society lotteries (certificate no. LBH137701,
+valid 4 March – 31 December 2026, renewal fee due each 1 January). Church details now holds **Lottery registration
+number**, **Registered with** (the council) and **Registration runs until** (optional); St Vincent's is already filled in.
+- Every **raffle** (not ticket events) shows "Registered society lottery — London Borough of Hounslow, no. LBH137701" on
+  its public buy page (and the closed/not-yet-open page) and on the buyer's ticket page. The server only sends it for a raffle.
+- A **warning, never a block**: the wizard's review step and the campaign's Dates card say "Check your lottery
+  registration…" if a raffle closes after the "runs until" date (or has no closing date and the date has passed).
+  The certificate says the registration continues until revoked, so renewal is the organiser's call.
+- API: `set_org_lottery` (SuperAdmin); `public_campaign_info` / `public_payment_status` return the registration for raffles.
+
+## 48. Phase 3: Finance and Priest roles, scrambled IPs, Data & privacy, confidentiality statement — 2026-10-12 (on dev; preview only)
+
+- **Two new roles** (SuperAdmin creates them in Users): **Finance** and **Priest**. Neither can sell; they live in the Admin
+  area. Finance sees Campaigns (view), Overview, Sales (including Void and Record refund), Cash Recon, Needs Attention and
+  Registrations — the same screens as an Admin, plus Registrations. Priest sees only Registrations. Users, Recycle Bin and
+  Data & privacy stay SuperAdmin-only. The server enforces every one of these, not just the menu. (Creating registration
+  forms and "own forms" arrive with the registration engine.)
+- **Registrations tab** (SuperAdmin, Finance, Priest only; never Admin or Sellers): the door the registration engine will
+  use. Today it says there are no forms yet.
+- **Confidentiality statement**: before first seeing registrations or Data & privacy, SuperAdmin/Finance/Priest accept a
+  short statement once (recorded with the time; changing its version asks everyone again). Wording is in
+  `CONFIDENTIALITY_POINTS` in index.html — Father may wish to adjust it.
+- **No readable IP addresses**: the address is scrambled with a secret key (HMAC) the moment a request arrives; the
+  scramble is what is counted for limits and stored on purchases. The old readable addresses on past purchases were removed.
+- **Data & privacy** (SuperAdmin): type a mobile number or email; see every sale held for it (name, contact, tickets, notes,
+  when it will be removed); **download** it as a file; or **erase** it (name, contact, notes and the scrambled address go;
+  amounts and ticket numbers stay). Phone numbers are matched however they were typed (07…, +44…, 44…). Each look-up,
+  download and erasure is logged with the person's number/email masked (and a one-way fingerprint), never in full.
+  Erasing a raffle buyer's details warns that they can no longer be reached if they win.
+- API: `confidentiality_status`, `accept_confidentiality`, `registration_responses`, `privacy_search`, `privacy_export`,
+  `privacy_erase`, `privacy_log`. New table `privacy_requests`; `users.confidentiality_version/at`.

@@ -61,6 +61,12 @@ function httpError(status, message) { const e = new Error(message); e.status = s
 // ---------- abuse limits ----------
 // The caller's address as Netlify's edge reports it (the client can't set this header).
 let clientIp = '';
+// The caller's address, scrambled with a secret key (HMAC): enough to count requests per visitor and to cap
+// unpaid purchases, but it can't be turned back into the address, and nothing stores the readable one.
+function scrambleIp(raw) {
+  if (!raw) return '';
+  return 'h:' + crypto.createHmac('sha256', SESSION_SECRET).update('ip:' + raw).digest('hex').slice(0, 24);
+}
 
 // Attempt counters live in the database (rate_limits) because each request may run on a
 // different server instance. If the counter itself is unreachable we let the request through
@@ -256,7 +262,7 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
     targetOrgId = org_id;
   } else {
     requireOrgRole(session, ['superadmin']);
-    if (!['seller', 'admin', 'superadmin'].includes(role)) throw httpError(400, 'Invalid role');
+    if (!['seller', 'admin', 'superadmin', 'finance', 'priest'].includes(role)) throw httpError(400, 'Invalid role');
     targetOrgId = session.org_id;
   }
   assertPasswordStrength(password);
@@ -319,7 +325,7 @@ async function requireCampaignsInOwnOrg(session, campaignIds) {
 }
 
 async function listUsers(session) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const { data: users } = await supabase.from('users').select('id,mobile,name,role,active,created_at').eq('org_id', session.org_id).order('created_at');
   const { data: disabled } = await supabase.from('user_campaigns').select('user_id, campaign_id');
   const { data: campaigns } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id);
@@ -336,8 +342,8 @@ async function listUsers(session) {
 // The church's name, address and thank-you line, shown on every ticket message from any of its
 // campaigns. Read by any org-scoped role (a seller needs them to build a message), set by SuperAdmin.
 async function getOrgSettings(session) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
-  const { data, error } = await supabase.from('organizations').select('id, name, address, thank_you_text').eq('id', session.org_id).single();
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
+  const { data, error } = await supabase.from('organizations').select('id, name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority, lottery_valid_until').eq('id', session.org_id).single();
   if (error) throw httpError(500, error.message);
   return { organization: data };
 }
@@ -376,11 +382,24 @@ async function setCampaignDetails(session, { campaign_id, details_text }) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty }) {
+async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
   if (!blocks || !blocks.length) throw httpError(400, 'Add at least one ticket block');
+  // What kind of campaign: how people sign up. A raffle (choose numbers) is the 18+ kind. A registration
+  // (details first) isn't built yet. Callers that don't say keep the old meaning of age_restricted.
+  if (kind === 'registration') throw httpError(400, "Registrations aren't available yet.");
+  if (kind !== undefined && !['raffle', 'event'].includes(kind)) throw httpError(400, 'Choose raffle or ticket event.');
+  const campaignKind = kind || (age_restricted === false ? 'event' : 'raffle');
+  // Dates (UK calendar days). Every campaign says how long its personal details are kept, so they can
+  // never live on indefinitely: they're removed 90 days after this date.
+  const dates = {
+    opens_on: cleanDate(opens_on, 'The opening date'),
+    closes_on: cleanDate(closes_on, 'The closing date'),
+    keep_until: cleanDate(keep_until, 'The "keep the details until" date', { required: true }),
+  };
+  checkDateOrder(dates);
   // A public buy page (whether public-only, or public-and-Sellers) needs somewhere to sell from —
   // it only ever lists ONLINE tickets. Checked before anything is created, same as everything else here.
   const wantsPublicPage = public_page_enabled === undefined ? true : !!public_page_enabled;
@@ -416,9 +435,12 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
       // public_only: a self-service campaign (e.g. an online-only registration) that never shows on a
       // Seller's Sell screen — Admins/SuperAdmins are unaffected and can still sell it in person if needed.
       public_only: !!public_only,
-      // age_restricted: the public page's 18+ confirmation, on by default (a raffle/lottery needs it);
-      // an ordinary paid event that isn't gambling (a dinner, a picnic) can turn it off.
-      age_restricted: age_restricted === undefined ? true : !!age_restricted,
+      // age_restricted: the public page's 18+ confirmation and number-picking — the raffle kind. An ordinary
+      // paid event that isn't gambling (a dinner, a pilgrimage) is the other kind.
+      kind: campaignKind, age_restricted: campaignKind === 'raffle',
+      ...dates,
+      // A new campaign made through the wizard starts as a draft: invisible to Sellers and the public until opened.
+      is_draft: !!is_draft, active: !is_draft,
       public_page_enabled: wantsPublicPage,
       // Left out = all three, as before. The wizard sends its own defaults (no payment link for physical).
       physical_payment_methods: physical_payment_methods === undefined ? PAYMENT_METHODS : cleanPaymentMethods(physical_payment_methods, 'physical tickets'),
@@ -593,6 +615,137 @@ function cleanPaymentMethods(v, what) {
   return PAYMENT_METHODS.filter(m => out.includes(m));   // always stored in the same order
 }
 
+// ---------- campaign dates, draft state, preview ----------
+// Dates are UK calendar days ('YYYY-MM-DD'), compared as text. "Today" is always the UK date, whatever
+// time zone the server runs in.
+function ukToday() { return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); }
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatDay(s) { const [y, m, d] = String(s).split('-').map(Number); return `${d} ${MONTHS[m - 1]} ${y}`; }
+function cleanDate(v, what, { required } = {}) {
+  if (v === undefined || v === null || v === '') {
+    if (required) throw httpError(400, `Pick ${what}.`);
+    return null;
+  }
+  const s = String(v).trim();
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T00:00:00Z') : null;   // "2026-13-45" is an Invalid Date, so check before toISOString
+  const ok = !!parsed && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === s;
+  if (!ok) throw httpError(400, `${what} isn't a valid date.`);
+  const year = Number(s.slice(0, 4));
+  if (year < 2020 || year > 2100) throw httpError(400, `${what} looks wrong — check the year.`);
+  return s;
+}
+function checkDateOrder({ opens_on, closes_on, keep_until }) {
+  if (opens_on && closes_on && closes_on < opens_on) throw httpError(400, "The closing date can't be before the opening date.");
+  if (keep_until && closes_on && keep_until < closes_on) throw httpError(400, 'Keep the details until a date on or after the closing date.');
+  if (keep_until && opens_on && keep_until < opens_on) throw httpError(400, 'Keep the details until a date on or after the opening date.');
+}
+// Is this campaign taking sales or applications today? draft / inactive / not_open / closed / open.
+function campaignOpenState(c) {
+  if (c.binned) return 'unavailable';
+  if (c.is_draft) return 'draft';
+  if (!c.active) return 'inactive';
+  const today = ukToday();
+  if (c.opens_on && today < c.opens_on) return 'not_open';
+  if (c.closes_on && today > c.closes_on) return 'closed';
+  return 'open';
+}
+function notOpenMessage(c, state) {
+  if (state === 'not_open') return `This opens on ${formatDay(c.opens_on)}.`;
+  if (state === 'closed') return `This closed on ${formatDay(c.closes_on)}.`;
+  return 'This campaign is not available for purchase right now.';
+}
+// The campaign a public visitor is allowed to act on right now (look up numbers, buy), or a refusal.
+async function openPublicCampaign(campaign_id, preview) {
+  const { data: c } = await supabase.from('campaigns').select('id, active, binned, is_draft, opens_on, closes_on').eq('id', campaign_id).eq('public_page_enabled', true).maybeSingle();
+  const state = c ? campaignOpenState(c) : 'unavailable';
+  // A private preview link may look numbers up on a campaign that isn't open yet; buying is never allowed from it.
+  if (state !== 'open' && !(c && !c.binned && preview && validPreviewToken(preview, campaign_id))) {
+    throw httpError(404, c ? notOpenMessage(c, state) : 'This campaign is not available for purchase right now.');
+  }
+  return c;
+}
+// A private link that lets an Admin see a draft (or closed) campaign's public page exactly as the public will,
+// for 24 hours. It only ever shows the page — a preview can never buy anything.
+function previewSignature(campaign_id, exp) { return crypto.createHmac('sha256', SESSION_SECRET).update(`preview:${campaign_id}:${exp}`).digest('base64url'); }
+function makePreviewToken(campaign_id) { const exp = Date.now() + 24 * 60 * 60 * 1000; return `${exp}.${previewSignature(campaign_id, exp)}`; }
+function validPreviewToken(token, campaign_id) {
+  const [exp, sig] = String(token || '').split('.');
+  if (!exp || !sig || !(Number(exp) > Date.now())) return false;
+  const want = Buffer.from(previewSignature(campaign_id, exp)), got = Buffer.from(sig);
+  return want.length === got.length && crypto.timingSafeEqual(want, got);
+}
+async function campaignPreviewLink(session, { campaign_id }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  return { token: makePreviewToken(campaign_id) };
+}
+
+// Opening, closing and keep-until dates, changed after creation. Moving "keep until" to a day that has
+// already passed (+90) would remove that campaign's personal details at the next daily clean-up, so that
+// needs an explicit confirmation.
+async function setCampaignDates(session, { campaign_id, opens_on, closes_on, keep_until, confirm }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const dates = {
+    opens_on: cleanDate(opens_on, 'The opening date'),
+    closes_on: cleanDate(closes_on, 'The closing date'),
+    keep_until: cleanDate(keep_until, 'The "keep the details until" date', { required: true }),
+  };
+  checkDateOrder(dates);
+  const delDay = new Date(dates.keep_until + 'T00:00:00Z'); delDay.setUTCDate(delDay.getUTCDate() + RETENTION_DAYS);
+  const deleteOn = delDay.toISOString().slice(0, 10);
+  const willClearNow = deleteOn < ukToday();
+  if (willClearNow && !confirm) {
+    const [{ count: pay }, { count: tix }] = await Promise.all([
+      supabase.from('payments').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id).or('payer_name.not.is.null,contact_value.not.is.null,client_ip.not.is.null'),
+      supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id).not('attendee_name', 'is', null),
+    ]);
+    if ((pay || 0) + (tix || 0) > 0) {
+      throw httpError(409, `That date is already more than ${RETENTION_DAYS} days ago, so the names and contact details of ${pay || 0} sale${pay === 1 ? '' : 's'} would be removed at the next daily clean-up. Choose a later date, or confirm to remove them.`);
+    }
+  }
+  const { error } = await supabase.from('campaigns').update(dates).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, delete_on: deleteOn, ...dates };
+}
+
+// A draft becomes a live campaign: visible to Sellers (if it's for them) and the public page works.
+async function openCampaign(session, { campaign_id }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const { error } = await supabase.from('campaigns').update({ is_draft: false, active: true }).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// The church's contact email (shown on public pages as the person to ask about their details) and the link to
+// its privacy notice. Both optional; the link must be a web address.
+async function setOrgPrivacy(session, { contact_email, privacy_url }) {
+  requireOrgRole(session, ['superadmin']);
+  const email = String(contact_email == null ? '' : contact_email).trim().toLowerCase();
+  if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw httpError(400, "That email address doesn't look right.");
+  const url = String(privacy_url == null ? '' : privacy_url).trim();
+  if (url && (url.length > 500 || !/^https:\/\/[^\s]+\.[^\s]+$/.test(url))) throw httpError(400, 'The privacy notice link must start with https://');
+  const { error } = await supabase.from('organizations').update({ contact_email: email || null, privacy_url: url || null }).eq('id', session.org_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// The church's lottery registration with its local council (a registered society lottery): shown on every raffle's
+// public page and ticket. The "valid until" date only drives a warning when a raffle runs past it.
+async function setOrgLottery(session, { lottery_reg_number, lottery_authority, lottery_valid_until }) {
+  requireOrgRole(session, ['superadmin']);
+  const num = String(lottery_reg_number == null ? '' : lottery_reg_number).trim();
+  const auth = String(lottery_authority == null ? '' : lottery_authority).trim();
+  if (num.length > 40) throw httpError(400, 'The registration number is too long.');
+  if (auth.length > 80) throw httpError(400, 'The council name is too long.');
+  if (num && !/^[A-Za-z0-9 ./-]+$/.test(num)) throw httpError(400, 'The registration number can only hold letters, numbers, spaces and - / .');
+  const until = cleanDate(lottery_valid_until, 'The registration end date');
+  const { error } = await supabase.from('organizations').update({ lottery_reg_number: num || null, lottery_authority: auth || null, lottery_valid_until: until }).eq('id', session.org_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
 // How many tickets a Seller's Sell screen has pre-selected at the start of every sale (e.g. 5 for a raffle
 // sold in fives). Whole number 0–50; 0 means start empty.
 function cleanDefaultQty(v) {
@@ -696,13 +849,14 @@ async function releaseStalePendingLinkPayments() {
 }
 
 async function listCampaigns(session, { include_inactive } = {}) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   // The database is an ocean away from the server, so every round trip counts: independent
   // queries run side by side rather than one after another. The expired-link sweep doesn't change
   // what this returns (campaigns, prices, series), so it overlaps the first query, and only runs
   // at most once a minute (sweepIfDue) instead of on every screen load.
   let q = supabase.from('campaigns').select('*').eq('org_id', session.org_id).eq('binned', false).order('created_at');
-  if (!(include_inactive && session.role !== 'seller')) q = q.eq('active', true);
+  const sellableOnly = !(include_inactive && session.role !== 'seller');   // the Sell screen vs the Admin lists
+  if (sellableOnly) q = q.eq('active', true);
   const [{ data: campaigns }] = await Promise.all([q, sweepIfDue().catch(() => { /* housekeeping only */ })]);
 
   const campaignIds = campaigns.map(c => c.id);
@@ -719,6 +873,8 @@ async function listCampaigns(session, { include_inactive } = {}) {
     const disabledIds = new Set(((disabledRes && disabledRes.data) || []).map(a => a.campaign_id));
     visible = campaigns.filter(c => !disabledIds.has(c.id) && !c.public_only);
   }
+  // Something to sell from only appears while it is actually open: not before its opening date, not after it closes.
+  if (sellableOnly) visible = visible.filter(c => campaignOpenState(c) === 'open');
 
   return {
     campaigns: visible.map(c => ({
@@ -793,7 +949,7 @@ function csvEscape(val) {
 }
 
 async function exportCampaignReport(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin']);
+  requireOrgRole(session, ['superadmin', 'finance']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).single();
   if (!campaign) throw httpError(404, 'Campaign not found');
@@ -814,6 +970,7 @@ async function exportCampaignReport(session, { campaign_id }) {
     'Ticket Number', 'Display Number', 'Block', 'Tier', 'Ticket Status', 'Buyer Name', 'Method', 'Payment Amount',
     'Payment Status', 'Seller', 'Sold At', 'Cash Confirmed By', 'Cash Confirmed At',
     'Voided', 'Void Reason', 'SumUp Reference', 'SumUp Transaction Code', 'Link Sent To', 'Link Sent Via', 'Link Sent At',
+    'Refund Amount', 'Refund Note', 'Refunded At',
   ];
   const rows = tickets.map(t => {
     const p = t.payment_id ? paymentById[t.payment_id] : null;
@@ -838,6 +995,7 @@ async function exportCampaignReport(session, { campaign_id }) {
       p ? p.contact_value || '' : '',
       p ? p.contact_channel || '' : '',
       p ? p.link_shared_at || '' : '',
+      p && p.refund_amount != null ? Number(p.refund_amount).toFixed(2) : '', p ? p.refund_note || '' : '', p ? p.refunded_at || '' : '',
     ];
   });
   // A voided or expired sale no longer holds any ticket row (voiding deliberately frees the number),
@@ -856,6 +1014,7 @@ async function exportCampaignReport(session, { campaign_id }) {
         p.cash_confirmed_by ? userName(p.cash_confirmed_by) : '', p.cash_confirmed_at || '',
         p.voided ? 'Yes' : '', p.void_reason || '', p.sumup_checkout_ref || '', p.sumup_transaction_code || '',
         p.contact_value || '', p.contact_channel || '', p.link_shared_at || '',
+        p.refund_amount != null ? Number(p.refund_amount).toFixed(2) : '', p.refund_note || '', p.refunded_at || '',
       ]);
     }
   }
@@ -936,6 +1095,13 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
 
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).single();
   if (!campaign) throw httpError(404, 'Campaign not found');
+  // A campaign takes sales only while it is open: opened (not a draft), switched on, and between its dates.
+  const openState = campaignOpenState(campaign);
+  if (openState !== 'open') {
+    throw httpError(400, openState === 'not_open' ? `Sales for this campaign open on ${formatDay(campaign.opens_on)}.`
+      : openState === 'closed' ? `Sales for this campaign closed on ${formatDay(campaign.closes_on)}.`
+      : "This campaign isn't open for sales.");
+  }
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
   const { data: blocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id);
 
@@ -988,19 +1154,17 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
       throw httpError(400, `${PAYMENT_METHOD_NAMES[method]} isn't available for ${t === 'digital' ? 'online' : 'physical'} tickets in this campaign — use ${allowed.map(m => PAYMENT_METHOD_NAMES[m]).join(' or ')} instead.`);
     }
   }
-  // Who must be named. A PHYSICAL ticket handed over for cash or the card machine is already in the
-  // buyer's hand, so name and contact are optional. A payment LINK needs both (that is who it goes to),
-  // and an ONLINE ticket needs both whatever the payment method — it exists only on the buyer's phone,
-  // so we must be able to send it to them and find them again.
+  // Every sale needs the buyer's name and a mobile number or email, whatever the ticket or payment method:
+  // it is how a raffle winner is reached and how a buyer is found again. (They are removed automatically
+  // 90 days after the campaign's "keep until" date.)
   const isOnlineSale = !!(autoAssignBlock && autoAssignBlock.type === 'digital');
-  const needsDetails = method === 'link' || isOnlineSale;
-  if (needsDetails && !buyerName) {
-    throw httpError(400, isOnlineSale ? "An online ticket needs the buyer's name — the ticket lives on their phone." : "Enter the buyer's name — the payment link is sent to them.");
+  if (!buyerName) {
+    throw httpError(400, method === 'link' ? "Enter the buyer's name — the payment link is sent to them." : isOnlineSale ? "An online ticket needs the buyer's name — the ticket lives on their phone." : "Enter the buyer's name.");
   }
-  if (needsDetails && !String(contact_value || '').trim() && method !== 'link') {
-    throw httpError(400, "An online ticket needs the buyer's mobile number or email — that is where their ticket is sent.");
+  if (!String(contact_value || '').trim() && method !== 'link') {
+    throw httpError(400, isOnlineSale ? "An online ticket needs the buyer's mobile number or email — that is where their ticket is sent." : "Enter the buyer's mobile number or email.");
   }
-  const contact = needsDetails ? parseContact(contact_value) : null;
+  const contact = parseContact(contact_value);
 
   const initialStatus = method === 'cash' ? 'cash_pending' : (method === 'machine' ? 'paid' : 'held');
 
@@ -1130,29 +1294,39 @@ const MAX_PUBLIC_PURCHASE_QTY = 20; // a sane per-transaction cap, not a busines
 
 // What a buyer sees before paying: campaign name/details, church name/address, tiers, and
 // which online block(s) exist (with their range, so a lucky-number field can say what's valid).
-async function publicCampaignInfo({ campaign_id }) {
+async function publicCampaignInfo({ campaign_id, preview }) {
   // This is the first thing every visitor waits for, so the three lookups run side by side (the
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
   const [{ data: campaign }, { data: tiers }, { data: blocks }] = await Promise.all([
-    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, organizations(name, address, thank_you_text)').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
+    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
   ]);
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+  // A draft or switched-off campaign shows nothing to the public. A private preview link lets an Admin see it
+  // exactly as the public will (but see "preview" below: it can never buy). A campaign that simply hasn't
+  // opened yet, or has closed, still shows its name with a plain message instead of an error.
+  const isPreview = validPreviewToken(preview, campaign.id);
+  const state = campaignOpenState(campaign);
+  if (!isPreview && (state === 'draft' || state === 'inactive' || state === 'unavailable')) throw httpError(404, 'This campaign is not available for purchase right now.');
   if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online tickets available.');
   const org = campaign.organizations;
   return {
     campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text, age_restricted: campaign.age_restricted !== false },
-    org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null },
+    org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null, contact_email: org ? org.contact_email : null, privacy_url: org ? org.privacy_url : null,
+      // Only a raffle (a lottery) carries the council registration.
+      lottery: org && campaign.age_restricted !== false && org.lottery_reg_number ? { number: org.lottery_reg_number, authority: org.lottery_authority || null } : null },
+    state: isPreview ? 'open' : state,   // a preview always shows the buying page, whatever the dates
+    opens_on: campaign.opens_on, closes_on: campaign.closes_on,
+    preview: isPreview,
     tiers, blocks,
   };
 }
 
 // Live "is this lucky number free" check for the public page — online tickets only.
-async function publicCheckTicket({ campaign_id, ticket_number }) {
-  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
-  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+async function publicCheckTicket({ campaign_id, ticket_number, preview }) {
+  await openPublicCampaign(campaign_id, preview);
   const { data } = await supabase.from('tickets').select('status, ticket_blocks!inner(type)')
     .eq('campaign_id', campaign_id).eq('ticket_number', ticket_number).eq('ticket_blocks.type', 'digital').maybeSingle();
   if (!data) throw httpError(404, `Ticket ${ticket_number} doesn't exist in this campaign`);
@@ -1162,9 +1336,8 @@ async function publicCheckTicket({ campaign_id, ticket_number }) {
 
 // The same check for several numbers in one request (the buy page's basket, max 20 — the
 // per-purchase cap). Online tickets only. One result per number, in the order asked.
-async function publicCheckTickets({ campaign_id, ticket_numbers }) {
-  const { data: campaign } = await supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
-  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+async function publicCheckTickets({ campaign_id, ticket_numbers, preview }) {
+  await openPublicCampaign(campaign_id, preview);
   if (!Array.isArray(ticket_numbers) || !ticket_numbers.length) throw httpError(400, 'No ticket numbers to check');
   if (ticket_numbers.length > MAX_PUBLIC_PURCHASE_QTY) throw httpError(400, `Check at most ${MAX_PUBLIC_PURCHASE_QTY} numbers at a time`);
   const nums = ticket_numbers.map(Number);
@@ -1184,12 +1357,11 @@ async function publicCheckTickets({ campaign_id, ticket_numbers }) {
 // The "shuffle" button: up to `count` random online numbers that are still free, skipping any
 // the buyer already holds in their basket. These are suggestions only — nothing is reserved
 // until they pay, and the purchase itself re-checks every number atomically.
-async function publicRandomNumbers({ campaign_id, block_id, count, exclude }) {
-  const [{ data: campaign }] = await Promise.all([
-    supabase.from('campaigns').select('id').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
+async function publicRandomNumbers({ campaign_id, block_id, count, exclude, preview }) {
+  await Promise.all([
+    openPublicCampaign(campaign_id, preview),
     sweepIfDue().catch(() => { /* housekeeping only */ }),
   ]);
-  if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const n = Number(count);
   if (!Number.isInteger(n) || n < 1 || n > MAX_PUBLIC_PURCHASE_QTY) throw httpError(400, `Ask for between 1 and ${MAX_PUBLIC_PURCHASE_QTY} numbers`);
   const skip = (Array.isArray(exclude) ? exclude : []).map(Number).filter(Number.isInteger).slice(0, 100);
@@ -1232,6 +1404,8 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   }
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
+  const openState = campaignOpenState(campaign);
+  if (openState !== 'open') throw httpError(400, notOpenMessage(campaign, openState));
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
   const { data: onlineBlocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id).eq('type', 'digital');
   if (!onlineBlocks || !onlineBlocks.length) throw httpError(400, 'This campaign has no online tickets available.');
@@ -1384,7 +1558,7 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
 // itself), never from anything the caller claims.
 async function publicPaymentStatus({ payment_id }) {
   if (!payment_id) throw httpError(400, 'payment_id is required');
-  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(name, details_text, org_id)').eq('id', payment_id).maybeSingle();
+  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(name, details_text, org_id, age_restricted)').eq('id', payment_id).maybeSingle();
   if (!payment) throw httpError(404, 'Sale not found');
 
   // Fetched BEFORE syncCheckout deliberately: an expired/failed ONLINE sale gets its ticket
@@ -1408,7 +1582,7 @@ async function publicPaymentStatus({ payment_id }) {
   let status;
   if (payment.method === 'link') status = payment.status === 'paid' ? 'paid' : await syncCheckout(payment);
   else status = payment.status === 'void' ? 'void' : 'paid';
-  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text').eq('id', payment.campaigns.org_id).single();
+  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority').eq('id', payment.campaigns.org_id).single();
 
   return {
     status, // 'paid' | 'pending' | 'failed' | 'void'
@@ -1419,6 +1593,9 @@ async function publicPaymentStatus({ payment_id }) {
     campaign_details: payment.campaigns.details_text,
     org_name: org ? org.name : '',
     org_address: org ? org.address : '',
+    org_contact_email: org ? org.contact_email : null,
+    org_privacy_url: org ? org.privacy_url : null,
+    org_lottery: org && payment.campaigns.age_restricted !== false && org.lottery_reg_number ? { number: org.lottery_reg_number, authority: org.lottery_authority || null } : null,
     thank_you: org ? org.thank_you_text : null,
     tickets,
     sold_at: payment.created_at,
@@ -1511,7 +1688,7 @@ async function undoSale(session, { payment_id }) {
 // Status of a Pay-by-Link sale. The SumUp notification normally updates it first; this asks
 // SumUp directly as a fallback, so the seller's screen is right even if a notification is late.
 async function checkoutStatus(session, { payment_id }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (payment.status === 'paid' || payment.status === 'failed' || payment.status === 'void') return { status: payment.status };
@@ -1595,7 +1772,7 @@ async function logLinkShared(session, { payment_id, channel }) {
 // in SumUp directly. Re-checks with SumUp rather than trusting a possibly-stale DB status,
 // in case a notification was delayed.
 async function voidSale(session, { payment_id, reason }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   if (!reason || !reason.trim()) throw httpError(400, 'A void reason is required');
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
@@ -1617,9 +1794,29 @@ async function voidSale(session, { payment_id, reason }) {
   return { ok: true };
 }
 
+// A refund is made BY HAND (in SumUp, or in cash). This only records that it happened, so the books and the
+// buyer's record agree: how much, and a note (e.g. "Refunded in SumUp, application not accepted"). It does not
+// move money and does not release the tickets. Recording it again replaces the earlier note.
+async function recordRefund(session, { payment_id, amount, note }) {
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
+  const text = String(note == null ? '' : note).trim();
+  if (!text) throw httpError(400, 'Add a short note saying why and how it was refunded.');
+  if (text.length > 500) throw httpError(400, 'Keep the refund note under 500 characters.');
+  const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).maybeSingle();
+  if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
+  if (payment.status === 'void' || payment.status === 'failed') throw httpError(400, "This sale was voided or never paid, so there's nothing to refund.");
+  if (payment.method === 'link' && payment.status !== 'paid') throw httpError(400, "This payment link hasn't been paid, so there's nothing to refund.");
+  const total = Number(payment.amount);
+  const value = amount === undefined || amount === null || amount === '' ? total : Math.round(Number(amount) * 100) / 100;
+  if (!Number.isFinite(value) || value <= 0 || value > total) throw httpError(400, `The refund must be more than £0 and no more than £${total.toFixed(2)}.`);
+  const { error } = await supabase.from('payments').update({ refund_amount: value, refund_note: text, refunded_at: new Date().toISOString(), refunded_by: session.uid }).eq('id', payment_id);
+  if (error) throw httpError(500, error.message);
+  return { ok: true, refund_amount: value };
+}
+
 // Lump-sum cash reconciliation: oldest-first greedy match against a seller's pending cash payments
 async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   if (!campaign_id) throw httpError(400, 'A campaign must be selected — cash is reconciled per campaign, not lumped together');
   await requireCampaignsInOwnOrg(session, [campaign_id]);
   const { data: pending } = await supabase.from('payments')
@@ -1678,7 +1875,7 @@ async function syncOpenLinkPayments(campaignIds) {
 }
 
 async function dashboardState(session, { campaign_id } = {}) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   await releaseStalePendingLinkPayments();
 
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
@@ -1769,7 +1966,7 @@ function groupTicketsForDisplay(payment, allTickets, tiers, blocks) {
 }
 
 async function listRecentPayments(session, { campaign_id } = {}) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
   await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
@@ -1785,6 +1982,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
     seller: sellerLabel(p.seller_id, users),
     method: p.method, amount: p.amount, status: p.status,
     payer_name: p.payer_name, contact_value: p.contact_value, contact_channel: p.contact_channel,
+    refund_amount: p.refund_amount, refund_note: p.refund_note, refunded_at: p.refunded_at,
     created_at: p.created_at,
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
@@ -1792,7 +1990,7 @@ async function listRecentPayments(session, { campaign_id } = {}) {
 }
 
 async function listIncompletePayments(session, { campaign_id } = {}) {
-  requireOrgRole(session, ['admin', 'superadmin']);
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   await releaseStalePendingLinkPayments();
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
@@ -1822,7 +2020,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
 // can simply be sent again to the right person). A seller can only touch their own sale; nothing
 // that is already paid or voided.
 async function updateLinkContact(session, { payment_id, contact_value }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only change the details on your own sale.');
@@ -1880,7 +2078,7 @@ async function cancelSumupCheckout(checkoutId) {
 // sale of PHYSICAL tickets whose link is dead (expired/failed). Either way a new link is only
 // ever issued when the old one can no longer be paid — never two live links for one sale.
 async function resendPayment(session, { payment_id }) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const isSeller = session.role === 'seller';
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id, name)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
@@ -1945,37 +2143,30 @@ async function resendPayment(session, { payment_id }) {
 
 const RETENTION_DAYS = 90;
 
+// Personal details are removed RETENTION_DAYS after each campaign's own "keep the details until" date — not
+// after the day of purchase, so a raffle's winner can still be reached after the draw. A database job does it
+// every night (retention_run); the Admin banner shows what is waiting and can run it now. Campaigns that
+// predate the date (keep_until empty) are never touched automatically; the banner asks for a date instead.
 async function retentionFlags(session) {
   requireOrgRole(session, ['superadmin']);
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id);
-  const orgCampaignIds = orgCampaigns.map(c => c.id);
-  const { data: oldPayments } = await supabase.from('payments')
-    .select('id, payer_name, contact_value, created_at').in('campaign_id', orgCampaignIds).or('payer_name.not.is.null,contact_value.not.is.null').lt('created_at', cutoff);
-  const { data: oldTickets } = await supabase.from('tickets')
-    .select('id, attendee_name, sold_at').in('campaign_id', orgCampaignIds).not('attendee_name', 'is', null).lt('sold_at', cutoff);
-  return {
-    count: (oldPayments || []).length + (oldTickets || []).length,
-    payments: oldPayments || [],
-    tickets: oldTickets || [],
-  };
+  const [{ data: pending, error }, { data: undated }] = await Promise.all([
+    supabase.rpc('retention_pending', { p_org: session.org_id, p_days: RETENTION_DAYS }),
+    supabase.from('campaigns').select('id, name').eq('org_id', session.org_id).eq('binned', false).is('keep_until', null).order('created_at'),
+  ]);
+  if (error) throw httpError(500, error.message);
+  const p = pending || { payments: 0, tickets: 0 };
+  return { count: p.payments + p.tickets, payments: p.payments, tickets: p.tickets, undated: undated || [] };
 }
 
-// Clears personal identifiers only (payer_name, contact_value, attendee_name). Amounts, ticket numbers,
+// Clears personal identifiers only (name, contact, IP address, ticket-holder name). Amounts, ticket numbers,
 // dates and totals are deliberately kept — churches typically need financial records
 // retained for several years for accounting/Charity Commission purposes, even though
 // GDPR says the personal data attached to them shouldn't linger past its purpose.
 async function anonymizeOldData(session) {
   requireOrgRole(session, ['superadmin']);
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id);
-  const orgCampaignIds = orgCampaigns.map(c => c.id);
-  const { data: payments, error: e1 } = await supabase.from('payments')
-    .update({ payer_name: null, contact_value: null }).in('campaign_id', orgCampaignIds).or('payer_name.not.is.null,contact_value.not.is.null').lt('created_at', cutoff).select();
-  const { data: tickets, error: e2 } = await supabase.from('tickets')
-    .update({ attendee_name: null }).in('campaign_id', orgCampaignIds).not('attendee_name', 'is', null).lt('sold_at', cutoff).select();
-  if (e1 || e2) throw httpError(500, (e1 || e2).message);
-  return { ok: true, payments_cleared: (payments || []).length, tickets_cleared: (tickets || []).length };
+  const { data, error } = await supabase.rpc('retention_run', { p_org: session.org_id, p_days: RETENTION_DAYS });
+  if (error) throw httpError(500, error.message);
+  return { ok: true, payments_cleared: data.payments, tickets_cleared: data.tickets };
 }
 
 async function sellerState(session, { campaign_id } = {}) {
@@ -2017,7 +2208,135 @@ async function sellScreen(session, { campaign_id } = {}) {
 }
 
 // ---------- router ----------
+// ---------- Confidentiality statement ----------
+// Anyone who can see people's registrations (which can hold children's details) accepts a short statement once,
+// before the first time they do. Bumping the number makes everyone accept the new wording again.
+const CURRENT_CONFIDENTIALITY_VERSION = 1;
+const CONFIDENTIAL_ROLES = ['superadmin', 'finance', 'priest'];
+async function requireConfidentiality(session) {
+  const { data: u } = await supabase.from('users').select('confidentiality_version').eq('id', session.uid).maybeSingle();
+  if (!u || (u.confidentiality_version || 0) < CURRENT_CONFIDENTIALITY_VERSION) {
+    const e = httpError(403, 'Please read and accept the confidentiality statement first.');
+    e.code = 'confidentiality_required';
+    throw e;
+  }
+}
+async function confidentialityStatus(session) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  const { data: u } = await supabase.from('users').select('confidentiality_version, confidentiality_at').eq('id', session.uid).maybeSingle();
+  return { accepted: !!u && (u.confidentiality_version || 0) >= CURRENT_CONFIDENTIALITY_VERSION, version: CURRENT_CONFIDENTIALITY_VERSION, accepted_at: u ? u.confidentiality_at : null };
+}
+async function acceptConfidentiality(session) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  const { error } = await supabase.from('users').update({ confidentiality_version: CURRENT_CONFIDENTIALITY_VERSION, confidentiality_at: new Date().toISOString() }).eq('id', session.uid);
+  if (error) throw httpError(500, error.message);
+  return { ok: true };
+}
+
+// Registration responses. The registration forms themselves arrive in a later phase; this is the door they
+// will use, so the access rules (SuperAdmin, Finance and Priest only, after the confidentiality statement,
+// never Admin or Sellers) are already in force and tested.
+async function registrationResponses(session) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  await requireConfidentiality(session);
+  return { forms: [] };
+}
+
+// ---------- Data and privacy: find, export and erase everything held about one person ----------
+function maskSubject(c) {
+  if (c.kind === 'email') { const [u, d] = c.value.split('@'); return u.slice(0, 1) + '•••@' + d; }
+  const v = c.value; return v.slice(0, 2) + '•'.repeat(Math.max(3, v.length - 5)) + v.slice(-3);
+}
+function subjectHash(c) { return crypto.createHmac('sha256', SESSION_SECRET).update('subject:' + c.value).digest('hex').slice(0, 24); }
+// A phone number may have been typed 07…, +44… or 44…: look for all of them.
+function contactVariants(c) {
+  if (c.kind === 'email') return [c.value];
+  const digits = c.value.replace(/\D/g, ''), last10 = digits.slice(-10);
+  return [...new Set([c.value, digits, '0' + last10, '+44' + last10, '44' + last10])];
+}
+async function findPersonRecords(session, query) {
+  const c = parseContact(query, 'Enter the mobile number or email to look up.');
+  const { data: camps } = await supabase.from('campaigns').select('id, name, keep_until, closes_on, kind').eq('org_id', session.org_id);
+  const campById = Object.fromEntries((camps || []).map(x => [x.id, x]));
+  const ids = Object.keys(campById);
+  let payments = [];
+  if (ids.length) {
+    const { data } = await supabase.from('payments').select('*').in('campaign_id', ids).in('contact_value', contactVariants(c)).order('created_at', { ascending: false });
+    payments = data || [];
+  }
+  const payIds = payments.map(p => p.id);
+  const { data: tix } = payIds.length ? await supabase.from('tickets').select('payment_id, ticket_number, block_id, attendee_name').in('payment_id', payIds) : { data: [] };
+  const blockIds = [...new Set((tix || []).map(t => t.block_id))];
+  const { data: blocks } = blockIds.length ? await supabase.from('ticket_blocks').select('id, number_prefix').in('id', blockIds) : { data: [] };
+  const prefix = Object.fromEntries((blocks || []).map(b => [b.id, b.number_prefix || '']));
+  const today = ukToday();
+  const records = payments.map(p => {
+    const camp = campById[p.campaign_id] || {};
+    return {
+      payment_id: p.id, campaign: camp.name || '', created_at: p.created_at, amount: Number(p.amount), method: p.method, status: p.status,
+      name: p.payer_name, contact: p.contact_value, link_sent_via: p.contact_channel,
+      refund_amount: p.refund_amount, refund_note: p.refund_note, void_reason: p.void_reason,
+      stored_ip_scrambled: p.client_ip,
+      tickets: (tix || []).filter(t => t.payment_id === p.id).map(t => ({ number: `${prefix[t.block_id] || ''}${t.ticket_number}`, attendee_name: t.attendee_name })),
+      keep_until: camp.keep_until, auto_removal_on: camp.keep_until ? addDaysISO(camp.keep_until, RETENTION_DAYS) : null,
+      campaign_still_running: !!(camp.closes_on ? today <= camp.closes_on : !camp.keep_until || today <= camp.keep_until),
+    };
+  });
+  return { c, payments, records, ticketCount: (tix || []).length };
+}
+function addDaysISO(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+async function logPrivacyRequest(session, kind, c, payments, tickets) {
+  await supabase.from('privacy_requests').insert({ org_id: session.org_id, user_id: session.uid, kind, subject_masked: maskSubject(c), subject_hash: subjectHash(c), found_payments: payments, found_tickets: tickets });
+}
+async function privacySearch(session, { query }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  const r = await findPersonRecords(session, query);
+  await logPrivacyRequest(session, 'search', r.c, r.records.length, r.ticketCount);
+  return { subject: maskSubject(r.c), kind: r.c.kind, records: r.records };
+}
+async function privacyExport(session, { query }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  const r = await findPersonRecords(session, query);
+  await logPrivacyRequest(session, 'export', r.c, r.records.length, r.ticketCount);
+  return { export: { generated_at: new Date().toISOString(), subject: r.c.value, kind: r.c.kind, note: 'Everything St Vincent\'s Parish Campaigns holds about this contact detail.', records: r.records } };
+}
+// Erase = remove the person, keep the books: name, contact, scrambled address, attendee names and free-text notes go;
+// amounts, dates, methods and ticket numbers stay so the accounts and the draw still add up.
+async function privacyErase(session, { query, confirm }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  if (confirm !== true) throw httpError(400, 'Confirm that you want to erase these records.');
+  const r = await findPersonRecords(session, query);
+  const ids = r.payments.map(p => p.id);
+  let tix = 0;
+  if (ids.length) {
+    const { error } = await supabase.from('payments').update({ payer_name: null, contact_value: null, client_ip: null, refund_note: null, void_reason: null, contact_channel: null }).in('id', ids);
+    if (error) throw httpError(500, error.message);
+    const { data: t } = await supabase.from('tickets').update({ attendee_name: null }).in('payment_id', ids).not('attendee_name', 'is', null).select('id');
+    tix = (t || []).length;
+  }
+  await logPrivacyRequest(session, 'erase', r.c, ids.length, tix);
+  return { ok: true, payments_erased: ids.length, attendee_names_erased: tix };
+}
+async function privacyLog(session) {
+  requireOrgRole(session, ['superadmin']);
+  await requireConfidentiality(session);
+  const { data } = await supabase.from('privacy_requests').select('kind, subject_masked, found_payments, found_tickets, created_at, user_id').eq('org_id', session.org_id).order('created_at', { ascending: false }).limit(50);
+  const { data: users } = await supabase.from('users').select('id, name').eq('org_id', session.org_id);
+  const nameOf = Object.fromEntries((users || []).map(u => [u.id, u.name]));
+  return { requests: (data || []).map(x => ({ ...x, by: nameOf[x.user_id] || '', user_id: undefined })) };
+}
+
 const actions = {
+  confidentiality_status: (s) => confidentialityStatus(s),
+  accept_confidentiality: (s) => acceptConfidentiality(s),
+  registration_responses: (s) => registrationResponses(s),
+  privacy_search: (s, b) => privacySearch(s, b),
+  privacy_export: (s, b) => privacyExport(s, b),
+  privacy_erase: (s, b) => privacyErase(s, b),
+  privacy_log: (s) => privacyLog(s),
   bootstrap_platform_owner: (s, b) => bootstrapPlatformOwner(b),
   create_organization: (s, b) => createOrganization(s, b),
   list_organizations: (s) => listOrganizations(s),
@@ -2046,6 +2365,11 @@ const actions = {
   edit_block_end: (s, b) => editBlockEnd(s, b),
   set_payment_options: (s, b) => setPaymentOptions(s, b),
   set_default_ticket_qty: (s, b) => setDefaultTicketQty(s, b),
+  set_campaign_dates: (s, b) => setCampaignDates(s, b),
+  open_campaign: (s, b) => openCampaign(s, b),
+  campaign_preview_link: (s, b) => campaignPreviewLink(s, b),
+  set_org_privacy: (s, b) => setOrgPrivacy(s, b),
+  set_org_lottery: (s, b) => setOrgLottery(s, b),
   campaign_block_usage: (s, b) => campaignBlockUsage(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),
@@ -2067,6 +2391,7 @@ const actions = {
   sumup_check: (s) => sumupCheck(s),  sumup_webhook: (s, b) => sumupWebhook(b),
   undo_sale: (s, b) => undoSale(s, b),
   void_sale: (s, b) => voidSale(s, b),
+  record_refund: (s, b) => recordRefund(s, b),
   cash_recon: (s, b) => cashRecon(s, b),
   dashboard_state: (s, b) => dashboardState(s, b),
   list_recent_payments: (s, b) => listRecentPayments(s, b),
@@ -2091,7 +2416,7 @@ exports.handler = async (event) => {
   const configuredHost = process.env.URL ? new URL(process.env.URL).host.toLowerCase() : '';
   baseUrl = (/^[a-z0-9.-]+$/.test(reqHost) && (reqHost.endsWith('.netlify.app') || reqHost === configuredHost))
     ? `https://${reqHost}` : (process.env.URL || `https://${reqHost}`);
-  clientIp = String(event.headers['x-nf-client-connection-ip'] || String(event.headers['x-forwarded-for'] || '').split(',')[0] || '').trim().slice(0, 64);
+  clientIp = scrambleIp(String(event.headers['x-nf-client-connection-ip'] || String(event.headers['x-forwarded-for'] || '').split(',')[0] || '').trim().slice(0, 64));
   const action = event.path.split('/').pop();
   let body = {};
   try { body = JSON.parse(event.body || '{}'); } catch { return json(400, { error: 'Invalid JSON' }); }
@@ -2123,6 +2448,6 @@ exports.handler = async (event) => {
     }
     return json(200, result);
   } catch (e) {
-    return json(e.status || 500, { error: e.message || 'Server error' });
+    return json(e.status || 500, e.code ? { error: e.message || 'Server error', code: e.code } : { error: e.message || 'Server error' });
   }
 };
