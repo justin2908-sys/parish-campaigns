@@ -1755,8 +1755,8 @@ function drawCampaignSettings() {
       ${hasPhysical ? payGroupHtml('physical', 'Payment options — physical tickets', 'What a Seller can tap when selling printed tickets. They are usually paid for on the spot, so Pay by link is often not needed.', c.physical_payment_methods || ['cash', 'machine', 'link']) : ''}
       ${hasOnline ? payGroupHtml('online', 'Payment options — online tickets', 'What a Seller can tap when selling online tickets. The public buy page is not affected — it always pays by link.', c.online_payment_methods || ['cash', 'machine', 'link']) : ''}
       <div class="card">
-        <b>Sell screen</b>
-        <div class="muted" style="margin:2px 0 6px">How many tickets are already filled in at the start of every sale. A Seller can still change it; 0 starts empty.</div>
+        <b>Starting quantity</b>
+        <div class="muted" style="margin:2px 0 6px">How many tickets are already filled in at the start of every sale, on the Sell screen and on the public buy page. A Seller or buyer can still change it; 0 starts empty. On the public page the quick-pick buttons are this number and its multiples (5, 10, 20 for 5).</div>
         ${c.tiers.length === 1 ? `
           <label>Tickets pre-selected for each sale</label>
           <input id="csetQty" type="number" min="0" max="50" inputmode="numeric" value="${c.default_ticket_qty || 0}">

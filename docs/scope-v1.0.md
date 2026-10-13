@@ -1089,7 +1089,7 @@ existing campaign has until changed). Set in ⚙ Settings → **Sell screen** �
 - Single price tier only. With several tiers (Adult/Child) there's no sensible "5 of which", so those start at 0
   and Settings says so.
 - The wizard sets 5 for a campaign marked as a raffle, 0 otherwise (shown on the review step).
-- Not changed: the public buy page still starts at none, so a buyer chooses.
+- (Superseded by §49: the public buy page now starts at this number too.)
 Side fix: an online series now builds its ticket rows as soon as a count is present, so a count carried across a
 series switch is immediately sellable instead of showing "5" with nothing behind it.
 
@@ -1162,3 +1162,17 @@ number**, **Registered with** (the council) and **Registration runs until** (opt
   Erasing a raffle buyer's details warns that they can no longer be reached if they win.
 - API: `confidentiality_status`, `accept_confidentiality`, `registration_responses`, `privacy_search`, `privacy_export`,
   `privacy_erase`, `privacy_log`. New table `privacy_requests`; `users.confidentiality_version/at`.
+
+## 49. Public buy page stays on one screen; starts at the default quantity; bundles from 5 — 2026-10-13 (on dev; preview only)
+
+- The small print no longer takes up the screen. The page now has two short lines under the name boxes: "🔒 Secure payment
+  by SumUp · Already paid? Find your ticket" and "Registered society lottery **no. LBH137701** · Privacy & your data". Tapping the
+  number opens a sheet with the full lottery details (who runs it, the council, the number, 18+, ticket price); tapping Privacy
+  opens a sheet with how details are used, SumUp, the 90-day removal, the privacy notice link and the parish email. A ticket
+  event shows only the privacy link. The "after paying, tap the button on SumUp's page" instruction now appears only on the
+  "Check your details" sheet, right before paying. The confirm sheet's privacy text is one line plus the same link.
+- **Starting quantity** (§44) now also applies to the public page (single price only): Raffle2026 opens at 5 tickets, and a
+  buyer can still step down to 1 with −. `public_campaign_info` returns `default_qty`.
+- **Quick-pick bundles** (shown when the quantity is 0) are the starting quantity and its multiples — 5, 10, 20 for a raffle
+  that starts at 5 — so a single ticket is only available from the stepper. Campaigns with no starting quantity keep 1, 5, 10, 20.
+- Checked at a 360×660 phone viewport: no page scroll and no scrolling inside the ticket panel.
