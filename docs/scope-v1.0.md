@@ -1188,3 +1188,16 @@ number**, **Registered with** (the council) and **Registration runs until** (opt
   every sale; if it is older than `MIN_SELL_BUILD` the server answers "The app has been updated. Please refresh this page…
   Nothing has been recorded yet." (409). A retry of a sale that already went through is still answered normally.
   Raise both dates whenever a sale needs something new from the screen.
+
+## 51. Public buy page: the page scrolls, nothing scrolls inside a box; floating bottom bar — 2026-10-18 (on dev; preview only)
+
+Replaces the "everything on one screen" rule of §49/§50, which hid a scrolling list in the middle of the screen (e.g. under
+Pick my numbers) that buyers did not notice. Now:
+- **No scrolling inside any box.** The whole page scrolls like an ordinary page.
+- **A floating bar stays at the bottom of the screen** the whole time (it was already the pay bar): it shows the summary
+  ("5 tickets · your numbers", the total) and the next step as the button — "Choose your tickets", "Pick 3 more numbers",
+  "Add your name", "Add your mobile or email", then the payment button. Tapping it scrolls to whatever is missing.
+- **Pick my numbers:** the Shuffle buttons are now the first thing under the range line, with the numbers filling in below,
+  so the shuffle is never out of sight.
+- The short-screen squeezing from §50 (hiding the "Buying several?" heading and the explanation line) was removed; the
+  church name is hidden on very short screens as before.
