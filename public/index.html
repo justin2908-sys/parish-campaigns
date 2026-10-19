@@ -964,6 +964,7 @@ async function submitSale(method) {
     } else {
       saleAttempt = null; // a real answer from the server: this attempt is finished, the next one is new
       errEl.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+      if (e.code === 'app_outdated') checkForUpdate(true);   // the server says this screen is old: show the Update now bar straight away
     }
   }
 }
@@ -2253,27 +2254,34 @@ async function doResetPassword(id) {
 }
 
 // ---------- keep the app up to date ----------
-// A phone can keep this page open for hours after a new version is published, and keeps running the old one. So the page
-// asks every few minutes whether index.html has changed since the copy it is running. The question is a tiny conditional
+// A phone can keep this page open for days after a new version is published, and keeps running the old one. So the page
+// asks, once every 7 days, whether index.html has changed since the copy it is running. The question is a tiny conditional
 // request (almost always answered with an empty "no change"). When there is a newer version it reloads itself — but never
 // in the middle of a sale or while anything is open, and never within 10 minutes of a sale (the seller may still want to
 // share that ticket). If it can't reload yet, a bar at the top says a new version is waiting.
-const UPDATE_CHECK_MS = 5 * 60 * 1000;   // how often, while the app is open on screen
-const UPDATE_MIN_GAP_MS = 60 * 1000;     // and never more often than this, whatever triggers it
+const UPDATE_EVERY_MS = 7 * 24 * 60 * 60 * 1000;   // how often it asks (remembered on the phone, so reopening the app doesn't ask again)
+const UPDATE_MIN_GAP_MS = 60 * 1000;               // if a check fails (no signal), never retry more often than this
+const UPDATE_CHECKED_KEY = 'pc_update_checked_at';
 let updateEtag = null, updateLastCheck = 0, updatePending = false, updateIdleTimer = null;
 // The version of the page we are running = the copy the service worker saved when it served it (see sw.js).
 async function loadedEtag() {
   try { const hit = await caches.match('/index.html'); const e = hit && hit.headers.get('etag'); if (e) return e; } catch { /* no saved copy */ }
   return null;
 }
-async function checkForUpdate() {
+// force = true is used when the server itself says this screen is out of date (a sale was refused for that reason).
+async function checkForUpdate(force) {
   if (updatePending) return;
   const now = Date.now();
+  if (!force) {
+    let last = 0; try { last = Number(localStorage.getItem(UPDATE_CHECKED_KEY) || 0); } catch { /* private mode: the 7 days can't be remembered */ }
+    if (now - last < UPDATE_EVERY_MS) return;
+  }
   if (now - updateLastCheck < UPDATE_MIN_GAP_MS) return;
   updateLastCheck = now;
   try {
     if (!updateEtag) updateEtag = await loadedEtag();
     const res = await fetch('/index.html', { cache: 'no-store', method: updateEtag ? 'GET' : 'HEAD', headers: updateEtag ? { 'If-None-Match': updateEtag } : {} });
+    try { localStorage.setItem(UPDATE_CHECKED_KEY, String(Date.now())); } catch { /* private mode */ }   // got an answer: the next check is in 7 days
     if (res.status === 304) return;                       // unchanged
     const et = res.headers.get('etag');
     if (res.body) res.body.cancel().catch(() => {});      // never download the page just to compare
@@ -2318,10 +2326,11 @@ function showUpdateBar(text, withButton) {
   bar.innerHTML = `<span>${esc(text)}</span>${withButton ? '<button type="button" onclick="updateNow()" style="background:var(--brass-bright,#D9B25A);color:#1d2b22;border:none;border-radius:8px;padding:6px 12px;font-weight:700">Update now</button>' : ''}`;
 }
 function startUpdateWatcher() {
-  setInterval(() => { if (document.visibilityState === 'visible') checkForUpdate(); }, UPDATE_CHECK_MS);
+  // Each of these only asks if 7 days have passed since the last answer, so they cost nothing the rest of the time.
+  setInterval(() => { if (document.visibilityState === 'visible') checkForUpdate(); }, 6 * 60 * 60 * 1000);   // an app left open for days
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });   // phone unlocked / app switched back to
-  window.addEventListener('online', checkForUpdate);
-  setTimeout(checkForUpdate, 15000);   // soon after opening, so a page served from the saved copy catches up as soon as there is signal
+  window.addEventListener('online', () => checkForUpdate());
+  setTimeout(() => checkForUpdate(), 15000);   // soon after opening (the very first time, and 7 days after the last)
 }
 
 // ---------- boot ----------

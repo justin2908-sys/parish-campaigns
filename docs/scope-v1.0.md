@@ -1202,14 +1202,15 @@ Pick my numbers) that buyers did not notice. Now:
 - The short-screen squeezing from §50 (hiding the "Buying several?" heading and the explanation line) was removed; the
   church name is hidden on very short screens as before.
 
-## 52. The Sell / Admin screen updates itself — 2026-10-19 (on dev; preview only)
+## 52. The Sell / Admin screen updates itself (weekly) — 2026-10-19 (on dev; preview only)
 
 A phone can keep the app open for hours after a new version is published and keep running the old one (this is what made a
 seller's sales fail after §46). Now the page checks for a newer version and reloads itself:
-- **How often:** about **every 5 minutes** while the app is open on screen, **each time the screen comes back** (phone unlocked,
-  or switching back to the app), when the phone **comes back online**, and once **15 seconds after opening** (so a copy served
-  from the phone's saved page catches up as soon as there is signal). Never more than once a minute, whatever triggers it.
-  Nothing is checked while the app is hidden or the screen is off.
+- **How often:** **once every 7 days** (the date of the last answer is remembered on the phone, so closing and reopening the app
+  doesn't ask again). It is considered whenever the app opens, when the screen comes back, when the phone reconnects, and every 6
+  hours for an app left open — each of which does nothing unless 7 days have passed. The one exception: if the **server refuses a
+  sale because the screen is out of date** (§50), the screen asks at once and shows the Update now bar. If a check fails for lack of
+  signal it tries again at the next trigger, never more than once a minute.
 - **What it asks:** a tiny conditional request for `index.html` ("has it changed since the copy I am running?"). The answer is
   almost always an empty "no change" (≈ 0 bytes), so it costs next to nothing. The version of the running copy is the saved
   page's ETag in the service-worker cache; no build step or version number to maintain.
