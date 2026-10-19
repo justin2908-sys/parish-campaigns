@@ -1233,3 +1233,12 @@ public page on-off, Recycle Bin / restore, Settings saves (payment options, star
 thank-you, contact email & privacy link, lottery registration), report download, record refund, void, cash reconciliation,
 update contact, new payment link, undo sale, user create / enable / disable / password reset, church and SuperAdmin creation.
 Errors keep their existing red message or alert. New actions must do the same.
+
+**§53 follow-up (full audit, 2026-10-19).** Every button on the Admin, Sell, Platform Owner, public buy and ticket pages was checked for
+(1) a visible success message, (2) a visible error, (3) an in-progress signal. Gaps found and fixed: the Settings switches
+(Campaign active / shown to Sellers / public page — they redrew silently), creating a campaign in the wizard, copying the public
+link and opening a preview (a pop-up alert / nothing), removing old details and password resets (alerts), agreeing to the Seller terms
+and the confidentiality statement, a new payment link from a Seller's recent-sales list, first-time Platform Owner setup, and a failed
+"link shared" note (was swallowed silently — now says so). **In progress:** every request that takes more than ~0.4 s now shows a small
+"⏳ Working…" pill at the top until it finishes (background checks such as link polling stay quiet), so a slow signal never looks like
+"nothing happened". The public buy and ticket pages already had these (Looking…, the paying veil, "✓ Saved to your Downloads", "✓ Link copied").

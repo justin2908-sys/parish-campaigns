@@ -169,7 +169,24 @@ function scheduleAutoLogout() {
 // A request that gets no reply (weak signal) gives up after timeoutMs instead of hanging, and
 // says so in plain words. err.network marks "we don't know whether the server got it" — as
 // opposed to a real answer from the server — so callers can tell those two cases apart.
+// If a button's request takes longer than a moment, a small "Working…" pill says so — so a slow signal never looks like "nothing happened".
+// Background checks (link polling, the sell-screen load, which have their own indicators) stay quiet.
+const QUIET_ACTIONS = new Set(['checkout_status', 'my_open_links', 'log_link_shared', 'retention_flags', 'list_recent_payments', 'list_incomplete_payments', 'sell_screen']);
+let workCount = 0, workTimer = null;
+function workStart() {
+  workCount++;
+  if (workCount === 1) workTimer = setTimeout(() => {
+    let el = document.getElementById('working');
+    if (!el) { el = document.createElement('div'); el.id = 'working'; el.setAttribute('role', 'status'); el.textContent = '⏳ Working…'; el.style.cssText = 'position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:95;background:#1D2B22;color:#fff;border-radius:999px;padding:7px 16px;font-size:14px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.3)'; document.body.appendChild(el); }
+    el.hidden = false;
+  }, 400);
+}
+function workEnd() {
+  workCount = Math.max(0, workCount - 1);
+  if (!workCount) { clearTimeout(workTimer); const el = document.getElementById('working'); if (el) el.hidden = true; }
+}
 async function call(action, body = {}, timeoutMs = 20000) {
+  const quiet = QUIET_ACTIONS.has(action); if (!quiet) workStart();
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   let res, data;
@@ -185,7 +202,7 @@ async function call(action, body = {}, timeoutMs = 20000) {
     const err = new Error(e && e.name === 'AbortError' ? 'No reply from the server — the signal may be weak.' : "Can't reach the server — check your signal.");
     err.network = true;
     throw err;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); if (!quiet) workEnd(); }
   // The server ends a session when the account is disabled or its password is reset. Go back to
   // the login screen straight away instead of leaving a screen that can't do anything.
   if (res.status === 401 && state.session && action !== 'login') { logout(); throw new Error('Your session has ended — please log in again.'); }
@@ -279,7 +296,7 @@ async function doAcceptConsent() {
   const el = document.getElementById('consentResult');
   try {
     await call('accept_consent');
-    state.user.needsConsent = false; saveState(); render();
+    state.user.needsConsent = false; saveState(); render(); toast('✓ Thank you — you can start selling');
   } catch (e) { el.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 function showBootstrap() {
@@ -303,6 +320,7 @@ async function doBootstrap() {
       mobile: document.getElementById('bMobile').value.trim(),
       password: document.getElementById('bPassword').value,
     });
+    toast('✓ Platform Owner created');
     renderLogin('Platform Owner created — please log in.');
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
@@ -367,7 +385,7 @@ async function doResetSuperadminPassword() {
   if (!foundSuperadmin) return;
   const pw = prompt(`New password for ${foundSuperadmin.name} (8+ characters):`);
   if (!pw) return;
-  try { await call('platform_reset_superadmin_password', { user_id: foundSuperadmin.id, new_password: pw }); alert('Password reset. Let them know their new password directly.'); }
+  try { await call('platform_reset_superadmin_password', { user_id: foundSuperadmin.id, new_password: pw }); toast('✓ Password reset — tell them the new password yourself'); }
   catch (e) { alert(e.message); }
 }
 async function doToggleSuperadminActive() {
@@ -601,7 +619,7 @@ async function logShared(paymentId, channel) {
     if (a) { a.sharedVia = channel; a.sharedAt = new Date().toISOString(); setTimeout(renderFeed, 400); }
     const l = (myLinks || []).find(x => x.id === paymentId);
     if (l) { l.contact_channel = channel; l.link_shared_at = new Date().toISOString(); setTimeout(drawLinksPanel, 400); }
-  } catch {}
+  } catch { toast("Couldn't note that the link was shared — it may still have been sent", 'error'); }
 }
 // ---- "Payment links I've sent": every unpaid link of this seller's, however long ago ----
 // The Sell feed only remembers this session. A buyer who returns next Sunday — link expired, ticket
@@ -1116,6 +1134,7 @@ async function doSellerResend(activityId) {
     Object.assign(a, { status: 'linkpending', payUrl: r.pay_url, sharedVia: null, sharedAt: null });
     sheetId = a.id;
     startLinkPoller();
+    toast('✓ New payment link created');
   } catch (e) { a.resendError = e.message; }
   a.resending = false; renderFeed();
 }
@@ -1231,7 +1250,7 @@ async function renderRetentionBanner() {
 }
 async function doAnonymize() {
   if (!confirm('Remove names and contact details from every campaign that is past its keep-until date plus 90 days? This cannot be undone.')) return;
-  try { const r = await call('anonymize_old_data', {}, 60000); alert(`Removed details from ${r.payments_cleared} sale(s) and ${r.tickets_cleared} ticket holder name(s).`); renderRetentionBanner(); }
+  try { const r = await call('anonymize_old_data', {}, 60000); toast(`✓ Removed details from ${r.payments_cleared} sale(s) and ${r.tickets_cleared} ticket holder name(s)`); renderRetentionBanner(); }
   catch (e) { alert(e.message); }
 }
 
@@ -1376,7 +1395,7 @@ async function doSaveOrgAddress() {
 }
 async function doCopyPublicLink(campaignId) {
   const url = `${location.origin}/buy.html?campaign_id=${campaignId}`;
-  try { await navigator.clipboard.writeText(url); alert('Copied — share this link anywhere: ' + url); }
+  try { await navigator.clipboard.writeText(url); toast('✓ Link copied — paste it anywhere to share'); }
   catch { prompt('Copy this link:', url); }
 }
 async function doEditCampaignDetails(campaignId) {
@@ -1692,6 +1711,7 @@ async function doCreateCampaignWizard(asDraft) {
       default_ticket_qty: tiers.length === 1 ? wiz.defaultQty : 0,
     }, 60000);
     closeCampaignWizard();
+    toast(asDraft ? '✓ Saved as a draft — preview it, then open it when ready' : '✓ Campaign created and open');
     await renderCampaignsTab();
     if (asDraft && r.campaign) openCampaignSettings(r.campaign.id);   // straight to Preview / Open
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
@@ -1720,7 +1740,12 @@ async function openCampaignSettings(id) {
 }
 // Change one thing about this campaign (a status or visibility switch), then show the result.
 async function csetDo(action, params) {
-  try { await call(action, { campaign_id: cset.id, ...params }); } catch (e) { alert(e.message); }
+  try {
+    await call(action, { campaign_id: cset.id, ...params });
+    toast(action === 'set_campaign_active' ? (params.active ? '✓ Campaign activated' : '✓ Campaign deactivated')
+      : 'public_only' in params ? (params.public_only ? '✓ Now hidden from Sellers' : '✓ Now shown to Sellers')
+      : params.public_page_enabled ? '✓ Public page turned on' : '✓ Public page turned off');
+  } catch (e) { alert(e.message); }
   openCampaignSettings(cset.id);
 }
 function payGroupHtml(kind, title, blurb, current) {
@@ -1847,7 +1872,7 @@ async function doPreviewCampaign(id) {
   try {
     const { token } = await call('campaign_preview_link', { campaign_id: id });
     const url = `${location.origin}/buy.html?campaign_id=${id}&preview=${encodeURIComponent(token)}`;
-    if (w) w.location.href = url; else prompt('Copy this private preview link (it works for 24 hours):', url);
+    if (w) { w.location.href = url; toast('✓ Preview opened in a new tab'); } else prompt('Copy this private preview link (it works for 24 hours):', url);
   } catch (e) { if (w) w.close(); alert(e.message); }
 }
 async function doSaveCsetDetails() {
@@ -2144,7 +2169,7 @@ function renderConfidentialityGate(seq, retry) {
 }
 async function doAcceptConfidentiality() {
   const el = document.getElementById('confResult');
-  try { await call('accept_confidentiality'); if (confRetry) confRetry(); }
+  try { await call('accept_confidentiality'); toast('✓ Thank you — confirmed'); if (confRetry) confRetry(); }
   catch (e) { if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 async function renderRegistrationsTab() {
