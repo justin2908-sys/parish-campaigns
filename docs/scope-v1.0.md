@@ -1201,3 +1201,23 @@ Pick my numbers) that buyers did not notice. Now:
   so the shuffle is never out of sight.
 - The short-screen squeezing from §50 (hiding the "Buying several?" heading and the explanation line) was removed; the
   church name is hidden on very short screens as before.
+
+## 52. The Sell / Admin screen updates itself — 2026-10-19 (on dev; preview only)
+
+A phone can keep the app open for hours after a new version is published and keep running the old one (this is what made a
+seller's sales fail after §46). Now the page checks for a newer version and reloads itself:
+- **How often:** about **every 5 minutes** while the app is open on screen, **each time the screen comes back** (phone unlocked,
+  or switching back to the app), when the phone **comes back online**, and once **15 seconds after opening** (so a copy served
+  from the phone's saved page catches up as soon as there is signal). Never more than once a minute, whatever triggers it.
+  Nothing is checked while the app is hidden or the screen is off.
+- **What it asks:** a tiny conditional request for `index.html` ("has it changed since the copy I am running?"). The answer is
+  almost always an empty "no change" (≈ 0 bytes), so it costs next to nothing. The version of the running copy is the saved
+  page's ETag in the service-worker cache; no build step or version number to maintain.
+- **When it reloads:** only when nothing is in progress — no buyer name/contact or first-number typed, no sale being sent, no
+  sheet, panel, wizard or settings open, nothing being typed, and **no sale in the last 10 minutes** (the seller may still want to
+  share that ticket). It shows "Updating to the latest version…" for a moment, then reloads (login is kept).
+- **If it can't reload yet:** a bar at the top says "A new version is ready. It will load when you finish — or tap Update now",
+  and it reloads by itself as soon as the screen is idle. **Update now** reloads at once (clearing the saved copy).
+- **No loops:** if it has just reloaded (last 3 minutes) and still sees the old copy (a weak signal served the saved page), it
+  asks for a tap on Update now instead of reloading again.
+- Applies to the app screens (Sell, Admin, Platform Owner). The public buy and ticket pages load fresh on every visit.

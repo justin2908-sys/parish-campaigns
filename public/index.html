@@ -2252,9 +2252,82 @@ async function doResetPassword(id) {
   try { await call('reset_password', { user_id: id, new_password: pw }); alert('Password reset.'); } catch (e) { alert(e.message); }
 }
 
+// ---------- keep the app up to date ----------
+// A phone can keep this page open for hours after a new version is published, and keeps running the old one. So the page
+// asks every few minutes whether index.html has changed since the copy it is running. The question is a tiny conditional
+// request (almost always answered with an empty "no change"). When there is a newer version it reloads itself — but never
+// in the middle of a sale or while anything is open, and never within 10 minutes of a sale (the seller may still want to
+// share that ticket). If it can't reload yet, a bar at the top says a new version is waiting.
+const UPDATE_CHECK_MS = 5 * 60 * 1000;   // how often, while the app is open on screen
+const UPDATE_MIN_GAP_MS = 60 * 1000;     // and never more often than this, whatever triggers it
+let updateEtag = null, updateLastCheck = 0, updatePending = false, updateIdleTimer = null;
+// The version of the page we are running = the copy the service worker saved when it served it (see sw.js).
+async function loadedEtag() {
+  try { const hit = await caches.match('/index.html'); const e = hit && hit.headers.get('etag'); if (e) return e; } catch { /* no saved copy */ }
+  return null;
+}
+async function checkForUpdate() {
+  if (updatePending) return;
+  const now = Date.now();
+  if (now - updateLastCheck < UPDATE_MIN_GAP_MS) return;
+  updateLastCheck = now;
+  try {
+    if (!updateEtag) updateEtag = await loadedEtag();
+    const res = await fetch('/index.html', { cache: 'no-store', method: updateEtag ? 'GET' : 'HEAD', headers: updateEtag ? { 'If-None-Match': updateEtag } : {} });
+    if (res.status === 304) return;                       // unchanged
+    const et = res.headers.get('etag');
+    if (res.body) res.body.cancel().catch(() => {});      // never download the page just to compare
+    if (!updateEtag) { updateEtag = et; return; }         // nothing saved to compare with: this answer is the baseline
+    if (res.ok && et && et !== updateEtag) { updatePending = true; tryApplyUpdate(); }
+  } catch { /* offline or a weak signal: try again at the next check */ }
+}
+function appIsBusy() {
+  if (saleInFlight) return true;
+  if (buyerNameValue.trim() || contactValue.trim() || startNumValue) return true;
+  for (const id of ['sheet', 'feedSheet', 'numbersSheet', 'linksPanel', 'wizardPanel', 'settingsPanel']) if (document.getElementById(id)) return true;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.value))) return true;
+  return activity.some(a => Date.now() - new Date(a.soldAt).getTime() < 10 * 60 * 1000);
+}
+function tryApplyUpdate() {
+  clearTimeout(updateIdleTimer);
+  if (!appIsBusy()) { applyUpdate(); return; }
+  showUpdateBar('A new version is ready. It will load when you finish — or tap Update now.', true);
+  updateIdleTimer = setTimeout(tryApplyUpdate, 20000);
+}
+function applyUpdate() {
+  let last = 0; try { last = Number(sessionStorage.getItem('pc_updated_at') || 0); } catch { /* private mode */ }
+  if (Date.now() - last < 3 * 60 * 1000) {   // we have just reloaded and still got the old copy (a weak signal served the saved one): ask instead of looping
+    showUpdateBar('A new version is ready. Tap Update now.', true); return;
+  }
+  try { sessionStorage.setItem('pc_updated_at', String(Date.now())); } catch { /* private mode */ }
+  showUpdateBar('Updating to the latest version…', false);
+  setTimeout(() => location.reload(), 800);
+}
+async function updateNow() {
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch { /* nothing saved */ }
+  location.reload();
+}
+function showUpdateBar(text, withButton) {
+  let bar = document.getElementById('updateBar');
+  if (!bar) {
+    bar = document.createElement('div'); bar.id = 'updateBar'; bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:90;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;padding:8px 12px;background:var(--pine);color:#F3F1E7;font-size:14px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.25)';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = `<span>${esc(text)}</span>${withButton ? '<button type="button" onclick="updateNow()" style="background:var(--brass-bright,#D9B25A);color:#1d2b22;border:none;border-radius:8px;padding:6px 12px;font-weight:700">Update now</button>' : ''}`;
+}
+function startUpdateWatcher() {
+  setInterval(() => { if (document.visibilityState === 'visible') checkForUpdate(); }, UPDATE_CHECK_MS);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });   // phone unlocked / app switched back to
+  window.addEventListener('online', checkForUpdate);
+  setTimeout(checkForUpdate, 15000);   // soon after opening, so a page served from the saved copy catches up as soon as there is signal
+}
+
 // ---------- boot ----------
 if (state.session) scheduleAutoLogout();
 render();
+startUpdateWatcher();
 // Lets the app open with no signal (see sw.js) — sales themselves always need the network.
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
