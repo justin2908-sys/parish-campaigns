@@ -1093,7 +1093,9 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
     if (replay) return replay;
   }
   if (String(build || '') < MIN_SELL_BUILD) {
-    throw httpError(409, 'The app has been updated. Please refresh this page (pull down, or close the app and open it again), then record the sale. Nothing has been recorded yet.');
+    const outdated = httpError(409, 'The app has been updated. Please refresh this page (pull down, or close the app and open it again), then record the sale. Nothing has been recorded yet.');
+    outdated.code = 'app_outdated';   // lets a screen new enough to know this ask for the update itself
+    throw outdated;
   }
   if (!['cash', 'machine', 'link'].includes(method)) throw httpError(400, 'Payment method must be cash, machine or link');
   if (!!ticket_numbers === !!auto_assign_block_id) {

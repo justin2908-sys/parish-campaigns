@@ -1188,3 +1188,37 @@ number**, **Registered with** (the council) and **Registration runs until** (opt
   every sale; if it is older than `MIN_SELL_BUILD` the server answers "The app has been updated. Please refresh this page…
   Nothing has been recorded yet." (409). A retry of a sale that already went through is still answered normally.
   Raise both dates whenever a sale needs something new from the screen.
+
+## 51. Public buy page: the page scrolls, nothing scrolls inside a box; floating bottom bar — 2026-10-18 (on dev; preview only)
+
+Replaces the "everything on one screen" rule of §49/§50, which hid a scrolling list in the middle of the screen (e.g. under
+Pick my numbers) that buyers did not notice. Now:
+- **No scrolling inside any box.** The whole page scrolls like an ordinary page.
+- **A floating bar stays at the bottom of the screen** the whole time (it was already the pay bar): it shows the summary
+  ("5 tickets · your numbers", the total) and the next step as the button — "Choose your tickets", "Pick 3 more numbers",
+  "Add your name", "Add your mobile or email", then the payment button. Tapping it scrolls to whatever is missing.
+- **Pick my numbers:** the Shuffle buttons are now the first thing under the range line, with the numbers filling in below,
+  so the shuffle is never out of sight.
+- The short-screen squeezing from §50 (hiding the "Buying several?" heading and the explanation line) was removed; the
+  church name is hidden on very short screens as before.
+
+## 52. The Sell / Admin screen updates itself (weekly) — 2026-10-19 (on dev; preview only)
+
+A phone can keep the app open for hours after a new version is published and keep running the old one (this is what made a
+seller's sales fail after §46). Now the page checks for a newer version and reloads itself:
+- **How often:** **once every 7 days** (the date of the last answer is remembered on the phone, so closing and reopening the app
+  doesn't ask again). It is considered whenever the app opens, when the screen comes back, when the phone reconnects, and every 6
+  hours for an app left open — each of which does nothing unless 7 days have passed. The one exception: if the **server refuses a
+  sale because the screen is out of date** (§50), the screen asks at once and shows the Update now bar. If a check fails for lack of
+  signal it tries again at the next trigger, never more than once a minute.
+- **What it asks:** a tiny conditional request for `index.html` ("has it changed since the copy I am running?"). The answer is
+  almost always an empty "no change" (≈ 0 bytes), so it costs next to nothing. The version of the running copy is the saved
+  page's ETag in the service-worker cache; no build step or version number to maintain.
+- **When it reloads:** only when nothing is in progress — no buyer name/contact or first-number typed, no sale being sent, no
+  sheet, panel, wizard or settings open, nothing being typed, and **no sale in the last 10 minutes** (the seller may still want to
+  share that ticket). It shows "Updating to the latest version…" for a moment, then reloads (login is kept).
+- **If it can't reload yet:** a bar at the top says "A new version is ready. It will load when you finish — or tap Update now",
+  and it reloads by itself as soon as the screen is idle. **Update now** reloads at once (clearing the saved copy).
+- **No loops:** if it has just reloaded (last 3 minutes) and still sees the old copy (a weak signal served the saved page), it
+  asks for a tap on Update now instead of reloading again.
+- Applies to the app screens (Sell, Admin, Platform Owner). The public buy and ticket pages load fresh on every visit.
