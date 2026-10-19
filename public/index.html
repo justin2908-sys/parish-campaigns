@@ -193,6 +193,15 @@ async function call(action, body = {}, timeoutMs = 20000) {
   return data;
 }
 
+// Every button that changes something says so, in words, where the person is looking — not only by the screen quietly redrawing.
+let toastTimer = null;
+function toast(text, kind) {
+  let el = document.getElementById('toast');
+  if (!el) { el = document.createElement('div'); el.id = 'toast'; el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite'); document.body.appendChild(el); }
+  el.style.cssText = 'position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:100;max-width:min(92vw,460px);padding:11px 16px;border-radius:12px;font-size:15px;font-weight:600;line-height:1.35;text-align:center;box-shadow:0 8px 28px rgba(0,0,0,.35);color:#fff;background:' + (kind === 'error' ? '#8A2F22' : '#2F6F4A');
+  el.textContent = text; el.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 4500);
+}
 function h(strings, ...vals) { return strings.reduce((a, s, i) => a + s + (vals[i] ?? ''), ''); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
@@ -363,13 +372,14 @@ async function doResetSuperadminPassword() {
 }
 async function doToggleSuperadminActive() {
   if (!foundSuperadmin) return;
-  try { await call('platform_set_superadmin_active', { user_id: foundSuperadmin.id, active: !foundSuperadmin.active }); doFindSuperadmin(); }
+  try { await call('platform_set_superadmin_active', { user_id: foundSuperadmin.id, active: !foundSuperadmin.active }); toast(foundSuperadmin.active ? '✓ Account disabled' : '✓ Account enabled'); doFindSuperadmin(); }
   catch (e) { alert(e.message); }
 }
 async function doCreateOrg() {
   const resEl = document.getElementById('orgResult');
   try {
     await call('create_organization', { name: document.getElementById('orgName').value.trim() });
+    toast('✓ Church added');
     renderPlatformOwner();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
@@ -383,7 +393,7 @@ async function doAddOrgAdmin() {
       mobile: document.getElementById('adminMobile').value.trim(),
       password: document.getElementById('adminPassword').value,
     });
-    resEl.innerHTML = `<div class="info">SuperAdmin created for that church.</div>`;
+    resEl.innerHTML = `<div class="info">SuperAdmin created for that church.</div>`; toast('✓ SuperAdmin created');
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
@@ -641,6 +651,7 @@ async function doPanelResend(id) {
   try {
     const r = await call('resend_payment', { payment_id: id });
     Object.assign(l, { status: 'pending', link_url: r.pay_url, link_shared_at: null, contact_channel: null });
+    toast('✓ New payment link created');
   } catch (e) { l.error = e.message; }
   l.busy = false; drawLinksPanel();
 }
@@ -656,6 +667,7 @@ async function doChangeContact(paymentId) {
     const r = await call('update_link_contact', { payment_id: paymentId, contact_value: v });
     if (l) Object.assign(l, { contact_value: r.contact_value, contact_channel: null, link_shared_at: null });
     if (a) { Object.assign(a, { contact: r.contact_value, sharedVia: null, sharedAt: null }); if (a.status === 'linkpending') sheetId = a.id; }
+    toast('✓ Contact updated');
     if (l) drawLinksPanel();
     renderFeed();
   } catch (e) { alert(e.message); }
@@ -978,6 +990,7 @@ async function doUndo(activityId) {
     document.getElementById('submitError').innerHTML = `<div class="error">${esc(e.message)}</div>`;
     return;
   }
+  toast('✓ Sale undone');
   activity = activity.filter(x => x.id !== activityId);
   if (pendingUndo && pendingUndo.activityId === activityId) pendingUndo = null;
 
@@ -1239,20 +1252,20 @@ function campaignStatusBadge(c) {
 }
 async function doOpenCampaign(id) {
   if (!confirm('Open this campaign now? It becomes visible to Sellers (if it is for them) and its public page starts working.')) return;
-  try { await call('open_campaign', { campaign_id: id }); if (cset && cset.id === id) openCampaignSettings(id); else renderCampaignsTab(); } catch (e) { alert(e.message); }
+  try { await call('open_campaign', { campaign_id: id }); toast('✓ Campaign opened — it is now live'); if (cset && cset.id === id) openCampaignSettings(id); else renderCampaignsTab(); } catch (e) { alert(e.message); }
 }
 async function doSaveOrgLottery() {
   const resEl = document.getElementById('orgLotteryResult');
   try {
     await call('set_org_lottery', { lottery_reg_number: document.getElementById('orgLotteryNumInput').value, lottery_authority: document.getElementById('orgLotteryAuthInput').value, lottery_valid_until: document.getElementById('orgLotteryUntilInput').value });
-    resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; wizOrg = null;
+    resEl.innerHTML = `<div class="info">Saved.</div>`; toast('✓ Lottery registration saved'); state.org = null; wizOrg = null;
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 async function doSaveOrgPrivacy() {
   const resEl = document.getElementById('orgPrivacyResult');
   try {
     await call('set_org_privacy', { contact_email: document.getElementById('orgContactEmailInput').value, privacy_url: document.getElementById('orgPrivacyUrlInput').value });
-    resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null;
+    resEl.innerHTML = `<div class="info">Saved.</div>`; toast('✓ Contact email and privacy link saved'); state.org = null;
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 let draftTiers = [{name:'',price:''},{name:'',price:''}];
@@ -1353,12 +1366,12 @@ async function renderCampaignsTab() {
 }
 async function doSaveThankYou() {
   const resEl = document.getElementById('orgThankYouResult');
-  try { await call('set_org_thank_you', { thank_you_text: document.getElementById('orgThankYouInput').value }); resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; }
+  try { await call('set_org_thank_you', { thank_you_text: document.getElementById('orgThankYouInput').value }); resEl.innerHTML = `<div class="info">Saved.</div>`; toast('✓ Thank-you message saved'); state.org = null; }
   catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 async function doSaveOrgAddress() {
   const resEl = document.getElementById('orgAddressResult');
-  try { await call('set_org_address', { address: document.getElementById('orgAddressInput').value }); resEl.innerHTML = `<div class="info">Saved.</div>`; state.org = null; }
+  try { await call('set_org_address', { address: document.getElementById('orgAddressInput').value }); resEl.innerHTML = `<div class="info">Saved.</div>`; toast('✓ Address saved'); state.org = null; }
   catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 async function doCopyPublicLink(campaignId) {
@@ -1369,7 +1382,7 @@ async function doCopyPublicLink(campaignId) {
 async function doEditCampaignDetails(campaignId) {
   const text = prompt("This campaign's details (shown on every ticket message) — leave empty to remove:", campaignDetailsCache[campaignId] || '');
   if (text === null) return;
-  try { await call('set_campaign_details', { campaign_id: campaignId, details_text: text }); renderCampaignsTab(); }
+  try { await call('set_campaign_details', { campaign_id: campaignId, details_text: text }); toast('✓ Details saved'); renderCampaignsTab(); }
   catch (e) { alert(e.message); }
 }
 function blockSummary(c) { return c.blocks.map(b => {
@@ -1798,6 +1811,7 @@ async function doSavePayOptions(kind) {
   try {
     await call('set_payment_options', { campaign_id: cset.id, [kind]: vals });
     cset.msgs['pay-' + kind] = `<div class="info">Saved — Sellers now see: ${esc(vals.map(v => PAY_METHODS.find(p => p[0] === v)[1]).join(', '))}.</div>`;
+    toast('✓ Payment options saved');
   } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   openCampaignSettings(cset.id);
 }
@@ -1808,6 +1822,7 @@ async function doSaveDefaultQty() {
   try {
     await call('set_default_ticket_qty', { campaign_id: cset.id, quantity: n });
     cset.msgs.qty = `<div class="info">Saved — ${n ? `each sale now starts at ${n} ticket${n === 1 ? '' : 's'}` : 'each sale now starts empty'}.</div>`;
+    toast('✓ Starting quantity saved');
   } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   openCampaignSettings(cset.id);
 }
@@ -1819,6 +1834,7 @@ async function doSaveCsetDates(confirmed) {
   try {
     const r = await call('set_campaign_dates', { ...body, confirm: !!confirmed });
     cset.msgs.dates = `<div class="info">Saved. Names and contact details will be removed on ${esc(fmtDay(r.delete_on))}.</div>`;
+    toast('✓ Dates saved');
   } catch (e) {
     if (/confirm to remove them/.test(e.message) && !confirmed) { if (confirm(e.message)) return doSaveCsetDates(true); msgEl.innerHTML = ''; return; }
     msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return;
@@ -1838,14 +1854,14 @@ async function doSaveCsetDetails() {
   const msgEl = document.getElementById('cmsg-details');
   try {
     await call('set_campaign_details', { campaign_id: cset.id, details_text: document.getElementById('csetDetails').value });
-    cset.msgs.details = '<div class="info">Saved.</div>';
+    cset.msgs.details = '<div class="info">Saved.</div>'; toast('✓ Details saved');
   } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   openCampaignSettings(cset.id);
 }
 async function doBinFromSettings() {
   const c = cset.campaign;
   if (!confirm(`Move "${c.name}" to the Recycle Bin? Data is kept, not deleted.`)) return;
-  try { await call('bin_campaign', { campaign_id: c.id }); closeCampaignSettings(); } catch (e) { alert(e.message); }
+  try { await call('bin_campaign', { campaign_id: c.id }); toast('✓ ' + c.name + ' moved to the Recycle Bin'); closeCampaignSettings(); } catch (e) { alert(e.message); }
 }
 
 // ---- Edit series: change where a series ends (cut back or stretch) ----
@@ -1895,6 +1911,7 @@ async function doSaveSeriesEnd(blockId, rangeStart, oldEnd) {
   try {
     const r = await call('edit_block_end', { block_id: blockId, range_end: newEnd }, 60000);
     const msg = r.removed ? `Done — ${r.removed} unsold tickets removed. The series now ends at ${r.range_end}.` : `Done — ${r.added} tickets added. The series now ends at ${r.range_end}.`;
+    toast('✓ ' + msg);   // the message is also kept under the Save button
     const keep = seriesEdit.msgs; keep[blockId] = `<div class="info">${esc(msg)}</div>`;
     seriesEdit.msgs = keep;
     await openSeriesEditor(seriesEdit.id);
@@ -1913,13 +1930,14 @@ async function doAddSeries() {
       range_end: document.getElementById('asEnd').value,
       number_prefix: document.getElementById('asPrefix').value,
     }, 60000);
+    toast('✓ Series added — ' + (block.label || 'new series'));
     await renderCampaignsTab();
     document.getElementById('addSeriesResult').innerHTML = `<div class="info">Added "${esc(block.label)}" (${esc(block.number_prefix||'')}${block.range_start}–${esc(block.number_prefix||'')}${block.range_end}) to ${esc(campaignName)}.</div>`;
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
-async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
-async function toggleCampaignVisibility(id, public_only) { try { await call('set_campaign_visibility', { campaign_id: id, public_only }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
-async function toggleCampaignPublicPage(id, public_page_enabled) { try { await call('set_campaign_visibility', { campaign_id: id, public_page_enabled }); renderCampaignsTab(); } catch (e) { alert(e.message); } }
+async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); toast(active ? '✓ Campaign activated' : '✓ Campaign deactivated'); renderCampaignsTab(); } catch (e) { alert(e.message); } }
+async function toggleCampaignVisibility(id, public_only) { try { await call('set_campaign_visibility', { campaign_id: id, public_only }); toast(public_only ? '✓ Now hidden from Sellers' : '✓ Now shown to Sellers'); renderCampaignsTab(); } catch (e) { alert(e.message); } }
+async function toggleCampaignPublicPage(id, public_page_enabled) { try { await call('set_campaign_visibility', { campaign_id: id, public_page_enabled }); toast(public_page_enabled ? '✓ Public page turned on' : '✓ Public page turned off'); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function downloadCampaignReport(id) {
   try {
     const { csv, filename } = await call('export_campaign_report', { campaign_id: id }, 60000);
@@ -1927,6 +1945,7 @@ async function downloadCampaignReport(id) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    toast('✓ Report downloaded');
   } catch (e) { alert(e.message); }
 }
 async function doSumupCheck() {
@@ -1940,7 +1959,7 @@ async function doSumupCheck() {
 }
 async function doBinCampaign(id, name) {
   if (!confirm(`Move "${name}" to the Recycle Bin? Data is kept, not deleted.`)) return;
-  try { await call('bin_campaign', { campaign_id: id }); renderCampaignsTab(); } catch (e) { alert(e.message); }
+  try { await call('bin_campaign', { campaign_id: id }); toast('✓ Moved to the Recycle Bin'); renderCampaignsTab(); } catch (e) { alert(e.message); }
 }
 
 async function renderRecycleBinTab() {
@@ -1956,7 +1975,7 @@ async function renderRecycleBinTab() {
     </table>`}
   </div>`;
 }
-async function doRestoreCampaign(id) { try { await call('restore_campaign', { campaign_id: id }); renderRecycleBinTab(); } catch (e) { alert(e.message); } }
+async function doRestoreCampaign(id) { try { await call('restore_campaign', { campaign_id: id }); toast('✓ Campaign restored'); renderRecycleBinTab(); } catch (e) { alert(e.message); } }
 
 // ---- Overview tab: how the campaign(s) are doing, and who sold what ----
 async function renderOverviewTab() {
@@ -2026,12 +2045,12 @@ async function doRefund(paymentId, total, already) {
   if (amt === null) return;
   const note = prompt('A short note — why, and how it was refunded (e.g. "Application not accepted; refunded in SumUp"):');
   if (note === null) return;
-  try { await call('record_refund', { payment_id: paymentId, amount: amt, note }); renderSalesTab(); } catch (e) { alert(e.message); }
+  try { await call('record_refund', { payment_id: paymentId, amount: amt, note }); toast('✓ Refund recorded'); renderSalesTab(); } catch (e) { alert(e.message); }
 }
 async function doVoid(paymentId) {
   const reason = prompt('Reason for voiding this sale? (An unpaid payment link is cancelled too. A payment SumUp has already received can\'t be voided here.)');
   if (!reason) return;
-  try { await call('void_sale', { payment_id: paymentId, reason }); renderSalesTab(); } catch (e) { alert(e.message); }
+  try { await call('void_sale', { payment_id: paymentId, reason }); toast('✓ Sale voided'); renderSalesTab(); } catch (e) { alert(e.message); }
 }
 
 // ---- Cash Recon tab ----
@@ -2062,6 +2081,7 @@ async function doCashRecon() {
     if (data.shortfall > 0) msg += `<br><b style="color:var(--bad)">£${data.shortfall.toFixed(2)} short of the next pending sale — nothing more confirmed until the rest is handed over.</b>`;
     if (data.still_pending.length) msg += `<br>${data.still_pending.length} sale(s) still pending for this seller.`;
     resEl.innerHTML = `<div class="info">${msg}</div>`;
+    toast(`✓ Cash reconciled — ${data.matched_count} sale(s), £${data.matched_amount.toFixed(2)}`);
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
@@ -2092,11 +2112,11 @@ async function renderAttentionTab() {
 async function doAdminChangeContact(paymentId, current) {
   const v = prompt('Type the correct mobile number or email:', current || '');
   if (v === null || !v.trim()) return;
-  try { await call('update_link_contact', { payment_id: paymentId, contact_value: v }); renderAttentionTab(); }
+  try { await call('update_link_contact', { payment_id: paymentId, contact_value: v }); toast('✓ Contact updated'); renderAttentionTab(); }
   catch (e) { alert(e.message); }
 }
 async function doResend(paymentId) {
-  try { await call('resend_payment', { payment_id: paymentId }); renderAttentionTab(); }
+  try { await call('resend_payment', { payment_id: paymentId }); toast('✓ New payment link created'); renderAttentionTab(); }
   catch (e) { alert(e.message); }
 }
 
@@ -2244,13 +2264,14 @@ async function doCreateUser() {
       role: document.getElementById('uRole').value,
       password: document.getElementById('uPassword').value,
     });
+    toast('✓ User created');
     renderUsersTab();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
-async function toggleUserActive(id, active) { try { await call('set_user_active', { user_id: id, active }); renderUsersTab(); } catch (e) { alert(e.message); } }
+async function toggleUserActive(id, active) { try { await call('set_user_active', { user_id: id, active }); toast(active ? '✓ User enabled' : '✓ User disabled'); renderUsersTab(); } catch (e) { alert(e.message); } }
 async function doResetPassword(id) {
   const pw = prompt('New password (8+ characters):'); if (!pw) return;
-  try { await call('reset_password', { user_id: id, new_password: pw }); alert('Password reset.'); } catch (e) { alert(e.message); }
+  try { await call('reset_password', { user_id: id, new_password: pw }); toast('✓ Password reset'); } catch (e) { alert(e.message); }
 }
 
 // ---------- keep the app up to date ----------

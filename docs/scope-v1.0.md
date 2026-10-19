@@ -1222,3 +1222,14 @@ seller's sales fail after §46). Now the page checks for a newer version and rel
 - **No loops:** if it has just reloaded (last 3 minutes) and still sees the old copy (a weak signal served the saved page), it
   asks for a tap on Update now instead of reloading again.
 - Applies to the app screens (Sell, Admin, Platform Owner). The public buy and ticket pages load fresh on every visit.
+
+## 53. Every action says "done" — 2026-10-19 (on dev; preview only)
+
+Design rule (Justin): **a button that does something must tell the person it worked, in words, where they are looking** —
+"Done"/"Updated"/"Saved" — never only by the screen quietly redrawing. Added a shared green confirmation (`toast()`, bottom of the
+screen, ~4½ seconds) to every Admin, Platform Owner and Sell-screen action that changes something and did not already announce
+it: Edit series (e.g. "✓ Done — 26 tickets added. The series now ends at 77."), Add series, open / activate / deactivate / hide /
+public page on-off, Recycle Bin / restore, Settings saves (payment options, starting quantity, dates, details, address,
+thank-you, contact email & privacy link, lottery registration), report download, record refund, void, cash reconciliation,
+update contact, new payment link, undo sale, user create / enable / disable / password reset, church and SuperAdmin creation.
+Errors keep their existing red message or alert. New actions must do the same.
