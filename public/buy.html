@@ -239,7 +239,7 @@ function legalSheetsHtml() {
   return lottery + privacy;
 }
 // A full-page message in the same style as the closed page (header, the line, then "Already bought? Find your ticket").
-function statusPageHtml(innerTop) {
+function statusPageHtml(innerTop, privacyText) {
   return `<div class="fatal"><div class="card">
     <h1 style="font-size:24px;margin:0 0 4px">${esc(info.campaign.name)}</h1>
     <p class="note">${esc(info.org.name)}</p>
@@ -251,8 +251,15 @@ function statusPageHtml(innerTop) {
       <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
       <div id="findOut" role="status" aria-live="polite"></div>
     </div>
-    <p class="note" style="font-size:13px;margin-top:14px">${lotteryHtml()}${privacyHtml()}</p>
+    <p class="note" style="font-size:13px;margin-top:14px">${privacyText || (lotteryHtml() + privacyHtml())}</p>
   </div></div>`;
+}
+// What we keep for a waiting list: only the email, only until everyone has been emailed.
+function waitingPrivacyHtml() {
+  const o = info.org, bits = [];
+  if (o.privacy_url) bits.push(`<a href="${esc(o.privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>`);
+  if (o.contact_email) bits.push(`Questions: <a href="mailto:${esc(o.contact_email)}">${esc(o.contact_email)}</a>`);
+  return `Your email is kept only for this waiting list and is deleted once we have emailed everyone. ${bits.join(' · ')}`;
 }
 // Fully booked, no waiting list.
 function fullPageHtml() {
@@ -267,7 +274,7 @@ function waitingPageHtml() {
       <input id="wlEmail" type="email" placeholder="Your email" autocomplete="email" inputmode="email" style="width:100%">
       <button type="button" class="shuf" id="wlBtn" style="width:100%;margin-top:10px">🔔 Join the waiting list</button>
     </div>
-    <div id="wlOut" role="status" aria-live="polite"></div>`);
+    <div id="wlOut" role="status" aria-live="polite"></div>`, waitingPrivacyHtml());
 }
 async function joinWaitingList() {
   const out = $('wlOut'), btn = $('wlBtn'), email = $('wlEmail').value.trim();

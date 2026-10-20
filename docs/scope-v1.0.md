@@ -1242,3 +1242,27 @@ and the confidentiality statement, a new payment link from a Seller's recent-sal
 "link shared" note (was swallowed silently — now says so). **In progress:** every request that takes more than ~0.4 s now shows a small
 "⏳ Working…" pill at the top until it finishes (background checks such as link polling stay quiet), so a slow signal never looks like
 "nothing happened". The public buy and ticket pages already had these (Looking…, the paying veil, "✓ Saved to your Downloads", "✓ Link copied").
+
+## 54. Phase 2: waiting list for ticket events — 2026-10-20 (on dev; preview only)
+
+For a **ticket event** (never a raffle) sold on the public page. Email only, nothing to pay, no automatic emails.
+- **Asked when you create the campaign** (wizard, step "Prices and numbers", only for a Ticket event that is sold on the public
+  page with online tickets): "When every place is taken — Stop selling / Waiting list". Default is Stop selling; the Pilgrimage
+  template starts on Waiting list. Also switchable later in ⚙ Settings → **Waiting list** (Turn on / Turn off).
+- **Public page:** when every online place is taken the page says "All places are taken" and offers **Join the waiting list**
+  (email address only; it says what is kept and why). Without a waiting list it says "This is fully booked" (this now applies to
+  every campaign, raffles included, instead of an error at checkout). "Already bought? Find your ticket" is on both.
+- **Nobody jumps the queue:** while *anyone* is on the list the public page stays on the waiting-list page and the server refuses
+  new bookings (409), even if a cancellation or an expired hold has freed places. Places that free up are announced to the list
+  first. If the list is empty, freed places are simply open (first come, first served).
+- **Organiser (SuperAdmin) in Settings:** sees how many are waiting and how many places are free now. Step 1: **Email everyone in
+  Gmail** (a compose window with everyone in Bcc and the message "N places now open — <campaign>, book here: <link>, places go to
+  whoever books first"), or **Open in my email app**, or **Copy addresses** for a long list. Step 2: **I've sent it — clear the list**
+  (asks to confirm; deletes the addresses; the places open to everyone). If no places are free yet it says so. The list can't be
+  turned off while people are waiting. The addresses are only handed to the browser to build that one email; there is no
+  screen listing people one by one.
+- **Privacy:** only an email is kept (no IP, no name); a duplicate address is ignored; at most 10 joins an hour per connection and
+  1,000 per list; the nightly retention job deletes a campaign's list with its other personal details; Data & privacy finds a
+  person's waiting-list entries by email, exports and erases them.
+- API: `public_join_waiting_list`, `waiting_list_get`, `set_waiting_list`, `waiting_list_clear`; `create_campaign` takes
+  `waiting_list`; `public_campaign_info` returns `sold_out`, `waiting_list`, `queue_open`. New `campaigns.waiting_list`, table `waiting_list`.
