@@ -2497,7 +2497,7 @@ function fileLooksLike(buf, kind) {
 
 async function publicRegister({ campaign_id, name, phone, email, answers, agreements, files, amount, client_ref, website }) {
   if (website) return { ok: true, registration_id: null, reg_number: 0, display_number: '', status: 'submitted' };   // the hidden spam-trap box was filled in: pretend, store nothing
-  if (clientIp && (await rateHit(`reg:${clientIp}`, 3600)) > 20) throw httpError(429, 'Too many submissions from your connection — please try again later.');
+  if (clientIp && (await rateHit(`reg:${clientIp}`, 3600)) > 60) throw httpError(429, 'Too many submissions from your connection — please try again later.');
   client_ref = cleanClientRef(client_ref);
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('kind', 'registration').eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
   if (!campaign) throw httpError(404, 'This form is not available right now.');
