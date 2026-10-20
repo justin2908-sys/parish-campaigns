@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#2E4739">
+<title>Your registration</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  .wrap { max-width:480px; margin:0 auto; padding:16px 14px 40px; }
+  .brand { font-family:var(--font-caps); font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--brass-strong); margin:6px 2px 10px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:0 8px 24px -14px rgba(34,53,42,.35); text-align:center; }
+  .badge { display:inline-block; padding:6px 14px; border-radius:999px; font-weight:700; font-size:15px; }
+  .badge.ok { background:#E3EEE5; color:#24593A; } .badge.warn { background:var(--gold-dim); color:#6b4e12; } .badge.bad { background:var(--bad-dim); color:var(--bad); }
+  .num { font-family:var(--font-head); font-size:54px; font-weight:600; color:var(--pine); line-height:1.1; margin:10px 0 2px; }
+  h2 { margin:8px 0 0; font-size:22px; }
+  .muted { color:var(--slate); font-size:14.5px; line-height:1.45; }
+  .stat { display:flex; justify-content:space-between; gap:10px; padding:9px 0; border-top:1px solid var(--line); text-align:left; font-size:15.5px; }
+  .stat span { color:var(--slate); }
+  button, .btn { display:block; width:100%; margin-top:12px; padding:13px; border:none; border-radius:13px; font-size:17px; font-weight:800; color:#fff; background:linear-gradient(180deg,#3E5E4C,#2E4739); box-shadow:0 4px 0 #1A2A20; text-align:center; text-decoration:none; font-family:inherit; cursor:pointer; }
+  button.secondary { background:#fff; color:var(--wine); box-shadow:none; border:1.5px solid var(--line); }
+  .banner { background:#E3EEE5; color:#24593A; border-radius:12px; padding:11px 13px; margin-bottom:12px; font-weight:600; text-align:left; }
+  .keep { margin-top:14px; padding:11px 13px; border-radius:12px; background:var(--gold-dim); border:1px solid #DCCB98; font-size:14.5px; line-height:1.45; text-align:left; }
+  .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#2F6F4A; color:#fff; padding:10px 16px; border-radius:12px; font-weight:600; z-index:50; }
+</style>
+</head>
+<body>
+<div class="wrap"><div class="brand" id="brand">⛪</div><div id="app"><div class="card">Loading…</div></div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+const qs = new URLSearchParams(location.search), regId = qs.get('id'), isNew = qs.get('new') === '1';
+let pollHandle = null;
+function say(t) { const e = document.createElement('div'); e.className = 'toast'; e.textContent = t; document.body.appendChild(e); setTimeout(() => e.remove(), 3500); }
+async function api(action, body) {
+  const r = await fetch('/api/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'Something went wrong'); return d;
+}
+const STATUS = {
+  submitted: (d) => d.approval ? ['warn', 'Received — waiting to be checked', 'The parish checks every application. You will see the result on this page — keep the link (below) and come back.'] : ['ok', '✓ Registered', 'Your place is booked. Keep your registration number safe.'],
+  accepted: () => ['ok', '✓ Accepted', 'Your application has been accepted. The parish will be in touch with what happens next.'],
+  declined: () => ['bad', 'Not accepted', 'Sorry — the parish was not able to accept this application. Please contact the parish office. If you paid, it will be refunded to you.'],
+  cancelled: () => ['bad', 'Cancelled', 'This registration has been cancelled. If you think this is a mistake, please contact the parish office.'],
+  awaiting_payment: () => ['warn', 'Payment needed', 'Your place is held for a short while. Please complete your payment to finish registering.'],
+};
+async function load() {
+  if (!regId) { $('app').innerHTML = '<div class="card">This link is missing its registration number.</div>'; return; }
+  let d;
+  try { d = await api('public_registration_status', { registration_id: regId }); }
+  catch (e) { $('app').innerHTML = `<div class="card"><div class="badge bad">Not found</div><p class="muted">${esc(e.message)}</p></div>`; return; }
+  $('brand').textContent = '⛪ ' + (d.org_name || '');
+  document.title = d.display_number + ' — ' + d.campaign_name;
+  const [kind, label, text] = (STATUS[d.status] || STATUS.submitted)(d);
+  const when = new Date(d.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const url = location.origin + '/registration.html?id=' + encodeURIComponent(d.id);
+  const bits = [];
+  if (d.org_privacy_url) bits.push(`<a href="${esc(d.org_privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>`);
+  if (d.org_contact_email) bits.push(`<a href="mailto:${esc(d.org_contact_email)}">${esc(d.org_contact_email)}</a>`);
+  $('app').innerHTML = `
+    ${isNew && d.status !== 'awaiting_payment' ? '<div class="banner">✓ Thank you — your registration has been received.</div>' : ''}
+    <div class="card">
+      <span class="badge ${kind}">${esc(label)}</span>
+      <div class="num">${esc(d.display_number)}</div>
+      <h2>${esc(d.campaign_name)}</h2>
+      <p class="muted">${esc(text)}</p>
+      <div style="margin-top:10px">
+        <div class="stat"><span>Name</span><b>${esc(d.name || '—')}</b></div>
+        <div class="stat"><span>Registered</span><b>${esc(when)}</b></div>
+        ${d.payment ? `<div class="stat"><span>Payment</span><b>£${Number(d.payment.amount).toFixed(2)}${d.payment.status === 'paid' ? ' · paid' : ''}</b></div>` : ''}
+      </div>
+      ${d.pay_url ? `<a class="btn" href="${esc(d.pay_url)}">Complete my payment</a>` : ''}
+      ${d.campaign_details ? `<p class="muted" style="margin-top:14px;text-align:left;white-space:pre-wrap">${esc(d.campaign_details)}</p>` : ''}
+      <div class="keep">🔖 <b>Keep this page.</b> Copy the link or bookmark it. You can also find it again on the registration form, with the mobile number or email you used.</div>
+      <button type="button" class="secondary" onclick="copyLink()">Copy the link to this page</button>
+      <p class="muted" style="margin:14px 0 0;font-size:12.5px">Your details are held by the Parish only for this registration${d.payment ? '; card payments are processed by SumUp' : ''}. ${bits.join(' · ')}</p>
+    </div>`;
+  window.__url = url;
+  clearInterval(pollHandle); pollHandle = null;
+  if (d.status === 'awaiting_payment') pollHandle = setInterval(load, 6000);   // back from SumUp's page: pick up the payment as soon as it lands
+}
+async function copyLink() {
+  try { await navigator.clipboard.writeText(window.__url); say('✓ Link copied — paste it somewhere safe'); }
+  catch { prompt('Copy this link:', window.__url); }
+}
+load();
+</script>
+</body>
+</html>

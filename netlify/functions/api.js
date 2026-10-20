@@ -382,7 +382,7 @@ async function setCampaignDetails(session, { campaign_id, details_text }) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft }) {
+async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft, waiting_list }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
@@ -405,6 +405,12 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
   const wantsPublicPage = public_page_enabled === undefined ? true : !!public_page_enabled;
   if (wantsPublicPage && !blocks.some(b => b.type === 'digital')) {
     throw httpError(400, 'A public buy page needs at least one online series — add one, or turn the public page off for this campaign.');
+  }
+  // A waiting list is for a ticket event (not a raffle) sold on the public page.
+  const wantsList = !!waiting_list;
+  if (wantsList) {
+    if (campaignKind === 'raffle') throw httpError(400, "A raffle can't have a waiting list.");
+    if (!wantsPublicPage || !blocks.some(b => b.type === 'digital')) throw httpError(400, 'A waiting list needs a public buy page with online tickets.');
   }
   // Checked BEFORE anything is created, so a mistake leaves nothing half-built behind.
   const ranges = blocks.map((b, i) => {
@@ -441,7 +447,7 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
       ...dates,
       // A new campaign made through the wizard starts as a draft: invisible to Sellers and the public until opened.
       is_draft: !!is_draft, active: !is_draft,
-      public_page_enabled: wantsPublicPage,
+      public_page_enabled: wantsPublicPage, waiting_list: wantsList,
       // Left out = all three, as before. The wizard sends its own defaults (no payment link for physical).
       physical_payment_methods: physical_payment_methods === undefined ? PAYMENT_METHODS : cleanPaymentMethods(physical_payment_methods, 'physical tickets'),
       online_payment_methods: online_payment_methods === undefined ? PAYMENT_METHODS : cleanPaymentMethods(online_payment_methods, 'online tickets'),
@@ -675,8 +681,7 @@ function validPreviewToken(token, campaign_id) {
   return want.length === got.length && crypto.timingSafeEqual(want, got);
 }
 async function campaignPreviewLink(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin']);
-  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  await requireCampaignManager(session, campaign_id);
   return { token: makePreviewToken(campaign_id) };
 }
 
@@ -684,8 +689,7 @@ async function campaignPreviewLink(session, { campaign_id }) {
 // already passed (+90) would remove that campaign's personal details at the next daily clean-up, so that
 // needs an explicit confirmation.
 async function setCampaignDates(session, { campaign_id, opens_on, closes_on, keep_until, confirm }) {
-  requireOrgRole(session, ['superadmin']);
-  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  await requireCampaignManager(session, campaign_id);
   const dates = {
     opens_on: cleanDate(opens_on, 'The opening date'),
     closes_on: cleanDate(closes_on, 'The closing date'),
@@ -711,8 +715,7 @@ async function setCampaignDates(session, { campaign_id, opens_on, closes_on, kee
 
 // A draft becomes a live campaign: visible to Sellers (if it's for them) and the public page works.
 async function openCampaign(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin']);
-  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  await requireCampaignManager(session, campaign_id);
   const { error } = await supabase.from('campaigns').update({ is_draft: false, active: true }).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
@@ -824,10 +827,12 @@ async function syncCheckout(payment) {
     }
     await supabase.from('payments').update({ status: 'paid', sumup_transaction_code: tx.transaction_code || null, sumup_transaction_id: tx.id || null }).eq('id', payment.id);
     await supabase.from('tickets').update({ status: 'paid' }).eq('payment_id', payment.id);
+    await supabase.from('registrations').update({ status: 'submitted' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // a paid registration is now in
     return 'paid';
   }
   if ((data.status === 'FAILED' || data.status === 'EXPIRED') && payment.status === 'pending') {
     await supabase.from('payments').update({ status: 'failed' }).eq('id', payment.id);
+    await supabase.from('registrations').update({ status: 'cancelled', decision_note: 'Payment not completed' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // the place goes back
     // A PHYSICAL ticket stays 'held' — it's already in someone's hand, so it must never
     // quietly become resellable; only an explicit Admin Void does that. An ONLINE ticket was
     // never physically handed to anyone, so an unpaid one is simply released back to its series.
@@ -874,7 +879,7 @@ async function listCampaigns(session, { include_inactive } = {}) {
     visible = campaigns.filter(c => !disabledIds.has(c.id) && !c.public_only);
   }
   // Something to sell from only appears while it is actually open: not before its opening date, not after it closes.
-  if (sellableOnly) visible = visible.filter(c => campaignOpenState(c) === 'open');
+  if (sellableOnly) visible = visible.filter(c => c.kind !== 'registration' && campaignOpenState(c) === 'open');
 
   return {
     campaigns: visible.map(c => ({
@@ -886,8 +891,7 @@ async function listCampaigns(session, { include_inactive } = {}) {
 }
 
 async function setCampaignActive(session, { campaign_id, active }) {
-  requireOrgRole(session, ['superadmin']);
-  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  await requireCampaignManager(session, campaign_id);
   const { error } = await supabase.from('campaigns').update({ active }).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
@@ -899,8 +903,7 @@ async function setCampaignActive(session, { campaign_id, active }) {
 // purposes — while the underlying tickets/payments are kept, not wiped, so a mistaken bin
 // can be undone and reports can still be pulled if needed.
 async function binCampaign(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin']);
-  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  await requireCampaignManager(session, campaign_id);   // SuperAdmin, or Finance / Priest for a registration form they made
   const { error } = await supabase.from('campaigns').update({ binned: true }).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
@@ -1307,10 +1310,11 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   // This is the first thing every visitor waits for, so the three lookups run side by side (the
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
-  const [{ data: campaign }, { data: tiers }, { data: blocks }] = await Promise.all([
-    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, default_ticket_qty, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
+  const [{ data: campaign }, { data: tiers }, { data: blocks }, placesLeft, queued] = await Promise.all([
+    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, default_ticket_qty, waiting_list, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
+    onlinePlacesLeft(campaign_id), waitingCount(campaign_id),
   ]);
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   // A draft or switched-off campaign shows nothing to the public. A private preview link lets an Admin see it
@@ -1329,6 +1333,10 @@ async function publicCampaignInfo({ campaign_id, preview }) {
     state: isPreview ? 'open' : state,   // a preview always shows the buying page, whatever the dates
     opens_on: campaign.opens_on, closes_on: campaign.closes_on,
     preview: isPreview,
+    // Fully booked, and whether the waiting list is what the buyer should see instead of the buying page.
+    sold_out: placesLeft === 0,
+    waiting_list: !!campaign.waiting_list,
+    queue_open: !!campaign.waiting_list && (placesLeft === 0 || queued > 0),
     tiers, blocks,
   };
 }
@@ -1415,6 +1423,8 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const openState = campaignOpenState(campaign);
   if (openState !== 'open') throw httpError(400, notOpenMessage(campaign, openState));
+  // While anyone is on the waiting list the places are held for them: nobody jumps the queue.
+  if (campaign.waiting_list && (await waitingCount(campaign.id)) > 0) throw httpError(409, 'All places are taken at the moment — please join the waiting list.');
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
   const { data: onlineBlocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id).eq('type', 'digital');
   if (!onlineBlocks || !onlineBlocks.length) throw httpError(400, 'This campaign has no online tickets available.');
@@ -1530,7 +1540,7 @@ async function orgNameForPayment(payment_id) {
   const { data: o } = await supabase.from('organizations').select('name').eq('id', c.org_id).maybeSingle();
   return o ? o.name : '';
 }
-async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName, ticketNumbers }) {
+async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName, ticketNumbers, description, redirectUrl }) {
   const ref = `${campaignSlug(campaignName)}-${payment_id.slice(0, 8).toUpperCase()}${refSuffix}`;
   const orgName = await orgNameForPayment(payment_id);
   const resp = await fetch('https://api.sumup.com/v0.1/checkouts', {
@@ -1538,7 +1548,7 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
     headers: { 'Authorization': `Bearer ${SUMUP_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       checkout_reference: ref, amount: Number(amount), currency: 'GBP', merchant_code: SUMUP_MERCHANT_CODE,
-      description: `${campaignName} — ticket${ticketNumbers.length > 1 ? 's' : ''} ${ticketNumbers.join(', ')}${orgName ? ` · ${orgName}` : ''}`,
+      description: description ? `${description}${orgName ? ` · ${orgName}` : ''}` : `${campaignName} — ticket${ticketNumbers.length > 1 ? 's' : ''} ${ticketNumbers.join(', ')}${orgName ? ` · ${orgName}` : ''}`,
       // SumUp has TWO different addresses and they must not be mixed up:
       //  - redirect_url: where the BUYER'S BROWSER is sent back to (SumUp's success page shows a
       //    button to it). Our ticket page — carries this sale's own unguessable id, and the page
@@ -1546,7 +1556,7 @@ async function createSumupCheckout({ payment_id, refSuffix, amount, campaignName
       //  - return_url: a BACKEND callback; SumUp POSTs here when the payment's status changes.
       // (Both were once wrongly the ticket page, so buyers ended on SumUp's page with no way back
       // and SumUp's notifications went to a page that cannot receive them.)
-      redirect_url: `${baseUrl}/ticket.html?payment_id=${payment_id}`,
+      redirect_url: redirectUrl || `${baseUrl}/ticket.html?payment_id=${payment_id}`,
       return_url: `${baseUrl}/api/sumup_webhook`,
       hosted_checkout: { enabled: true },
     }),
@@ -1800,6 +1810,7 @@ async function voidSale(session, { payment_id, reason }) {
   }
   await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null, attendee_name: null }).eq('payment_id', payment_id);
   await supabase.from('payments').update({ status: 'void', voided: true, voided_by: session.uid, voided_at: new Date().toISOString(), void_reason: reason }).eq('id', payment_id);
+  await supabase.from('registrations').update({ status: 'cancelled', decision_note: 'Payment voided' }).eq('payment_id', payment_id).in('status', ['awaiting_payment', 'submitted']);
   return { ok: true };
 }
 
@@ -1995,7 +2006,15 @@ async function listRecentPayments(session, { campaign_id } = {}) {
     created_at: p.created_at,
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
+  await attachRegistrationNumbers(out);
   return { payments: out };
+}
+async function attachRegistrationNumbers(list) {
+  const ids = list.map(p => p.id);
+  if (!ids.length) return;
+  const { data: regs } = await supabase.from('registrations').select('payment_id, reg_number').in('payment_id', ids);
+  const by = Object.fromEntries((regs || []).map(r => [r.payment_id, displayRegNumber(r.reg_number)]));
+  for (const p of list) if (by[p.id] && !(p.tickets && p.tickets.length)) p.tickets = [`Registration ${by[p.id]}`];
 }
 
 async function listIncompletePayments(session, { campaign_id } = {}) {
@@ -2022,6 +2041,7 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
     resend_count: p.resend_count,
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
+  await attachRegistrationNumbers(out);
   return { payments: out };
 }
 
@@ -2094,6 +2114,8 @@ async function resendPayment(session, { payment_id }) {
   if (isSeller && payment.seller_id !== session.uid) throw httpError(403, 'You can only resend a link for your own sale.');
   if (payment.method !== 'link') throw httpError(400, 'Only pay-by-link sales can have their link resent');
   if (payment.status === 'paid' || payment.status === 'void') throw httpError(400, `Cannot resend — this payment is already ${payment.status}`);
+  const { data: regOnPayment } = await supabase.from('registrations').select('id').eq('payment_id', payment.id).maybeSingle();
+  if (regOnPayment) throw httpError(400, "This payment is for a registration. If it didn't go through, ask them to fill in the form again.");
 
   // If the old checkout was actually paid (e.g. the notification was late), don't issue a
   // second link. Note: this may also release online tickets back to unsold right here if
@@ -2163,8 +2185,8 @@ async function retentionFlags(session) {
     supabase.from('campaigns').select('id, name').eq('org_id', session.org_id).eq('binned', false).is('keep_until', null).order('created_at'),
   ]);
   if (error) throw httpError(500, error.message);
-  const p = pending || { payments: 0, tickets: 0 };
-  return { count: p.payments + p.tickets, payments: p.payments, tickets: p.tickets, undated: undated || [] };
+  const p = pending || { payments: 0, tickets: 0, registrations: 0 };
+  return { count: p.payments + p.tickets + (p.registrations || 0), payments: p.payments, tickets: p.tickets, registrations: p.registrations || 0, undated: undated || [] };
 }
 
 // Clears personal identifiers only (name, contact, IP address, ticket-holder name). Amounts, ticket numbers,
@@ -2175,7 +2197,7 @@ async function anonymizeOldData(session) {
   requireOrgRole(session, ['superadmin']);
   const { data, error } = await supabase.rpc('retention_run', { p_org: session.org_id, p_days: RETENTION_DAYS });
   if (error) throw httpError(500, error.message);
-  return { ok: true, payments_cleared: data.payments, tickets_cleared: data.tickets };
+  return { ok: true, payments_cleared: data.payments, tickets_cleared: data.tickets, registrations_cleared: data.registrations || 0 };
 }
 
 async function sellerState(session, { campaign_id } = {}) {
@@ -2217,6 +2239,534 @@ async function sellScreen(session, { campaign_id } = {}) {
 }
 
 // ---------- router ----------
+// ---------- Waiting list (ticket events, never raffles) ----------
+// A campaign with a waiting list says "fully booked — join the list" once every online place is taken. From then on the
+// public page stays closed to new bookings for as long as anyone is on the list (nobody jumps the queue): the organiser
+// emails everyone once from Settings, then clears the list, and the places open to everyone, first come first served.
+// Only an email address is kept, and only until the list is cleared (or the campaign's retention date).
+const MAX_WAITING_LIST = 1000;
+async function onlinePlacesLeft(campaign_id) {
+  const { count } = await supabase.from('tickets').select('id, ticket_blocks!inner(type)', { count: 'exact', head: true })
+    .eq('campaign_id', campaign_id).eq('status', 'unsold').eq('ticket_blocks.type', 'digital');
+  return count || 0;
+}
+async function waitingCount(campaign_id) {
+  const { count } = await supabase.from('waiting_list').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id);
+  return count || 0;
+}
+async function publicJoinWaitingList({ campaign_id, email }) {
+  if (clientIp && (await rateHit(`wl:${clientIp}`, 3600)) > 10) throw httpError(429, 'Too many attempts from your connection — please try again later.');
+  const { data: c } = await supabase.from('campaigns').select('id, kind, places, active, binned, is_draft, opens_on, closes_on, waiting_list').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
+  if (!c || !c.waiting_list || campaignOpenState(c) !== 'open') throw httpError(404, 'There is no waiting list for this campaign.');
+  const v = String(email == null ? '' : email).trim().toLowerCase();
+  if (!v || v.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw httpError(400, 'Please enter your email address.');
+  const [left, queue] = await Promise.all([c.kind === 'registration' ? registrationPlacesLeft(c) : onlinePlacesLeft(c.id), waitingCount(c.id)]);
+  if ((left === null || left > 0) && queue === 0) return { available: true };   // places are open after all: they can simply book
+  if (queue >= MAX_WAITING_LIST) throw httpError(409, 'The waiting list is full.');
+  const { error } = await supabase.from('waiting_list').insert({ campaign_id: c.id, email: v });
+  if (error && error.code !== '23505') throw httpError(500, 'Could not add you to the waiting list — please try again.');
+  return { ok: true, already: !!error };   // adding the same address twice is harmless
+}
+// SuperAdmin: who is waiting (the addresses are only handed to the browser to build one email), and how many places are free.
+async function waitingListGet(session, { campaign_id }) {
+  await requireCampaignManager(session, campaign_id);
+  const { data: c } = await supabase.from('campaigns').select('name, waiting_list, kind, places, id').eq('id', campaign_id).single();
+  const { data: rows } = await supabase.from('waiting_list').select('email').eq('campaign_id', campaign_id).order('created_at');
+  return { enabled: !!c.waiting_list, name: c.name, count: (rows || []).length, emails: (rows || []).map(r => r.email), places_left: c.kind === 'registration' ? (await registrationPlacesLeft(c)) : await onlinePlacesLeft(campaign_id) };
+}
+async function setWaitingList(session, { campaign_id, enabled }) {
+  await requireCampaignManager(session, campaign_id);
+  const { data: c } = await supabase.from('campaigns').select('kind, places, public_page_enabled, waiting_list').eq('id', campaign_id).single();
+  if (!enabled) {
+    if (c.waiting_list && (await waitingCount(campaign_id)) > 0) throw httpError(409, 'Email everyone on the list and clear it first — turning it off would leave their addresses behind.');
+  } else {
+    if (c.kind === 'raffle') throw httpError(400, "A raffle can't have a waiting list.");
+    if (c.kind === 'registration') {
+      if (c.places == null) throw httpError(400, 'A waiting list needs a limit on places.');
+    } else {
+      const { count } = await supabase.from('ticket_blocks').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id).eq('type', 'digital');
+      if (!c.public_page_enabled || !count) throw httpError(400, 'A waiting list needs a public buy page with online tickets.');
+    }
+  }
+  const { error } = await supabase.from('campaigns').update({ waiting_list: !!enabled }).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, enabled: !!enabled };
+}
+// "I've sent the email": the list is emptied (the addresses are deleted) and the places open to everyone.
+async function waitingListClear(session, { campaign_id, confirm }) {
+  await requireCampaignManager(session, campaign_id);
+  if (confirm !== true) throw httpError(400, 'Confirm that you have emailed everyone and want to clear the list.');
+  const { data } = await supabase.from('waiting_list').delete().eq('campaign_id', campaign_id).select('id');
+  return { ok: true, cleared: (data || []).length };
+}
+
+// ---------- Registrations: a form people fill in (details first), with optional payment, approval and uploads ----------
+// The form is defined on the campaign (form_def). A person's submission is a row in `registrations`; one registration
+// is one place; the number they keep is "R" + its number. Everything personal lives in that row (and its files) so
+// it can be exported, erased, and removed by the nightly retention job.
+const REG_PREFIX = 'R';
+const REG_FIELD_TYPES = ['text', 'longtext', 'number', 'date', 'dropdown', 'yesno', 'phone', 'email', 'address', 'file'];
+const MAX_REG_FIELDS = 40, MAX_REG_PLACES = 2000, MAX_UPLOAD_BYTES = 3 * 1024 * 1024, MAX_UPLOAD_TOTAL = 3.5 * 1024 * 1024;
+const UPLOAD_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpeg', 'image/png': 'png', 'image/webp': 'webp' };
+
+function cleanText(v, max, what) {
+  const s = String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
+  if (s.length > max) throw httpError(400, `${what} is too long (${max} characters at most).`);
+  return s;
+}
+// Validates and tidies a form definition coming from the browser. Nothing here is trusted: ids, types and
+// lengths are all re-checked, so a hand-made request can't smuggle odd content into a public page.
+function cleanFormDef(def) {
+  const d = def && typeof def === 'object' ? def : {};
+  const rawFields = Array.isArray(d.fields) ? d.fields : [];
+  if (rawFields.length > MAX_REG_FIELDS) throw httpError(400, `A form can have at most ${MAX_REG_FIELDS} questions.`);
+  const seen = new Set();
+  const fields = rawFields.map((f, i) => {
+    if (!f || typeof f !== 'object') throw httpError(400, 'A question is not valid.');
+    if (!REG_FIELD_TYPES.includes(f.type)) throw httpError(400, `Question ${i + 1}: choose what kind of answer it takes.`);
+    const label = cleanText(f.label, 200, `Question ${i + 1}`);
+    if (!label) throw httpError(400, `Question ${i + 1} needs its wording.`);
+    let id = /^[a-z][a-z0-9_]{0,23}$/.test(String(f.id || '')) ? String(f.id) : `q${i + 1}`;
+    while (seen.has(id)) id += 'x';
+    seen.add(id);
+    let options = [];
+    if (f.type === 'dropdown') {
+      options = (Array.isArray(f.options) ? f.options : []).map(o => cleanText(o, 100, 'An option')).filter(Boolean);
+      if (options.length < 2) throw httpError(400, `Question ${i + 1} (${label}): a dropdown needs at least two options.`);
+      if (options.length > 40) throw httpError(400, `Question ${i + 1}: too many options (40 at most).`);
+    }
+    return { id, type: f.type, label, help: cleanText(f.help, 300, 'The hint'), required: !!f.required, sensitive: !!f.sensitive, options };
+  });
+  const rawAgs = Array.isArray(d.agreements) ? d.agreements : [];
+  if (rawAgs.length > 8) throw httpError(400, 'A form can have at most 8 agreements.');
+  const agreements = rawAgs.map((a, i) => {
+    const text = cleanText(a && a.text, 1200, `Agreement ${i + 1}`);
+    if (!text) throw httpError(400, `Agreement ${i + 1} needs its wording.`);
+    return { id: `a${i + 1}`, kind: a.kind === 'optional' ? 'optional' : 'required', text };
+  });
+  let payment = null;
+  if (d.payment && typeof d.payment === 'object') {
+    const min = Math.round(Number(d.payment.min) * 100) / 100, max = Math.round(Number(d.payment.max == null || d.payment.max === '' ? 500 : d.payment.max) * 100) / 100;
+    if (!Number.isFinite(min) || min < 1) throw httpError(400, 'The minimum payment must be at least £1 (or turn payment off).');
+    if (!Number.isFinite(max) || max < min || max > 5000) throw httpError(400, 'The maximum payment must be at least the minimum, and no more than £5,000.');
+    payment = { min, max, label: cleanText(d.payment.label, 120, 'The payment label') };
+  }
+  return {
+    intro: cleanText(d.intro, 2000, 'The introduction'),
+    contact_mode: d.contact_mode === 'both' ? 'both' : 'either',
+    fields, agreements, payment, approval: !!d.approval,
+  };
+}
+function cleanPlaces(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_REG_PLACES) throw httpError(400, `Places must be a whole number from 1 to ${MAX_REG_PLACES.toLocaleString()} (or leave it blank for no limit).`);
+  return n;
+}
+const REG_ACTIVE_STATUSES = ['awaiting_payment', 'submitted', 'accepted'];   // these hold a place; cancelled and declined give it back
+async function registrationsUsed(campaign_id) {
+  const { count } = await supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id).in('status', REG_ACTIVE_STATUSES);
+  return count || 0;
+}
+async function registrationPlacesLeft(c) {   // null = no limit
+  if (c.places == null) return null;
+  return Math.max(0, c.places - (await registrationsUsed(c.id)));
+}
+
+// A registration form is created like any campaign, by the SuperAdmin — or by Finance or the Priest, who can then
+// manage their own forms.
+async function createRegistrationCampaign(session, { name, details_text, opens_on, closes_on, keep_until, is_draft, places, waiting_list, form_def }) {
+  requireOrgRole(session, ['superadmin', 'finance', 'priest']);
+  const cleanedName = String(name == null ? '' : name).trim();
+  if (!cleanedName) throw httpError(400, 'Give the form a name');
+  const dates = {
+    opens_on: cleanDate(opens_on, 'The opening date'),
+    closes_on: cleanDate(closes_on, 'The closing date'),
+    keep_until: cleanDate(keep_until, 'The "keep the details until" date', { required: true }),
+  };
+  checkDateOrder(dates);
+  const def = cleanFormDef(form_def);
+  const limit = cleanPlaces(places);
+  const wantsList = !!waiting_list;
+  if (wantsList && limit == null) throw httpError(400, 'A waiting list needs a limit on places.');
+  const { data: campaign, error } = await supabase.from('campaigns').insert({
+    org_id: session.org_id, name: cleanedName, created_by: session.uid, details_text: (details_text || '').trim() || null,
+    kind: 'registration', age_restricted: false, public_only: false, public_page_enabled: true,
+    ...dates, is_draft: !!is_draft, active: !is_draft, waiting_list: wantsList, places: limit, form_def: def,
+  }).select().single();
+  if (error) throw httpError(400, error.message);
+  return { ok: true, campaign };
+}
+
+// A person may manage a campaign if they are the SuperAdmin, or if it is a registration form they created themselves.
+async function requireCampaignManager(session, campaign_id) {
+  requireOrgRole(session, ['superadmin', 'finance', 'priest']);
+  const { data: c } = await supabase.from('campaigns').select('org_id, kind, created_by').eq('id', campaign_id).maybeSingle();
+  if (!c || c.org_id !== session.org_id) throw httpError(404, 'Campaign not found');
+  if (session.role !== 'superadmin' && !(c.kind === 'registration' && c.created_by === session.uid)) throw httpError(403, 'Not permitted for this action');
+  return c;
+}
+
+// ---- the public side
+function displayRegNumber(n) { return `${REG_PREFIX}${n}`; }
+async function publicRegistrationInfo({ campaign_id, preview }) {
+  const { data: campaign } = await supabase.from('campaigns')
+    .select('id, name, details_text, org_id, kind, active, binned, is_draft, opens_on, closes_on, waiting_list, places, form_def, organizations(name, address, thank_you_text, contact_email, privacy_url)')
+    .eq('id', campaign_id).eq('kind', 'registration').eq('binned', false).eq('public_page_enabled', true).maybeSingle();
+  if (!campaign) throw httpError(404, 'This form is not available right now.');
+  const isPreview = validPreviewToken(preview, campaign.id);
+  const state = campaignOpenState(campaign);
+  // A draft or a binned form shows nothing. A paused (deactivated) one says so plainly instead of looking broken.
+  if (!isPreview && (state === 'draft' || state === 'unavailable')) throw httpError(404, 'This form is not available right now.');
+  const [left, queued] = await Promise.all([registrationPlacesLeft(campaign), waitingCount(campaign.id)]);
+  const def = campaign.form_def || { fields: [], agreements: [], contact_mode: 'either' };
+  const org = campaign.organizations;
+  const soldOut = left !== null && left === 0;
+  return {
+    campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text },
+    org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null, contact_email: org ? org.contact_email : null, privacy_url: org ? org.privacy_url : null },
+    form: { intro: def.intro || '', contact_mode: def.contact_mode || 'either', fields: def.fields || [], agreements: def.agreements || [], payment: def.payment || null, approval: !!def.approval },
+    state: isPreview ? 'open' : state, opens_on: campaign.opens_on, closes_on: campaign.closes_on, preview: isPreview,
+    places_left: left, sold_out: soldOut, waiting_list: !!campaign.waiting_list, queue_open: !!campaign.waiting_list && (soldOut || queued > 0),
+  };
+}
+
+function validateRegPhone(v, what) {
+  const c = parseContact(v, `Please enter ${what}.`);
+  if (c.kind !== 'phone') throw httpError(400, `${what.charAt(0).toUpperCase() + what.slice(1)} should be a phone number.`);
+  return c.value;
+}
+function validateRegEmail(v, what) {
+  const e = cleanText(v, 254, 'The email address').toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw httpError(400, `Please enter ${what} as an email address.`);
+  return e;
+}
+// One answer, checked against its question. Returns the cleaned value ('' when an optional question is left blank).
+function validateAnswer(f, raw) {
+  if (f.type === 'file') return '';   // the file itself arrives separately (see publicRegister)
+  const empty = raw === undefined || raw === null || raw === '' || (typeof raw === 'object' && !Array.isArray(raw) && Object.values(raw).every(x => !String(x || '').trim()));
+  if (empty) {
+    if (f.required) throw httpError(400, `Please answer: ${f.label}`);
+    return '';
+  }
+  const label = f.label;
+  switch (f.type) {
+    case 'text': return cleanText(raw, 300, `"${label}"`);
+    case 'longtext': return cleanText(raw, 4000, `"${label}"`);
+    case 'number': {
+      const n = Number(String(raw).trim());
+      if (!Number.isFinite(n)) throw httpError(400, `"${label}" should be a number.`);
+      return String(n);
+    }
+    case 'date': {
+      const s = String(raw).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(new Date(s + 'T00:00:00Z').getTime()) || new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) !== s) throw httpError(400, `"${label}" should be a date.`);
+      const y = Number(s.slice(0, 4)); if (y < 1900 || y > 2100) throw httpError(400, `"${label}" looks wrong — check the year.`);
+      return s;
+    }
+    case 'dropdown': {
+      const s = String(raw);
+      if (!f.options.includes(s)) throw httpError(400, `Please choose one of the options for "${label}".`);
+      return s;
+    }
+    case 'yesno': {
+      const s = String(raw).toLowerCase();
+      if (!['yes', 'no'].includes(s)) throw httpError(400, `Please choose Yes or No for "${label}".`);
+      return s;
+    }
+    case 'phone': return validateRegPhone(raw, label);
+    case 'email': return validateRegEmail(raw, label);
+    case 'address': {
+      const a = typeof raw === 'object' ? raw : {};
+      const line1 = cleanText(a.line1, 120, 'The address'), line2 = cleanText(a.line2, 120, 'The address'), city = cleanText(a.city, 80, 'The town or city'), postcode = cleanText(a.postcode, 12, 'The postcode').toUpperCase();
+      if (!line1 || !city || !postcode) throw httpError(400, `Please give the street, town or city and postcode for "${label}".`);
+      if (!/^[A-Z0-9][A-Z0-9 ]{2,9}$/.test(postcode)) throw httpError(400, `That postcode doesn't look right for "${label}".`);
+      return { line1, line2, city, postcode };
+    }
+    case 'file': return '';   // the file itself arrives separately; see below
+    default: throw httpError(400, 'Unknown question type.');
+  }
+}
+function fileLooksLike(buf, kind) {
+  if (kind === 'pdf') return buf.slice(0, 4).toString('latin1') === '%PDF';
+  if (kind === 'jpeg') return buf[0] === 0xFF && buf[1] === 0xD8;
+  if (kind === 'png') return buf.slice(0, 4).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47]));
+  if (kind === 'webp') return buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP';
+  return false;
+}
+
+async function publicRegister({ campaign_id, name, phone, email, answers, agreements, files, amount, client_ref, website }) {
+  if (website) return { ok: true, registration_id: null, reg_number: 0, display_number: '', status: 'submitted' };   // the hidden spam-trap box was filled in: pretend, store nothing
+  if (clientIp && (await rateHit(`reg:${clientIp}`, 3600)) > 60) throw httpError(429, 'Too many submissions from your connection — please try again later.');
+  client_ref = cleanClientRef(client_ref);
+  const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('kind', 'registration').eq('active', true).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
+  if (!campaign) throw httpError(404, 'This form is not available right now.');
+  if (client_ref) {   // a lost reply and a second tap must not register twice
+    const { data: again } = await supabase.from('registrations').select('id, reg_number, status').eq('campaign_id', campaign.id).eq('client_ref', client_ref).maybeSingle();
+    if (again) return { ok: true, registration_id: again.id, reg_number: again.reg_number, display_number: displayRegNumber(again.reg_number), status: again.status, replay: true };
+  }
+  const openState = campaignOpenState(campaign);
+  if (openState !== 'open') throw httpError(400, notOpenMessage(campaign, openState));
+  if (campaign.waiting_list && (await waitingCount(campaign.id)) > 0) throw httpError(409, 'All places are taken at the moment — please join the waiting list.');
+  const def = campaign.form_def || { fields: [], agreements: [], contact_mode: 'either' };
+
+  // Who is registering, and how to reach them.
+  const cleanedName = cleanName(name, 'Your name');
+  if (!cleanedName) throw httpError(400, 'Please enter your name.');
+  const both = def.contact_mode === 'both';
+  const hasPhone = !!String(phone || '').trim(), hasEmail = !!String(email || '').trim();
+  if (both && !(hasPhone && hasEmail)) throw httpError(400, 'Please give both a mobile number and an email address.');
+  if (!hasPhone && !hasEmail) throw httpError(400, 'Please give a mobile number or an email address — it is how you find your registration again.');
+  const phoneV = hasPhone ? validateRegPhone(phone, 'your mobile number') : null;
+  const emailV = hasEmail ? validateRegEmail(email, 'your email address') : null;
+
+  // The questions, each checked against its definition; labels are copied in so the record stays readable if the form is edited later.
+  const given = answers && typeof answers === 'object' ? answers : {};
+  const filesIn = files && typeof files === 'object' ? files : {};
+  const stored = [];
+  const fileRows = [];
+  let totalBytes = 0;
+  for (const f of def.fields) {
+    let value = validateAnswer(f, given[f.id]);
+    if (f.type === 'file') {
+      const up = filesIn[f.id];
+      if (!up || !up.data) { if (f.required) throw httpError(400, `Please attach a file for: ${f.label}`); }
+      else {
+        const kind = UPLOAD_TYPES[String(up.mime || '')];
+        if (!kind) throw httpError(400, `"${f.label}": please attach a PDF or a photo (JPEG, PNG or WebP).`);
+        const buf = Buffer.from(String(up.data), 'base64');
+        if (!buf.length || buf.length > MAX_UPLOAD_BYTES) throw httpError(400, `"${f.label}": the file must be under 3 MB.`);
+        totalBytes += buf.length;
+        if (totalBytes > MAX_UPLOAD_TOTAL) throw httpError(400, 'The attached files are too large together (3.5 MB at most).');
+        if (!fileLooksLike(buf, kind)) throw httpError(400, `"${f.label}": that file doesn't look like a ${kind.toUpperCase()}.`);
+        const filename = cleanText(up.filename, 120, 'The file name').replace(/[\\/:*?"<>|]/g, '_') || `file.${kind}`;
+        fileRows.push({ field_id: f.id, filename, mime: up.mime, size: buf.length, data: '\\x' + buf.toString('hex') });
+        value = filename;
+      }
+    }
+    stored.push({ id: f.id, label: f.label, type: f.type, value, sensitive: !!f.sensitive });
+  }
+  const givenAgs = agreements && typeof agreements === 'object' ? agreements : {};
+  const agreed = def.agreements.map(a => {
+    const accepted = !!givenAgs[a.id];
+    if (a.kind === 'required' && !accepted) throw httpError(400, `Please tick to agree: ${a.text.slice(0, 120)}${a.text.length > 120 ? '…' : ''}`);
+    return { id: a.id, kind: a.kind, text: a.text, accepted };
+  });
+
+  // A form that takes a payment asks for an amount between its minimum and maximum, paid as part of submitting.
+  const payCfg = def.payment || null;
+  let payAmount = null, paymentId = null;
+  if (payCfg) {
+    payAmount = Math.round(Number(amount) * 100) / 100;
+    if (!Number.isFinite(payAmount) || payAmount < payCfg.min || payAmount > payCfg.max) throw httpError(400, `Please enter an amount from £${Number(payCfg.min).toFixed(2)} to £${Number(payCfg.max).toFixed(2)}.`);
+    await enforcePublicPurchaseLimits(emailV || phoneV, 1);
+    const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaign.id, method: 'link', amount: payAmount, status: 'pending', seller_id: null, payer_name: cleanedName, contact_value: emailV || phoneV, client_ip: clientIp || null }).select().single();
+    if (payErr) throw httpError(500, 'Could not start your payment — please try again.');
+    paymentId = pay.id;
+  }
+  const voidPayment = (why) => paymentId ? supabase.from('payments').update({ status: 'void', voided: true, void_reason: why }).eq('id', paymentId) : null;
+
+  // Take the next number and a place in one step.
+  const { data: claim, error: claimErr } = await supabase.rpc('register_claim', {
+    p_campaign: campaign.id, p_name: cleanedName, p_phone: phoneV, p_email: emailV, p_answers: stored, p_agreements: agreed,
+    p_status: payCfg ? 'awaiting_payment' : 'submitted', p_payment: paymentId, p_ip: clientIp || null, p_client_ref: client_ref,
+  });
+  if (claimErr) {
+    await voidPayment('registration not saved');
+    if (String(claimErr.message).includes('FULL')) throw httpError(409, campaign.waiting_list ? 'All places have just been taken — please join the waiting list.' : 'Sorry — this is fully booked.');
+    if (claimErr.code === '23505' && client_ref) {
+      const { data: again } = await supabase.from('registrations').select('id, reg_number, status').eq('campaign_id', campaign.id).eq('client_ref', client_ref).maybeSingle();
+      if (again) return { ok: true, registration_id: again.id, reg_number: again.reg_number, display_number: displayRegNumber(again.reg_number), status: again.status, replay: true };
+    }
+    throw httpError(500, 'Could not save your registration — please try again.');
+  }
+  const row = Array.isArray(claim) ? claim[0] : claim;
+  if (fileRows.length) {
+    const { error: fErr } = await supabase.from('registration_files').insert(fileRows.map(r => ({ ...r, registration_id: row.reg_id })));
+    if (fErr) {
+      await supabase.from('registrations').delete().eq('id', row.reg_id);
+      await voidPayment('registration not saved');
+      throw httpError(500, 'Could not save the attached file — please try again.');
+    }
+  }
+  if (!payCfg) return { ok: true, registration_id: row.reg_id, reg_number: row.number, display_number: displayRegNumber(row.number), status: 'submitted' };
+  const created = await createSumupCheckout({ payment_id: paymentId, refSuffix: '', amount: payAmount, campaignName: campaign.name, ticketNumbers: [displayRegNumber(row.number)],
+    description: `${campaign.name} — registration ${displayRegNumber(row.number)}`, redirectUrl: `${baseUrl}/registration.html?id=${row.reg_id}` });
+  if (!created.ok) {
+    await supabase.from('registrations').update({ status: 'cancelled', decision_note: 'Could not start the payment' }).eq('id', row.reg_id);
+    await voidPayment('could not create SumUp payment link');
+    throw httpError(502, created.message);
+  }
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', paymentId);
+  return { ok: true, registration_id: row.reg_id, reg_number: row.number, display_number: displayRegNumber(row.number), status: 'awaiting_payment', pay_url: created.pay_url, amount: payAmount };
+}
+
+function publicRegistrationShape(r, campaign, org, def) {
+  return {
+    id: r.id, number: r.reg_number, display_number: displayRegNumber(r.reg_number), name: r.name, status: r.status, created_at: r.created_at,
+    campaign_name: campaign.name, campaign_details: campaign.details_text, approval: !!(def && def.approval),
+    org_name: org ? org.name : '', org_address: org ? org.address : '', thank_you: org ? org.thank_you_text : null,
+    org_contact_email: org ? org.contact_email : null, org_privacy_url: org ? org.privacy_url : null,
+  };
+}
+// The person's own page: their number and where it stands. (The id is unguessable and the page shows no answers.)
+async function publicRegistrationStatus({ registration_id }) {
+  if (!registration_id) throw httpError(400, 'registration_id is required');
+  let { data: r } = await supabase.from('registrations').select('id, reg_number, name, status, created_at, campaign_id, payment_id').eq('id', registration_id).maybeSingle();
+  if (!r) throw httpError(404, 'Registration not found');
+  let payUrl = null, paid = null;
+  if (r.payment_id) {
+    const { data: pay } = await supabase.from('payments').select('*').eq('id', r.payment_id).maybeSingle();
+    if (pay) {
+      if (r.status === 'awaiting_payment') {
+        try { await syncCheckout(pay); } catch { /* SumUp unreachable: show what we know */ }
+        ({ data: r } = await supabase.from('registrations').select('id, reg_number, name, status, created_at, campaign_id, payment_id').eq('id', registration_id).maybeSingle());
+      }
+      if (r.status === 'awaiting_payment') payUrl = pay.link_url;
+      paid = { amount: Number(pay.amount), status: pay.status };
+    }
+  }
+  const { data: campaign } = await supabase.from('campaigns').select('name, details_text, org_id, form_def').eq('id', r.campaign_id).single();
+  const { data: org } = await supabase.from('organizations').select('name, address, thank_you_text, contact_email, privacy_url').eq('id', campaign.org_id).single();
+  return { ...publicRegistrationShape(r, campaign, org, campaign.form_def), pay_url: payUrl, payment: paid };
+}
+async function publicFindRegistrations({ campaign_id, contact_value }) {
+  if (clientIp && (await rateHit(`find:${clientIp}`, 3600)) > FIND_MAX_PER_HOUR) throw httpError(429, 'Too many look-ups from your connection — please try again later.');
+  const c = parseContact(contact_value, 'Please enter the mobile number or email you registered with.');
+  const { data: rows } = await supabase.from('registrations').select('id, reg_number, name, status, created_at')
+    .eq('campaign_id', campaign_id).neq('status', 'cancelled').in(c.kind === 'email' ? 'email' : 'phone', contactVariants(c)).order('created_at', { ascending: false }).limit(20);
+  return { registrations: (rows || []).map(r => ({ id: r.id, display_number: displayRegNumber(r.reg_number), name: r.name, status: r.status, created_at: r.created_at })) };
+}
+
+// ---- the organiser side (SuperAdmin, Finance, Priest — never Admin or Sellers — and only after the confidentiality statement)
+async function registrationForms(session) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  await requireConfidentiality(session);
+  const { data: camps } = await supabase.from('campaigns').select('*').eq('org_id', session.org_id).eq('kind', 'registration').eq('binned', false).order('created_at', { ascending: false });
+  const ids = (camps || []).map(c => c.id);
+  const [{ data: regs }, { data: waits }, { data: users }] = await Promise.all([
+    ids.length ? supabase.from('registrations').select('campaign_id, status').in('campaign_id', ids) : { data: [] },
+    ids.length ? supabase.from('waiting_list').select('campaign_id').in('campaign_id', ids) : { data: [] },
+    supabase.from('users').select('id, name').eq('org_id', session.org_id),
+  ]);
+  const nameOf = Object.fromEntries((users || []).map(u => [u.id, u.name]));
+  const forms = (camps || []).map(c => {
+    const mine = (regs || []).filter(r => r.campaign_id === c.id);
+    const by = (s) => mine.filter(r => r.status === s).length;
+    const def = c.form_def || {};
+    return {
+      id: c.id, name: c.name, state: campaignOpenState(c), is_draft: c.is_draft, active: c.active, opens_on: c.opens_on, closes_on: c.closes_on, keep_until: c.keep_until,
+      places: c.places, waiting_list: !!c.waiting_list, waiting_count: (waits || []).filter(w => w.campaign_id === c.id).length,
+      total: mine.filter(r => r.status !== 'cancelled' && r.status !== 'declined').length,
+      awaiting_payment: by('awaiting_payment'), submitted: by('submitted'), accepted: by('accepted'), declined: by('declined'), cancelled: by('cancelled'),
+      approval: !!def.approval, payment: def.payment || null, field_count: (def.fields || []).length, form_def: def, details_text: c.details_text,
+      created_by: c.created_by, created_by_name: nameOf[c.created_by] || '', can_manage: session.role === 'superadmin' || c.created_by === session.uid,
+    };
+  });
+  return { forms };
+}
+async function requireRegistrationCampaign(session, campaign_id) {
+  requireOrgRole(session, CONFIDENTIAL_ROLES);
+  await requireConfidentiality(session);
+  const { data: c } = await supabase.from('campaigns').select('*').eq('id', campaign_id).eq('kind', 'registration').maybeSingle();
+  if (!c || c.org_id !== session.org_id) throw httpError(404, 'Form not found');
+  return c;
+}
+async function registrationsList(session, { campaign_id }) {
+  const c = await requireRegistrationCampaign(session, campaign_id);
+  const { data: rows } = await supabase.from('registrations').select('id, reg_number, name, phone, email, status, created_at, decision_note, payment_id').eq('campaign_id', c.id).order('reg_number');
+  const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
+  const { data: pays } = payIds.length ? await supabase.from('payments').select('id, amount, status').in('id', payIds) : { data: [] };
+  const payBy = Object.fromEntries((pays || []).map(p => [p.id, p]));
+  return {
+    campaign: { id: c.id, name: c.name, form_def: c.form_def },
+    registrations: (rows || []).map(r => ({ id: r.id, display_number: displayRegNumber(r.reg_number), number: r.reg_number, name: r.name, phone: r.phone, email: r.email, status: r.status, created_at: r.created_at, decision_note: r.decision_note, payment: r.payment_id ? { amount: Number((payBy[r.payment_id] || {}).amount || 0), status: (payBy[r.payment_id] || {}).status } : null })),
+  };
+}
+async function registrationGet(session, { registration_id }) {
+  const { data: r } = await supabase.from('registrations').select('*').eq('id', registration_id).maybeSingle();
+  if (!r) throw httpError(404, 'Registration not found');
+  const c = await requireRegistrationCampaign(session, r.campaign_id);
+  const [{ data: files }, { data: pay }, { data: decider }] = await Promise.all([
+    supabase.from('registration_files').select('id, field_id, filename, mime, size').eq('registration_id', r.id),
+    r.payment_id ? supabase.from('payments').select('id, amount, status, method, sumup_transaction_code, refund_amount, refund_note').eq('id', r.payment_id).maybeSingle() : { data: null },
+    r.decided_by ? supabase.from('users').select('name').eq('id', r.decided_by).maybeSingle() : { data: null },
+  ]);
+  return {
+    registration: { id: r.id, display_number: displayRegNumber(r.reg_number), name: r.name, phone: r.phone, email: r.email, status: r.status, created_at: r.created_at, answers: r.answers, agreements: r.agreements, decision_note: r.decision_note, decided_at: r.decided_at, decided_by: decider ? decider.name : null },
+    files: files || [], payment: pay || null, campaign: { id: c.id, name: c.name, approval: !!(c.form_def && c.form_def.approval) },
+  };
+}
+async function registrationFile(session, { file_id }) {
+  const { data: f } = await supabase.from('registration_files').select('id, filename, mime, data, registration_id').eq('id', file_id).maybeSingle();
+  if (!f) throw httpError(404, 'File not found');
+  const { data: r } = await supabase.from('registrations').select('campaign_id').eq('id', f.registration_id).maybeSingle();
+  await requireRegistrationCampaign(session, r.campaign_id);
+  const hex = String(f.data || '');
+  const buf = Buffer.from(hex.startsWith('\\x') ? hex.slice(2) : hex, 'hex');
+  return { filename: f.filename, mime: f.mime, data: buf.toString('base64') };
+}
+async function registrationDecide(session, { registration_id, decision, note }) {
+  const { data: r } = await supabase.from('registrations').select('id, campaign_id, status, payment_id').eq('id', registration_id).maybeSingle();
+  if (!r) throw httpError(404, 'Registration not found');
+  const c = await requireRegistrationCampaign(session, r.campaign_id);
+  if (!['accepted', 'declined', 'cancelled'].includes(decision)) throw httpError(400, 'Choose accepted, declined or cancelled.');
+  if (decision !== 'accepted' && !String(note || '').trim()) throw httpError(400, 'Add a short note saying why.');
+  if (r.status === 'awaiting_payment') throw httpError(409, 'They have not finished paying yet.');
+  const text = cleanText(note, 500, 'The note');
+  const { error } = await supabase.from('registrations').update({ status: decision, decision_note: text || null, decided_by: session.uid, decided_at: new Date().toISOString() }).eq('id', r.id);
+  if (error) throw httpError(500, error.message);
+  let refundDue = null;
+  if (decision !== 'accepted' && r.payment_id) {
+    const { data: p } = await supabase.from('payments').select('amount, status').eq('id', r.payment_id).maybeSingle();
+    if (p && p.status === 'paid') refundDue = Number(p.amount);
+  }
+  return { ok: true, status: decision, refund_due: refundDue };
+}
+
+function regFileHeaders(def) { return def.fields.map(f => f.label); }
+async function registrationsExport(session, { campaign_id }) {
+  const c = await requireRegistrationCampaign(session, campaign_id);
+  const def = c.form_def || { fields: [], agreements: [] };
+  const { data: rows } = await supabase.from('registrations').select('*').eq('campaign_id', c.id).order('reg_number');
+  const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
+  const { data: pays } = payIds.length ? await supabase.from('payments').select('id, amount, status').in('id', payIds) : { data: [] };
+  const payBy = Object.fromEntries((pays || []).map(p => [p.id, p]));
+  const headers = ['Registration', 'Registered at', 'Name', 'Mobile', 'Email', ...def.fields.map(f => f.label + (f.sensitive ? ' (sensitive)' : '')), ...def.agreements.map(a => `${a.kind === 'optional' ? 'Optional' : 'Agreed'}: ${a.text.slice(0, 80)}`), 'Status', 'Decision note', 'Paid (£)', 'Payment status'];
+  const lines = (rows || []).map(r => {
+    const ans = Object.fromEntries((r.answers || []).map(a => [a.id, a]));
+    const ag = Object.fromEntries((r.agreements || []).map(a => [a.id, a]));
+    const cell = (f) => { const a = ans[f.id]; if (!a) return ''; const v = a.value; if (v && typeof v === 'object') return [v.line1, v.line2, v.city, v.postcode].filter(Boolean).join(', '); return v == null ? '' : String(v); };
+    const p = r.payment_id ? payBy[r.payment_id] : null;
+    return [displayRegNumber(r.reg_number), r.created_at, r.name || '', r.phone || '', r.email || '', ...def.fields.map(cell), ...def.agreements.map(a => (ag[a.id] && ag[a.id].accepted) ? 'Yes' : 'No'), r.status, r.decision_note || '', p ? Number(p.amount).toFixed(2) : '', p ? p.status : ''];
+  });
+  const csv = [headers, ...lines].map(row => row.map(csvEscape).join(',')).join('\n');
+  return { csv, filename: `${c.name.replace(/[^a-z0-9-]/gi, '_')}-registrations-${new Date().toISOString().slice(0, 10)}.csv` };
+}
+// Changing the form itself is only allowed before anyone has registered (so every response matches what was asked).
+async function setRegistrationForm(session, { campaign_id, form_def, details_text }) {
+  await requireCampaignManager(session, campaign_id);
+  const { count } = await supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id);
+  if (count) throw httpError(409, 'People have already registered, so the questions can no longer be changed.');
+  const def = cleanFormDef(form_def);
+  const patch = { form_def: def };
+  if (details_text !== undefined) patch.details_text = String(details_text || '').trim() || null;
+  const { error } = await supabase.from('campaigns').update(patch).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+async function setRegistrationPlaces(session, { campaign_id, places }) {
+  const camp = await requireCampaignManager(session, campaign_id);
+  const limit = cleanPlaces(places);
+  const used = await registrationsUsed(campaign_id);
+  if (limit !== null && limit < used) throw httpError(400, `${used} place${used === 1 ? ' is' : 's are'} already taken, so the limit can't be below ${used}.`);
+  const { data: c } = await supabase.from('campaigns').select('waiting_list').eq('id', campaign_id).single();
+  if (limit === null && c.waiting_list) throw httpError(409, 'Turn the waiting list off first — it needs a limit on places.');
+  const { error } = await supabase.from('campaigns').update({ places: limit }).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, places: limit };
+}
+
 // ---------- Confidentiality statement ----------
 // Anyone who can see people's registrations (which can hold children's details) accepts a short statement once,
 // before the first time they do. Bumping the number makes everyone accept the new wording again.
@@ -2291,7 +2841,17 @@ async function findPersonRecords(session, query) {
       campaign_still_running: !!(camp.closes_on ? today <= camp.closes_on : !camp.keep_until || today <= camp.keep_until),
     };
   });
-  return { c, payments, records, ticketCount: (tix || []).length };
+  let registrations = [];
+  if (ids.length) {
+    const { data: rg } = await supabase.from('registrations').select('id, campaign_id, reg_number, name, phone, email, answers, agreements, status, created_at').in('campaign_id', ids).in(c.kind === 'email' ? 'email' : 'phone', contactVariants(c));
+    registrations = rg || [];
+  }
+  let waiting = [];
+  if (c.kind === 'email' && ids.length) {
+    const { data: w } = await supabase.from('waiting_list').select('id, campaign_id, created_at').in('campaign_id', ids).eq('email', c.value);
+    waiting = (w || []).map(x => ({ id: x.id, campaign: (campById[x.campaign_id] || {}).name || '', joined_at: x.created_at }));
+  }
+  return { c, payments, records, waiting, registrations, campNames: Object.fromEntries(Object.entries(campById).map(([k, v]) => [k, v.name])), ticketCount: (tix || []).length };
 }
 function addDaysISO(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 async function logPrivacyRequest(session, kind, c, payments, tickets) {
@@ -2302,14 +2862,14 @@ async function privacySearch(session, { query }) {
   await requireConfidentiality(session);
   const r = await findPersonRecords(session, query);
   await logPrivacyRequest(session, 'search', r.c, r.records.length, r.ticketCount);
-  return { subject: maskSubject(r.c), kind: r.c.kind, records: r.records };
+  return { subject: maskSubject(r.c), kind: r.c.kind, records: r.records, waiting: r.waiting.map(({ id, ...w }) => w), registrations: r.registrations.map(g => ({ number: displayRegNumber(g.reg_number), campaign: (r.campNames || {})[g.campaign_id] || '', status: g.status, created_at: g.created_at, name: g.name, phone: g.phone, email: g.email })) };
 }
 async function privacyExport(session, { query }) {
   requireOrgRole(session, ['superadmin']);
   await requireConfidentiality(session);
   const r = await findPersonRecords(session, query);
   await logPrivacyRequest(session, 'export', r.c, r.records.length, r.ticketCount);
-  return { export: { generated_at: new Date().toISOString(), subject: r.c.value, kind: r.c.kind, note: 'Everything St Vincent\'s Parish Campaigns holds about this contact detail.', records: r.records } };
+  return { export: { generated_at: new Date().toISOString(), subject: r.c.value, kind: r.c.kind, note: 'Everything St Vincent\'s Parish Campaigns holds about this contact detail.', records: r.records, waiting_list: r.waiting.map(({ id, ...w }) => w), registrations: r.registrations.map(g => ({ number: displayRegNumber(g.reg_number), campaign: (r.campNames || {})[g.campaign_id] || '', status: g.status, created_at: g.created_at, name: g.name, phone: g.phone, email: g.email, answers: g.answers, agreements: g.agreements })) } };
 }
 // Erase = remove the person, keep the books: name, contact, scrambled address, attendee names and free-text notes go;
 // amounts, dates, methods and ticket numbers stay so the accounts and the draw still add up.
@@ -2326,8 +2886,14 @@ async function privacyErase(session, { query, confirm }) {
     const { data: t } = await supabase.from('tickets').update({ attendee_name: null }).in('payment_id', ids).not('attendee_name', 'is', null).select('id');
     tix = (t || []).length;
   }
+  if (r.waiting.length) await supabase.from('waiting_list').delete().in('id', r.waiting.map(w => w.id));
+  if (r.registrations.length) {
+    const rids = r.registrations.map(g => g.id);
+    await supabase.from('registration_files').delete().in('registration_id', rids);
+    await supabase.from('registrations').update({ name: null, phone: null, email: null, answers: [], decision_note: null, client_ip: null }).in('id', rids);
+  }
   await logPrivacyRequest(session, 'erase', r.c, ids.length, tix);
-  return { ok: true, payments_erased: ids.length, attendee_names_erased: tix };
+  return { ok: true, payments_erased: ids.length, attendee_names_erased: tix, waiting_erased: r.waiting.length, registrations_erased: r.registrations.length };
 }
 async function privacyLog(session) {
   requireOrgRole(session, ['superadmin']);
@@ -2339,9 +2905,25 @@ async function privacyLog(session) {
 }
 
 const actions = {
+  public_join_waiting_list: (s, b) => publicJoinWaitingList(b),
+  waiting_list_get: (s, b) => waitingListGet(s, b),
+  set_waiting_list: (s, b) => setWaitingList(s, b),
+  waiting_list_clear: (s, b) => waitingListClear(s, b),
   confidentiality_status: (s) => confidentialityStatus(s),
   accept_confidentiality: (s) => acceptConfidentiality(s),
-  registration_responses: (s) => registrationResponses(s),
+  registration_responses: (s) => registrationForms(s),
+  registration_forms: (s) => registrationForms(s),
+  registration_list: (s, b) => registrationsList(s, b),
+  registration_get: (s, b) => registrationGet(s, b),
+  registration_file: (s, b) => registrationFile(s, b),
+  registration_decide: (s, b) => registrationDecide(s, b),
+  registrations_export: (s, b) => registrationsExport(s, b),
+  set_registration_form: (s, b) => setRegistrationForm(s, b),
+  set_registration_places: (s, b) => setRegistrationPlaces(s, b),
+  public_registration_info: (s, b) => publicRegistrationInfo(b),
+  public_register: (s, b) => publicRegister(b),
+  public_registration_status: (s, b) => publicRegistrationStatus(b),
+  public_find_registrations: (s, b) => publicFindRegistrations(b),
   privacy_search: (s, b) => privacySearch(s, b),
   privacy_export: (s, b) => privacyExport(s, b),
   privacy_erase: (s, b) => privacyErase(s, b),
@@ -2363,7 +2945,7 @@ const actions = {
   get_org_settings: (s) => getOrgSettings(s),
   set_org_address: (s, b) => setOrgAddress(s, b),
   set_org_thank_you: (s, b) => setOrgThankYou(s, b),
-  create_campaign: (s, b) => createCampaign(s, b),
+  create_campaign: (s, b) => (b && b.kind === 'registration') ? createRegistrationCampaign(s, b) : createCampaign(s, b),
   set_campaign_details: (s, b) => setCampaignDetails(s, b),
   list_campaigns: (s, b) => listCampaigns(s, b),
   set_disabled_campaigns: (s, b) => setDisabledCampaigns(s, b),

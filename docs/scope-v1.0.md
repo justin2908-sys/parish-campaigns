@@ -1222,3 +1222,85 @@ seller's sales fail after §46). Now the page checks for a newer version and rel
 - **No loops:** if it has just reloaded (last 3 minutes) and still sees the old copy (a weak signal served the saved page), it
   asks for a tap on Update now instead of reloading again.
 - Applies to the app screens (Sell, Admin, Platform Owner). The public buy and ticket pages load fresh on every visit.
+
+## 53. Every action says "done" — 2026-10-19 (on dev; preview only)
+
+Design rule (Justin): **a button that does something must tell the person it worked, in words, where they are looking** —
+"Done"/"Updated"/"Saved" — never only by the screen quietly redrawing. Added a shared green confirmation (`toast()`, bottom of the
+screen, ~4½ seconds) to every Admin, Platform Owner and Sell-screen action that changes something and did not already announce
+it: Edit series (e.g. "✓ Done — 26 tickets added. The series now ends at 77."), Add series, open / activate / deactivate / hide /
+public page on-off, Recycle Bin / restore, Settings saves (payment options, starting quantity, dates, details, address,
+thank-you, contact email & privacy link, lottery registration), report download, record refund, void, cash reconciliation,
+update contact, new payment link, undo sale, user create / enable / disable / password reset, church and SuperAdmin creation.
+Errors keep their existing red message or alert. New actions must do the same.
+
+**§53 follow-up (full audit, 2026-10-19).** Every button on the Admin, Sell, Platform Owner, public buy and ticket pages was checked for
+(1) a visible success message, (2) a visible error, (3) an in-progress signal. Gaps found and fixed: the Settings switches
+(Campaign active / shown to Sellers / public page — they redrew silently), creating a campaign in the wizard, copying the public
+link and opening a preview (a pop-up alert / nothing), removing old details and password resets (alerts), agreeing to the Seller terms
+and the confidentiality statement, a new payment link from a Seller's recent-sales list, first-time Platform Owner setup, and a failed
+"link shared" note (was swallowed silently — now says so). **In progress:** every request that takes more than ~0.4 s now shows a small
+"⏳ Working…" pill at the top until it finishes (background checks such as link polling stay quiet), so a slow signal never looks like
+"nothing happened". The public buy and ticket pages already had these (Looking…, the paying veil, "✓ Saved to your Downloads", "✓ Link copied").
+
+## 54. Phase 2: waiting list for ticket events — 2026-10-20 (on dev; preview only)
+
+For a **ticket event** (never a raffle) sold on the public page. Email only, nothing to pay, no automatic emails.
+- **Asked when you create the campaign** (wizard, step "Prices and numbers", only for a Ticket event that is sold on the public
+  page with online tickets): "When every place is taken — Stop selling / Waiting list". Default is Stop selling; the Pilgrimage
+  template starts on Waiting list. Also switchable later in ⚙ Settings → **Waiting list** (Turn on / Turn off).
+- **Public page:** when every online place is taken the page says "All places are taken" and offers **Join the waiting list**
+  (email address only; it says what is kept and why). Without a waiting list it says "This is fully booked" (this now applies to
+  every campaign, raffles included, instead of an error at checkout). "Already bought? Find your ticket" is on both.
+- **Nobody jumps the queue:** while *anyone* is on the list the public page stays on the waiting-list page and the server refuses
+  new bookings (409), even if a cancellation or an expired hold has freed places. Places that free up are announced to the list
+  first. If the list is empty, freed places are simply open (first come, first served).
+- **Organiser (SuperAdmin) in Settings:** sees how many are waiting and how many places are free now. Step 1: **Email everyone in
+  Gmail** (a compose window with everyone in Bcc and the message "N places now open — <campaign>, book here: <link>, places go to
+  whoever books first"), or **Open in my email app**, or **Copy addresses** for a long list. Step 2: **I've sent it — clear the list**
+  (asks to confirm; deletes the addresses; the places open to everyone). If no places are free yet it says so. The list can't be
+  turned off while people are waiting. The addresses are only handed to the browser to build that one email; there is no
+  screen listing people one by one.
+- **Privacy:** only an email is kept (no IP, no name); a duplicate address is ignored; at most 10 joins an hour per connection and
+  1,000 per list; the nightly retention job deletes a campaign's list with its other personal details; Data & privacy finds a
+  person's waiting-list entries by email, exports and erases them.
+- API: `public_join_waiting_list`, `waiting_list_get`, `set_waiting_list`, `waiting_list_clear`; `create_campaign` takes
+  `waiting_list`; `public_campaign_info` returns `sold_out`, `waiting_list`, `queue_open`. New `campaigns.waiting_list`, table `waiting_list`.
+
+## 55. Phase 4: Registrations — forms people fill in (2026-10-20, on dev; preview only)
+
+A third kind of campaign, for sacrament applications, free events (a children's film night, a seniors' evening) and anything
+where **the person gives their details first**. Replaces Jotform (the person and their payment are one record, with one report).
+- **Making one** (SuperAdmin, **Finance** or **Priest** — the last two can make and manage their own forms): New campaign →
+  Registration, or ＋ New form on the Registrations tab. Steps: Start (templates: *Sacrament application* — built from the parish's
+  Jotform; *Free event sign-up*; blank; or copy an earlier form) · About it (name, details) · Dates (opens / closes / **keep until**,
+  required — 90-day deletion applies) · **Places** (a limit, or none; waiting list when full) · **Questions** · **Agreements and
+  money** · Review (Save as draft / Open now).
+- **The form builder:** questions of ten kinds — short answer, long answer, number, date, dropdown, yes/no, phone, email, UK address,
+  file/photo — each Required and/or 🔒 Sensitive, with a hint; reorder; ready-made groups (Child's details, Second parent, Address,
+  Baptism details, Anything else). Everyone is first asked for name and a mobile number **or** email (or **both**, a per-form choice).
+  Questions can't be changed once anyone has registered; to change an unused form, make a copy.
+- **Agreements:** any number; each is *Must be ticked* or *Optional (starts unticked)*. The **exact wording agreed is stored with every
+  registration.** The Sacrament template carries the parish's original wording (the consent, the optional newsletter consent for the
+  child's name, the catechetical-classes agreement) and a purpose paragraph shown at the top and under "Privacy & your data".
+- **Payment (optional):** no price list — the form sets a **minimum** (at least £1) and a **maximum** (default £500, up to £5,000);
+  the person chooses an amount in that range and pays by card (SumUp) as part of submitting. Their place is held while they pay; if they
+  don't finish (or an Admin voids the payment) the registration is cancelled and the place goes back. Refunds stay manual (Sales →
+  Record refund); declining a paid registration reminds the organiser.
+- **Approval (optional):** each application is Accepted or Declined with a private note; people see the result (not the note) on their
+  page. Declined and cancelled registrations give their place back; numbers are never reused.
+- **Places & waiting list:** one registration = one place; same waiting-list rules as events (§54).
+- **People's pages:** `register.html?campaign_id=…` (the form — one scrolling page with a bar at the bottom, the spam trap hidden, photos
+  shrunk before sending, PDFs/photos under 3 MB) and `registration.html?id=…` (their number **R17**, status, and "Complete my payment"
+  if one is pending). "Already registered? Find your registration" works by mobile or email.
+- **Who sees the answers:** SuperAdmin, Finance and Priest only, after the confidentiality statement; never Admin or Sellers. The
+  Registrations tab lists forms (counts, status, who made them) → responses (filters, search, one registration in full with 🔒 answers,
+  agreements, uploaded files, payment, decision) → **Download all answers (CSV)**. A form's ⚙ settings: open/close, preview, dates,
+  places, waiting list.
+- **Data protection:** answers, contact details and files are deleted/anonymised 90 days after "keep until" (the number, status, dates and
+  the agreed wording stay); Data & privacy finds, exports and erases a person's registrations by email or phone; files are stored in the
+  database so deletion removes them. Uploaded files are validated by type, size and signature.
+- API: `create_campaign` (kind registration), `public_registration_info`, `public_register`, `public_registration_status`,
+  `public_find_registrations`, `registration_forms`, `registration_list`, `registration_get`, `registration_file`,
+  `registration_decide`, `registrations_export`, `set_registration_form`, `set_registration_places`. Tables `registrations`,
+  `registration_files`; function `register_claim` (takes the number and a place atomically); `campaigns.form_def`, `campaigns.places`.

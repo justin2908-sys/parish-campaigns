@@ -122,6 +122,7 @@ window.__infoP = (function () {
   .pay.wait { background:#A9AE9F; box-shadow:0 4px 0 #8B9082; color:#fff; }
   .pay:disabled { opacity:.75; }
   .err { background:var(--bad-dim); color:var(--bad); padding:10px 12px; border-radius:12px; font-size:13.5px; margin-top:8px; }
+  .ok { background:#E3EEE5; color:#24593A; padding:11px 13px; border-radius:12px; font-size:15px; line-height:1.4; margin-top:8px; }
 
   /* ---- overlay & confetti ---- */
   .veil { position:fixed; inset:0; z-index:30; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; background:rgba(34,53,42,.94); color:#fff; font-size:18px; font-weight:700; text-align:center; padding:24px; }
@@ -237,6 +238,62 @@ function legalSheetsHtml() {
     </div>`;
   return lottery + privacy;
 }
+// A full-page message in the same style as the closed page (header, the line, then "Already bought? Find your ticket").
+function statusPageHtml(innerTop, privacyText) {
+  return `<div class="fatal"><div class="card">
+    <h1 style="font-size:24px;margin:0 0 4px">${esc(info.campaign.name)}</h1>
+    <p class="note">${esc(info.org.name)}</p>
+    ${innerTop}
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
+      <b>Already bought? Find your ticket</b>
+      <p class="note" style="margin:4px 0 8px">Type the mobile number or email you used when you bought.</p>
+      <input id="fContact" placeholder="Mobile or email" autocomplete="email" inputmode="email" style="width:100%">
+      <button type="button" class="shuf" id="findBtn" style="width:100%;margin-top:10px">🔎 Find my ticket</button>
+      <div id="findOut" role="status" aria-live="polite"></div>
+    </div>
+    <p class="note" style="font-size:13px;margin-top:14px">${privacyText || (lotteryHtml() + privacyHtml())}</p>
+  </div></div>`;
+}
+// What we keep for a waiting list: only the email, only until everyone has been emailed.
+function waitingPrivacyHtml() {
+  const o = info.org, bits = [];
+  if (o.privacy_url) bits.push(`<a href="${esc(o.privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>`);
+  if (o.contact_email) bits.push(`Questions: <a href="mailto:${esc(o.contact_email)}">${esc(o.contact_email)}</a>`);
+  return `Your email is kept only for this waiting list and is deleted once we have emailed everyone. ${bits.join(' · ')}`;
+}
+// Fully booked, no waiting list.
+function fullPageHtml() {
+  return statusPageHtml(`<p class="note" style="font-size:18px;margin-top:14px"><b>This is fully booked.</b></p><p class="note">Thank you for your interest.</p>`);
+}
+// Fully booked (or places held back for people already waiting): join the waiting list. Email only, no payment.
+function waitingPageHtml() {
+  return statusPageHtml(`<p class="note" style="font-size:18px;margin-top:14px"><b>All places are taken.</b></p>
+    <p class="note">Join the waiting list and we'll email you if places open up. Nothing to pay. When places open, we send one email to everyone on the list, and places go to whoever books first. We keep your email only until then.</p>
+    <div id="wlForm">
+      <label class="sr" for="wlEmail">Your email</label>
+      <input id="wlEmail" type="email" placeholder="Your email" autocomplete="email" inputmode="email" style="width:100%">
+      <button type="button" class="shuf" id="wlBtn" style="width:100%;margin-top:10px">🔔 Join the waiting list</button>
+    </div>
+    <div id="wlOut" role="status" aria-live="polite"></div>`, waitingPrivacyHtml());
+}
+async function joinWaitingList() {
+  const out = $('wlOut'), btn = $('wlBtn'), email = $('wlEmail').value.trim();
+  if (!email) { out.innerHTML = `<div class="err" style="margin-top:10px">Please type your email address.</div>`; return; }
+  btn.disabled = true; btn.textContent = 'Joining…'; out.innerHTML = '';
+  try {
+    const r = await call('public_join_waiting_list', { campaign_id: campaignId, email });
+    if (r.available) {
+      $('wlForm').hidden = true;
+      out.innerHTML = `<div class="ok" style="margin-top:10px"><b>Good news — places are open.</b><br>You can book now.</div><button type="button" class="shuf" style="width:100%;margin-top:10px" onclick="location.reload()">Book now</button>`;
+      return;
+    }
+    $('wlForm').hidden = true;
+    out.innerHTML = `<div class="ok" style="margin-top:10px"><b>✓ ${r.already ? "You're already on the waiting list." : "You're on the waiting list."}</b><br>We'll email ${esc(email.toLowerCase())} if places open up. When we do, book straight away — places go to whoever books first.</div>`;
+  } catch (e) {
+    out.innerHTML = `<div class="err" style="margin-top:10px">${esc(e.message)}</div>`;
+    btn.disabled = false; btn.textContent = '🔔 Join the waiting list';
+  }
+}
 function closedPageHtml() {
   const when = info.state === 'not_open' ? `Opens on ${dayText(info.opens_on)}.` : `Closed on ${dayText(info.closes_on)}.`;
   return `<div class="fatal"><div class="card">
@@ -265,6 +322,9 @@ async function boot() {
   } catch (e) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">${esc(e.message)}</div></div></div>`; return; }
   // Before it opens or after it closes the page says so plainly (people who already bought can still find their ticket).
   if (info.state === 'not_open' || info.state === 'closed') { app.innerHTML = closedPageHtml(); $('findBtn').onclick = findTicket; return; }
+  // Fully booked: a waiting list if the campaign has one (it also holds the places back for people already waiting), else a plain message.
+  if (!info.preview && info.queue_open) { app.innerHTML = waitingPageHtml(); $('wlBtn').onclick = joinWaitingList; $('wlEmail').onkeydown = (e) => { if (e.key === 'Enter') joinWaitingList(); }; $('findBtn').onclick = findTicket; return; }
+  if (!info.preview && info.sold_out) { app.innerHTML = fullPageHtml(); $('findBtn').onclick = findTicket; return; }
   counts = Object.fromEntries(info.tiers.map(t => [t.id, 0]));
   // The same "tickets pre-selected" setting the Sellers' screen uses (single price only); the buyer can change it.
   if (info.tiers.length === 1 && info.campaign.default_qty > 0) counts[info.tiers[0].id] = Math.min(info.campaign.default_qty, MAX_QTY);
