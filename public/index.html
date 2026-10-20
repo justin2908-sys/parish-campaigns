@@ -1346,7 +1346,7 @@ async function renderCampaignsTab() {
           <td>${esc(blockSummary(c))}</td>
           <td>${campaignStatusBadge(c)}${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
-            ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="openCampaignSettings('${c.id}')">⚙ Settings</button>
+            ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="${c.kind === 'registration' ? 'openRegForm' : 'openCampaignSettings'}('${c.id}')">⚙ Settings</button>
             ${c.is_draft ? `<button class="small" onclick="doOpenCampaign('${c.id}')">Open</button>` : `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>`}
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
           </td>
@@ -1448,7 +1448,8 @@ function removeBlockRow(i) { if (draftBlocks.length<=1) return; draftBlocks.spli
 // default and lives in the campaign's Settings. Going back and changing an earlier answer is always safe —
 // nothing already typed is lost, and the steps that depend on it (the ticket rows depend on the ticket type,
 // the audience depends on it too) adjust themselves.
-const WIZ_STEPS = ['Start', 'About it', 'Dates', 'Tickets', 'Prices and numbers', 'Review'];
+const WIZ_STEPS_TICKETS = ['Start', 'About it', 'Dates', 'Tickets', 'Prices and numbers', 'Review'];
+function wizSteps() { return wiz && wiz.kind === 'registration' ? WIZ_STEPS_REG : WIZ_STEPS_TICKETS; }
 let wizStep = 1, wiz = null, wizCampaigns = [], wizOrg = null;
 
 // ---- small date helpers (UK calendar days, 'YYYY-MM-DD') ----
@@ -1512,15 +1513,21 @@ function wizWaitingHtml() {
 
 let wlData = null;
 async function loadWaitingCard() {
-  const el = document.getElementById('wlCard'); if (!el || !cset || !cset.campaign) return;
-  try { wlData = await call('waiting_list_get', { campaign_id: cset.id }); drawWaitingCard(); }
+  const el = document.getElementById('wlCard'); if (!el || !wlTarget()) return;
+  try { wlData = await call('waiting_list_get', { campaign_id: wlTarget().id }); drawWaitingCard(); }
   catch (e) { el.innerHTML = `<b>Waiting list</b><div class="error" style="margin-top:6px">${esc(e.message)}</div>`; }
 }
+// Which campaign the waiting-list card is showing: a registration form's settings panel, or a ticket event's Settings.
+function wlTarget() {
+  if (regPanel) return { id: regPanel.id, campaign: { id: regPanel.id, name: regPanel.form.name }, reg: true };
+  return cset && cset.campaign ? { id: cset.id, campaign: cset.campaign, reg: false } : null;
+}
 function waitingEmailLinks() {
-  const d = wlData, c = cset.campaign, n = d.places_left;
-  const link = `${location.origin}/buy.html?campaign_id=${c.id}`;
+  const T = wlTarget(), d = wlData, c = T.campaign, n = d.places_left;
+  const link = `${location.origin}/${T.reg ? 'register' : 'buy'}.html?campaign_id=${c.id}`;
   const subject = `${n} place${n === 1 ? '' : 's'} now open — ${c.name}`;
-  const body = `Hello,\n\n${n} place${n === 1 ? ' has' : 's have'} now opened up for ${c.name}. To book, please use this link:\n${link}\n\nPlaces go to whoever books first.\n\nBest wishes,\n${churchName()}`;
+  const verb = T.reg ? 'register' : 'book', verbs = T.reg ? 'registers' : 'books';
+  const body = `Hello,\n\n${n} place${n === 1 ? ' has' : 's have'} now opened up for ${c.name}. To ${verb}, please use this link:\n${link}\n\nPlaces go to whoever ${verbs} first.\n\nBest wishes,\n${churchName()}`;
   const bcc = d.emails.join(',');
   return {
     gmail: `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(bcc)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
@@ -1565,36 +1572,442 @@ async function doCopyWaiting() {
 async function doClearWaiting() {
   if (!confirm('Have you emailed everyone? This deletes their addresses and opens the places to everyone — it cannot be undone.')) return;
   try {
-    const r = await call('waiting_list_clear', { campaign_id: cset.id, confirm: true });
+    const r = await call('waiting_list_clear', { campaign_id: wlTarget().id, confirm: true });
     toast(`✓ List cleared (${r.cleared}) — the places are now open to everyone`);
     loadWaitingCard();
   } catch (e) { alert(e.message); }
 }
 async function doSetWaiting(enabled) {
   try {
-    await call('set_waiting_list', { campaign_id: cset.id, enabled });
+    await call('set_waiting_list', { campaign_id: wlTarget().id, enabled });
     toast(enabled ? '✓ Waiting list turned on' : '✓ Waiting list turned off');
-    openCampaignSettings(cset.id);
+    if (regPanel) regPanelRefresh(); else openCampaignSettings(cset.id);
   } catch (e) { alert(e.message); }
+}
+
+// ---- Registration forms: the wizard steps ----
+// A registration collects people's details through a form you design: the questions, the agreements they tick, an optional
+// payment (a minimum and a maximum), and whether each application needs approving.
+const WIZ_STEPS_REG = ['Start', 'About it', 'Dates', 'Places', 'Questions', 'Agreements and money', 'Review'];
+const REG_TYPE_LABELS = { text: 'Short answer', longtext: 'Long answer', number: 'Number', date: 'Date', dropdown: 'Choose one (dropdown)', yesno: 'Yes / No', phone: 'Phone number', email: 'Email address', address: 'UK address', file: 'File or photo' };
+function newRegState() { return { intro: '', contactMode: 'either', fields: [], agreements: [], payEnabled: false, payMin: '', payMax: '500', payLabel: '', approval: false }; }
+function regClone(f) { return Object.assign({ type: 'text', label: '', help: '', required: false, sensitive: false, options: '' }, f); }
+const REG_GROUPS = {
+  child: { label: "Child's details", fields: [
+    { type: 'text', label: "Child's first name(s)", required: true, sensitive: true }, { type: 'text', label: "Child's surname", required: true, sensitive: true },
+    { type: 'date', label: 'Date of birth', required: true, sensitive: true }, { type: 'text', label: "Child's school", required: true, sensitive: true },
+    { type: 'text', label: 'School year group', help: 'For example: Year 3', required: true } ] },
+  parent: { label: 'Second parent or guardian', fields: [ { type: 'text', label: "Second parent's or guardian's full name" }, { type: 'phone', label: "Second parent's phone number" } ] },
+  address: { label: 'Address', fields: [ { type: 'address', label: 'Home address including postcode', required: true, sensitive: true } ] },
+  baptism: { label: 'Baptism details', fields: [
+    { type: 'date', label: 'Date of baptism', required: true, sensitive: true }, { type: 'text', label: 'Church and place of baptism', required: true, sensitive: true },
+    { type: 'file', label: 'Baptism certificate', help: 'A photo or a PDF.', required: true, sensitive: true } ] },
+  other: { label: 'Anything else', fields: [ { type: 'longtext', label: 'Anything else we should know?' } ] },
+};
+WIZ_TEMPLATES.registration = [
+  { id: 'blank', label: 'Blank form' },
+  { id: 'sacrament', label: 'Sacrament application', apply() {
+    wiz.detailsText = 'Who can apply: baptised Catholic children in Year 3 or above, registered with the parish or attending Mass here regularly.\nApplications are invited from … to … .\nClasses begin in … .';
+    wiz.reg = Object.assign(newRegState(), {
+      contactMode: 'both', approval: true,
+      intro: 'Your personal details will be stored and used by the Parish for the purposes of preparing your child/children for the Sacraments of Reconciliation & Eucharist. Details of how we process your data, and your rights, are on the full Privacy Notice and can be found on our noticeboard or at: rcdow.org.uk/diocese/privacy-policy.',
+      fields: [
+        ...REG_GROUPS.child.fields.slice(0, 3),
+        { type: 'date', label: 'Date of baptism', required: true, sensitive: true }, { type: 'text', label: 'Church and place of baptism', required: true, sensitive: true },
+        { type: 'file', label: 'Baptism certificate', help: 'Please attach a photo or a PDF of the baptism certificate.', required: true, sensitive: true },
+        { type: 'text', label: "How long have you been regularly attending Mass at St Vincent's?", required: true },
+        { type: 'longtext', label: "Parish of registration or regular Sunday attendance (if not St Vincent's), and your reason for applying here" },
+        { type: 'text', label: "Child's school name", required: true, sensitive: true }, { type: 'text', label: "Child's school year group in September", help: 'For example: Year 3', required: true },
+        ...REG_GROUPS.address.fields,
+        { type: 'longtext', label: 'Requests, preferences or questions about the preparation and celebration' },
+      ].map(regClone),
+      agreements: [
+        { kind: 'required', text: 'I/we consent to my/our details being used as above.' },
+        { kind: 'optional', text: "I/we also give consent to our child's name being published in the newsletter." },
+        { kind: 'required', text: 'As the parent / guardian of the above child, I agree to him / her attending regular catechetical classes.' },
+      ],
+    });
+  } },
+  { id: 'freeevent', label: 'Free event sign-up', apply() {
+    wiz.reg = Object.assign(newRegState(), {
+      intro: 'We use your details only to organise this event and to contact you about it.',
+      fields: [{ type: 'longtext', label: 'Anything we should know? (for example, dietary needs)' }].map(regClone),
+      agreements: [{ kind: 'required', text: 'I agree for my details to be used to organise this event.' }],
+    });
+  } },
+];
+function regWaitingApplicable() { return wiz.kind === 'registration' && wiz.places !== '' && Number(wiz.places) >= 1; }
+function regSet(i, prop, v) { wiz.reg.fields[i][prop] = v; }
+function regSetType(i, t) { wiz.reg.fields[i].type = t; drawWizard(); }
+function regAddField() { wiz.reg.fields.push(regClone({})); drawWizard(); const els = document.querySelectorAll('#regFields input[data-l]'); if (els.length) els[els.length - 1].focus(); }
+function regAddGroup(k) { REG_GROUPS[k].fields.forEach(f => wiz.reg.fields.push(regClone(f))); drawWizard(); }
+function regMove(i, d) { const a = wiz.reg.fields, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; drawWizard(); }
+function regRemove(i) { wiz.reg.fields.splice(i, 1); drawWizard(); }
+function regAddAgreement() { wiz.reg.agreements.push({ kind: 'required', text: '' }); drawWizard(); }
+function regRemoveAgreement(i) { wiz.reg.agreements.splice(i, 1); drawWizard(); }
+function regSetPay(on) { wiz.reg.payEnabled = !!on; if (on && !wiz.reg.payMin) wiz.reg.payMin = ''; drawWizard(); }
+function regFieldCardHtml(f, i) {
+  const n = wiz.reg.fields.length;
+  return `<div class="card" style="margin:8px 0;background:var(--paper)">
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><b>${i + 1}.</b>
+      <select style="flex:1;min-width:0" onchange="regSetType(${i}, this.value)">${Object.entries(REG_TYPE_LABELS).map(([k, l]) => `<option value="${k}" ${f.type === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <button type="button" class="small" onclick="regMove(${i},-1)" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button>
+      <button type="button" class="small" onclick="regMove(${i},1)" ${i === n - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+      <button type="button" class="small" onclick="regRemove(${i})" aria-label="Remove this question">✕</button></div>
+    <input data-l="1" placeholder="The question, as people will read it" value="${esc(f.label)}" oninput="regSet(${i},'label',this.value)">
+    <input style="margin-top:6px" placeholder="A hint underneath (optional)" value="${esc(f.help)}" oninput="regSet(${i},'help',this.value)">
+    ${f.type === 'dropdown' ? `<textarea rows="3" style="margin-top:6px;width:100%;padding:9px 11px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" placeholder="One choice per line" oninput="regSet(${i},'options',this.value)">${esc(f.options)}</textarea>` : ''}
+    <div style="margin-top:4px"><label style="display:inline-flex;gap:6px;align-items:center;margin:6px 14px 0 0;font-weight:500"><input type="checkbox" style="width:auto;margin:0" ${f.required ? 'checked' : ''} onchange="regSet(${i},'required',this.checked)"> Required</label>
+      <label style="display:inline-flex;gap:6px;align-items:center;margin:6px 0 0;font-weight:500" title="Marks the answer as private (a child's details, for example) for the people who read the responses"><input type="checkbox" style="width:auto;margin:0" ${f.sensitive ? 'checked' : ''} onchange="regSet(${i},'sensitive',this.checked)"> 🔒 Sensitive</label></div>
+  </div>`;
+}
+function regWizStepHtml() {
+  const R = wiz.reg;
+  if (wizStep === 4) return `
+    <label style="margin-top:0">How many places? <span class="muted">(leave blank for no limit)</span></label>
+    <input id="rPlaces" type="number" min="1" max="2000" inputmode="numeric" value="${esc(wiz.places)}" oninput="wiz.places=this.value" onchange="if (!regWaitingApplicable()) wiz.waitingList = false; drawWizard()">
+    <p class="muted" style="margin-top:8px">Each registration takes one place. A family registering two children registers twice. Declined and cancelled registrations give their place back.</p>
+    ${regWaitingApplicable() ? `<label style="margin-top:16px">When every place is taken</label>
+      <div class="toggle" style="width:100%;flex-wrap:wrap">
+        <button type="button" style="flex:1 1 110px" class="${!wiz.waitingList ? 'active' : ''}" onclick="setWizWaiting(false)">Stop taking registrations</button>
+        <button type="button" style="flex:1 1 110px" class="${wiz.waitingList ? 'active alt' : ''}" onclick="setWizWaiting(true)">🔔 Waiting list</button>
+      </div>
+      <p class="muted" style="margin-top:8px">${wiz.waitingList ? 'The form offers a waiting list (email only, nothing to pay). While anyone is waiting, places that free up stay closed to everyone else. When you are ready you email the list once, clear it, and the places open to everyone — first come, first served.' : 'The form says it is fully booked.'}</p>` : ''}`;
+  if (wizStep === 5) return `
+    <p class="muted" style="margin:0 0 8px">Everyone is asked for their name and a mobile number or email first. Then they answer your questions, in this order.</p>
+    <div id="regFields">${R.fields.length ? R.fields.map(regFieldCardHtml).join('') : '<p class="muted" style="margin:8px 0">No questions yet — add one below, or start from a ready-made group.</p>'}</div>
+    <button type="button" class="ghost" onclick="regAddField()">+ Add a question</button>
+    <label style="margin-top:16px">Add a ready-made group</label>
+    <div class="toggle" style="flex-wrap:wrap">${Object.entries(REG_GROUPS).map(([k, g]) => `<button type="button" style="flex:1 1 130px" onclick="regAddGroup('${k}')">+ ${esc(g.label)}</button>`).join('')}</div>
+    <label style="margin-top:16px">Their contact details</label>
+    <div class="toggle" style="width:100%;flex-wrap:wrap">
+      <button type="button" style="flex:1 1 110px" class="${R.contactMode === 'either' ? 'active' : ''}" onclick="wiz.reg.contactMode='either'; drawWizard()">A mobile number or an email</button>
+      <button type="button" style="flex:1 1 110px" class="${R.contactMode === 'both' ? 'active alt' : ''}" onclick="wiz.reg.contactMode='both'; drawWizard()">Both are required</button>
+    </div>`;
+  if (wizStep === 6) return `
+    <label style="margin-top:0">What the form is for <span class="muted">(shown at the top of the form and under "Privacy &amp; your data" — say why you collect the details)</span></label>
+    <textarea rows="4" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" oninput="wiz.reg.intro=this.value" placeholder="e.g. Your details are used only to prepare your child for the sacraments.">${esc(R.intro)}</textarea>
+    <label style="margin-top:16px">Agreements <span class="muted">(people tick these; the exact wording is stored with every registration)</span></label>
+    ${R.agreements.map((a, i) => `<div class="card" style="margin:8px 0;background:var(--paper)">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><select style="flex:1;min-width:0" onchange="wiz.reg.agreements[${i}].kind=this.value"><option value="required" ${a.kind === 'required' ? 'selected' : ''}>Must be ticked</option><option value="optional" ${a.kind === 'optional' ? 'selected' : ''}>Optional (starts unticked)</option></select><button type="button" class="small" onclick="regRemoveAgreement(${i})" aria-label="Remove">✕</button></div>
+      <textarea rows="3" style="width:100%;padding:9px 11px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" oninput="wiz.reg.agreements[${i}].text=this.value" placeholder="The wording people agree to">${esc(a.text)}</textarea></div>`).join('')}
+    <button type="button" class="ghost" onclick="regAddAgreement()">+ Add an agreement</button>
+    <label style="margin-top:16px">Money</label>
+    <div class="toggle" style="width:100%;flex-wrap:wrap">
+      <button type="button" style="flex:1 1 110px" class="${!R.payEnabled ? 'active' : ''}" onclick="regSetPay(false)">No payment</button>
+      <button type="button" style="flex:1 1 110px" class="${R.payEnabled ? 'active alt' : ''}" onclick="regSetPay(true)">💷 Take a payment</button>
+    </div>
+    ${R.payEnabled ? `<div style="display:flex;gap:8px;margin-top:8px"><div style="flex:1"><label style="margin-top:0">Minimum (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMin)}" oninput="wiz.reg.payMin=this.value"></div>
+        <div style="flex:1"><label style="margin-top:0">Maximum (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMax)}" oninput="wiz.reg.payMax=this.value"></div></div>
+      <label>What the payment is for <span class="muted">(optional)</span></label><input placeholder="e.g. Registration fee" value="${esc(R.payLabel)}" oninput="wiz.reg.payLabel=this.value">
+      <p class="muted" style="margin-top:8px">There is no fixed price: people choose an amount from the minimum up to the maximum and pay by card as part of submitting.</p>` : '<p class="muted" style="margin-top:8px">Nothing is paid; people just register.</p>'}
+    <label style="margin-top:16px">Approval</label>
+    <div class="toggle" style="width:100%;flex-wrap:wrap">
+      <button type="button" style="flex:1 1 110px" class="${!R.approval ? 'active' : ''}" onclick="wiz.reg.approval=false; drawWizard()">Not needed</button>
+      <button type="button" style="flex:1 1 110px" class="${R.approval ? 'active alt' : ''}" onclick="wiz.reg.approval=true; drawWizard()">Each one is checked</button>
+    </div>
+    <p class="muted" style="margin-top:8px">${R.approval ? 'You mark each application Accepted or Declined, with a private note. People see the result on their registration page.' : 'A registration is final as soon as it is submitted (and paid, if you take a payment).'}</p>`;
+  // step 7: review
+  const q = R.fields.length, money = R.payEnabled ? `£${Number(R.payMin || 0).toFixed(2)} or more, up to £${Number(R.payMax || 0).toFixed(2)}` : 'No payment';
+  return `
+    <div class="card" style="background:var(--brass-dim);margin:0 0 12px"><p style="margin:0;line-height:1.5">${regSummaryHtml()}</p></div>
+    <div class="stat"><span>Name <button type="button" class="link" onclick="goToWizStep(2)">Edit</button></span><b>${esc(wiz.name) || '—'}</b></div>
+    <div class="stat"><span>Dates <button type="button" class="link" onclick="goToWizStep(3)">Edit</button></span><b>${wiz.opens_on ? fmtDay(wiz.opens_on) : 'any time'} to ${wiz.closes_on ? fmtDay(wiz.closes_on) : 'no end'}</b></div>
+    <div class="stat"><span>Places <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${wiz.places ? esc(wiz.places) + (wiz.waitingList ? ' + waiting list' : '') : 'No limit'}</b></div>
+    <div class="stat"><span>Questions <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${q} · ${R.contactMode === 'both' ? 'mobile and email' : 'mobile or email'}</b></div>
+    <div class="stat"><span>Agreements <button type="button" class="link" onclick="goToWizStep(6)">Edit</button></span><b>${R.agreements.length}</b></div>
+    <div class="stat"><span>Money <button type="button" class="link" onclick="goToWizStep(6)">Edit</button></span><b>${esc(money)}</b></div>
+    <div class="stat"><span>Approval <button type="button" class="link" onclick="goToWizStep(6)">Edit</button></span><b>${R.approval ? 'Each one is checked' : 'Not needed'}</b></div>
+    <p class="muted" style="margin:10px 0 0">Saving as a draft means only you can see it, through a private preview, until you open it. Once people have registered, the questions can no longer be changed.</p>
+    <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard(true)">Save as draft</button>
+    <button type="button" class="secondary" onclick="doCreateCampaignWizard(false)">Open it now instead</button>
+    <div id="wizCreateResult"></div>`;
+}
+function regSummaryHtml() {
+  const R = wiz.reg, n = esc(wiz.name.trim() || 'This form');
+  const open = wiz.opens_on ? `People can register from ${fmtDay(wiz.opens_on)}` : 'People can register as soon as you open it';
+  const close = wiz.closes_on ? ` until ${fmtDay(wiz.closes_on)}.` : ', with no closing date.';
+  const places = wiz.places ? ` ${esc(wiz.places)} place${Number(wiz.places) === 1 ? '' : 's'}${wiz.waitingList ? ', then a waiting list.' : '.'}` : ' There is no limit on places.';
+  const money = R.payEnabled ? ` They pay at least £${Number(R.payMin || 0).toFixed(2)} (up to £${Number(R.payMax || 0).toFixed(2)}) as part of registering.` : ' There is no payment.';
+  const appr = R.approval ? ' Each application is checked and marked Accepted or Declined.' : '';
+  const keep = wiz.keep_until ? ` Names, contact details, answers and any uploaded files are kept until ${fmtDay(wiz.keep_until)} and removed 90 days later, on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}.` : '';
+  return `<b>${n}</b> is a registration form. ${open}${close}${places}${money}${appr} Only SuperAdmin, Finance and Priest can read the answers.${keep}`;
+}
+function regBuildFormDef() {
+  const R = wiz.reg;
+  return {
+    intro: R.intro, contact_mode: R.contactMode, approval: !!R.approval,
+    fields: R.fields.map(f => ({ type: f.type, label: f.label, help: f.help, required: !!f.required, sensitive: !!f.sensitive, options: f.type === 'dropdown' ? String(f.options || '').split('\n').map(x => x.trim()).filter(Boolean) : [] })),
+    agreements: R.agreements.map(a => ({ kind: a.kind, text: a.text })),
+    payment: R.payEnabled ? { min: Number(R.payMin), max: Number(R.payMax || 500), label: R.payLabel } : null,
+  };
+}
+function regValidateStep(step) {
+  const R = wiz.reg;
+  if (step === 4) {
+    if (wiz.places !== '' && !(Number.isInteger(Number(wiz.places)) && Number(wiz.places) >= 1 && Number(wiz.places) <= 2000)) return 'Places must be a whole number from 1 to 2,000 — or leave it blank for no limit.';
+  }
+  if (step === 5) {
+    for (let i = 0; i < R.fields.length; i++) {
+      const f = R.fields[i];
+      if (!f.label.trim()) return `Question ${i + 1} needs its wording.`;
+      if (f.type === 'dropdown' && String(f.options || '').split('\n').map(x => x.trim()).filter(Boolean).length < 2) return `Question ${i + 1} (${f.label.trim()}): a dropdown needs at least two choices, one per line.`;
+    }
+  }
+  if (step === 6) {
+    for (let i = 0; i < R.agreements.length; i++) if (!R.agreements[i].text.trim()) return `Agreement ${i + 1} needs its wording (or remove it).`;
+    if (R.payEnabled) {
+      const mn = Number(R.payMin), mx = Number(R.payMax || 500);
+      if (!(mn >= 1)) return 'The minimum payment must be at least £1 — or choose No payment.';
+      if (!(mx >= mn) || mx > 5000) return 'The maximum payment must be at least the minimum, and no more than £5,000.';
+    }
+  }
+  return '';
+}
+
+// ---- Registrations tab: the forms, their responses, and the people ----
+let regForms = null, regList = null, regFilter = 'all', regSearch = '';
+const REG_STATUS_LABEL = { awaiting_payment: 'Awaiting payment', submitted: 'Registered', accepted: 'Accepted', declined: 'Declined', cancelled: 'Cancelled' };
+function regStatusBadge(s, approval) {
+  const cls = { awaiting_payment: 'warn', submitted: approval ? 'warn' : 'ok', accepted: 'ok', declined: 'bad', cancelled: 'bad' }[s] || 'warn';
+  const text = s === 'submitted' && approval ? 'To check' : (REG_STATUS_LABEL[s] || s);
+  return `<span class="badge ${cls}">${esc(text)}</span>`;
+}
+function regFormBadge(f) {
+  const [cls, text] = f.is_draft ? ['warn', 'Draft'] : !f.active ? ['bad', 'Inactive'] : f.state === 'not_open' ? ['warn', 'Opens ' + (f.opens_on ? fmtDay(f.opens_on) : '')] : f.state === 'closed' ? ['bad', 'Closed ' + (f.closes_on ? fmtDay(f.closes_on) : '')] : ['ok', 'Open'];
+  return `<span class="badge ${cls}">${esc(text)}</span>`;
+}
+async function renderRegistrationsTab() {
+  const seq = adminSeq;
+  try {
+    const r = await call('registration_forms');
+    regForms = r.forms;
+    const el = adminEl(seq); if (!el) return;
+    drawRegistrationsHome(el);
+  } catch (e) {
+    if (e.code === 'confidentiality_required') return renderConfidentialityGate(seq, renderRegistrationsTab);
+    const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`;
+  }
+}
+function drawRegistrationsHome(el) {
+  el = el || document.getElementById('adminContent'); if (!el) return;
+  const forms = regForms || [];
+  el.innerHTML = `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 style="margin:0">Registrations</h3><button class="primary" style="width:auto;padding:9px 14px" onclick="openCampaignWizard('registration')">＋ New form</button></div>
+    <p class="muted" style="margin:8px 0 0">Forms where people give their details instead of buying tickets. Only SuperAdmin, Finance and Priest can read the answers.</p></div>
+    ${forms.length ? forms.map(f => `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><b>${esc(f.name)}</b>${regFormBadge(f)}</div>
+      <div class="muted" style="margin:6px 0">${f.total} registered${f.places ? ` of ${f.places} places` : ''}${f.approval ? ` · ${f.submitted} to check · ${f.accepted} accepted · ${f.declined} declined` : ''}${f.awaiting_payment ? ` · ${f.awaiting_payment} awaiting payment` : ''}${f.waiting_count ? ` · ${f.waiting_count} waiting` : ''}</div>
+      <div class="muted" style="margin:0 0 8px;font-size:13px">Made by ${esc(f.created_by_name || '—')}</div>
+      <div class="tiny-actions">
+        <button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="openRegResponses('${f.id}')">Responses</button>
+        ${f.can_manage ? `<button class="small" onclick="openRegForm('${f.id}')">⚙ Form settings</button>` : ''}
+        <button class="small" onclick="doCopyRegLink('${f.id}')">Copy link</button>
+      </div></div>`).join('') : '<div class="card"><p class="muted" style="margin:0">No registration forms yet. Press “New form” to make one.</p></div>'}`;
+}
+async function doCopyRegLink(id) {
+  const url = `${location.origin}/register.html?campaign_id=${id}`;
+  try { await navigator.clipboard.writeText(url); toast('✓ Link copied — paste it anywhere to share'); }
+  catch { prompt('Copy this link:', url); }
+}
+async function openRegResponses(id) {
+  const el = document.getElementById('adminContent'); if (!el) return;
+  el.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
+  regFilter = 'all'; regSearch = '';
+  try { regList = await call('registration_list', { campaign_id: id }); drawRegResponses(); }
+  catch (e) { el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div><button class="small" onclick="renderRegistrationsTab()">Back</button></div>`; }
+}
+function drawRegResponses() {
+  const el = document.getElementById('adminContent'); if (!el || !regList) return;
+  const form = (regForms || []).find(f => f.id === regList.campaign.id) || {};
+  const approval = !!(regList.campaign.form_def && regList.campaign.form_def.approval);
+  const rows = regList.registrations;
+  const counts = { all: rows.length }; rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
+  const q = regSearch.trim().toLowerCase();
+  const shown = rows.filter(r => (regFilter === 'all' || r.status === regFilter) && (!q || [r.name, r.email, r.phone, r.display_number].join(' ').toLowerCase().includes(q)));
+  el.innerHTML = `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 style="margin:0">${esc(regList.campaign.name)}</h3><button class="small" onclick="renderRegistrationsTab()">← All forms</button></div>
+      <div class="muted" style="margin:6px 0 8px">${rows.length} registration${rows.length === 1 ? '' : 's'}${form.places ? ` · ${form.places} places` : ''}</div>
+      <div class="tiny-actions"><button class="small" onclick="doDownloadRegistrations('${regList.campaign.id}')">⬇ Download all answers (CSV)</button></div>
+      <div class="toggle" style="flex-wrap:wrap;margin-top:10px">${['all', 'awaiting_payment', 'submitted', 'accepted', 'declined', 'cancelled'].filter(s => s === 'all' || counts[s]).map(s => `<button type="button" class="${regFilter === s ? 'active' : ''}" style="flex:0 0 auto" onclick="regFilter='${s}'; drawRegResponses()">${s === 'all' ? 'All' : (s === 'submitted' && approval ? 'To check' : REG_STATUS_LABEL[s])} ${counts[s] || 0}</button>`).join('')}</div>
+      <input id="regSearch" placeholder="Search name, email, phone or number" value="${esc(regSearch)}" oninput="regSearch=this.value; drawRegRows()" style="margin-top:10px">
+    </div>
+    <div class="card" id="regRows"></div>`;
+  drawRegRows();
+}
+function drawRegRows() {
+  const box = document.getElementById('regRows'); if (!box || !regList) return;
+  const approval = !!(regList.campaign.form_def && regList.campaign.form_def.approval);
+  const q = regSearch.trim().toLowerCase();
+  const shown = regList.registrations.filter(r => (regFilter === 'all' || r.status === regFilter) && (!q || [r.name, r.email, r.phone, r.display_number].join(' ').toLowerCase().includes(q)));
+  box.innerHTML = shown.length ? `<table><tr><th>No.</th><th>Name</th><th>Contact</th><th>Status</th></tr>${shown.map(r => `<tr style="cursor:pointer" onclick="openRegDetail('${r.id}')"><td><b>${esc(r.display_number)}</b></td><td>${esc(r.name || '—')}<br><span class="muted">${esc(new Date(r.created_at).toLocaleDateString('en-GB'))}</span></td><td>${esc(r.email || r.phone || '—')}${r.payment ? `<br><span class="muted">£${r.payment.amount.toFixed(2)}${r.payment.status === 'paid' ? ' paid' : ' ' + esc(r.payment.status)}</span>` : ''}</td><td>${regStatusBadge(r.status, approval)}</td></tr>`).join('')}</table>` : '<p class="muted" style="margin:0">Nobody here yet.</p>';
+}
+async function doDownloadRegistrations(id) {
+  try {
+    const { csv, filename } = await call('registrations_export', { campaign_id: id }, 60000);
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    toast('✓ Answers downloaded — they hold private details, so keep the file safe');
+  } catch (e) { alert(e.message); }
+}
+function regAnswerText(a) {
+  const v = a.value;
+  if (v && typeof v === 'object') return [v.line1, v.line2, v.city, v.postcode].filter(Boolean).join(', ');
+  if (a.type === 'yesno') return v ? (v === 'yes' ? 'Yes' : 'No') : '';
+  return v == null ? '' : String(v);
+}
+async function openRegDetail(id) {
+  let el = document.getElementById('regDetail');
+  if (!el) { el = document.createElement('div'); el.id = 'regDetail'; el.style.cssText = 'position:fixed;inset:0;z-index:45;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  el.innerHTML = '<div style="max-width:560px;margin:0 auto"><div class="card"><p class="muted" style="margin:0">Loading…</p></div></div>';
+  try { drawRegDetail(await call('registration_get', { registration_id: id }), ''); }
+  catch (e) { el.innerHTML = `<div style="max-width:560px;margin:0 auto"><div class="card"><div class="error">${esc(e.message)}</div><button class="small" onclick="closeRegDetail()">Close</button></div></div>`; }
+}
+function closeRegDetail() { const el = document.getElementById('regDetail'); if (el) el.remove(); }
+function drawRegDetail(d, note) {
+  const el = document.getElementById('regDetail'); if (!el) return;
+  const r = d.registration, approval = d.campaign.approval, fileFor = (id) => d.files.find(f => f.field_id === id);
+  const canDecide = ['submitted', 'accepted', 'declined'].includes(r.status);
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><h3 style="margin:0">${esc(r.display_number)} · ${esc(d.campaign.name)}</h3><button class="small" onclick="closeRegDetail()">Close</button></div>
+    ${note ? `<div class="hint" style="margin-bottom:8px">${esc(note)}</div>` : ''}
+    <div class="card"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.name || '— (details removed)')}</b>${regStatusBadge(r.status, approval)}</div>
+      <div class="muted" style="margin-top:6px">${esc(r.phone || '')}${r.phone && r.email ? ' · ' : ''}${esc(r.email || '')}<br>Registered ${esc(new Date(r.created_at).toLocaleString('en-GB'))}</div>
+      ${d.payment ? `<div class="stat" style="margin-top:8px"><span>Payment</span><b>£${Number(d.payment.amount).toFixed(2)} · ${esc(d.payment.status)}${d.payment.refund_amount != null ? ` · refunded £${Number(d.payment.refund_amount).toFixed(2)}` : ''}</b></div>` : ''}
+      ${r.decision_note ? `<div class="stat"><span>Note</span><b>${esc(r.decision_note)}</b></div>` : ''}
+      ${r.decided_by ? `<div class="muted" style="font-size:13px">${esc(r.status)} by ${esc(r.decided_by)}${r.decided_at ? ' · ' + esc(new Date(r.decided_at).toLocaleDateString('en-GB')) : ''}</div>` : ''}
+    </div>
+    <div class="card"><b>Answers</b>${r.answers.length ? r.answers.map(a => `<div class="stat"><span>${a.sensitive ? '🔒 ' : ''}${esc(a.label)}</span><b>${a.type === 'file' ? (fileFor(a.id) ? `<button class="small" onclick="doDownloadRegFile('${fileFor(a.id).id}')">⬇ ${esc(fileFor(a.id).filename)}</button>` : '—') : esc(regAnswerText(a)) || '—'}</b></div>`).join('') : '<p class="muted" style="margin:6px 0 0">No answers are held (they have been removed).</p>'}</div>
+    ${r.agreements.length ? `<div class="card"><b>Agreements</b>${r.agreements.map(a => `<div class="stat"><span style="flex:1">${esc(a.text)}</span><b>${a.accepted ? '✓ Agreed' : '— Not ticked'}</b></div>`).join('')}</div>` : ''}
+    ${canDecide ? `<div class="card"><b>Decision</b>
+      <div class="tiny-actions" style="margin-top:8px">
+        ${r.status !== 'accepted' && approval ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="doRegDecide('${r.id}','accepted')">✓ Accept</button>` : ''}
+        ${r.status !== 'declined' && approval ? `<button class="small" onclick="doRegDecide('${r.id}','declined')">Decline</button>` : ''}
+        <button class="small" onclick="doRegDecide('${r.id}','cancelled')">Cancel this registration</button></div>
+      <p class="muted" style="margin:8px 0 0">Declining or cancelling gives the place back.${d.payment && d.payment.status === 'paid' ? ' They have paid — refund them by hand in SumUp, then record it under Sales → Record refund.' : ''}</p></div>` : (r.status === 'awaiting_payment' ? '<div class="card"><p class="muted" style="margin:0">They have not finished paying yet. If they do not, the place goes back by itself after a short while.</p></div>' : '')}
+  </div>`;
+}
+async function doDownloadRegFile(fileId) {
+  try {
+    const f = await call('registration_file', { file_id: fileId }, 60000);
+    const bytes = Uint8Array.from(atob(f.data), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: f.mime }));
+    const a = document.createElement('a'); a.href = url; a.download = f.filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('✓ File downloaded — it is private, so keep it safe');
+  } catch (e) { alert(e.message); }
+}
+async function doRegDecide(id, decision) {
+  let note = '';
+  if (decision !== 'accepted') {
+    note = prompt(decision === 'declined' ? 'A short note for the record — why is this being declined? (only the parish sees it)' : 'A short note for the record — why is it being cancelled?');
+    if (note === null) return;
+    if (!note.trim()) { alert('Please add a short note.'); return; }
+  }
+  try {
+    const r = await call('registration_decide', { registration_id: id, decision, note });
+    toast(decision === 'accepted' ? '✓ Accepted' : decision === 'declined' ? '✓ Declined — the place is free again' : '✓ Cancelled — the place is free again');
+    const d = await call('registration_get', { registration_id: id });
+    drawRegDetail(d, r.refund_due ? `They paid £${r.refund_due.toFixed(2)} — refund it by hand in SumUp, then record it under Sales → Record refund.` : '');
+    if (regList) { regList = await call('registration_list', { campaign_id: regList.campaign.id }); drawRegResponses(); }
+  } catch (e) { alert(e.message); }
+}
+
+// ---- one registration form's settings (SuperAdmin, or Finance / Priest for the forms they made)
+let regPanel = null;
+function closeRegForm() { const el = document.getElementById('regFormPanel'); if (el) el.remove(); regPanel = null; if (adminTab === 'registrations') renderRegistrationsTab(); }
+async function openRegForm(id) {
+  let el = document.getElementById('regFormPanel');
+  if (!el) { el = document.createElement('div'); el.id = 'regFormPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:38;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  el.innerHTML = '<div style="max-width:560px;margin:0 auto"><div class="card"><p class="muted" style="margin:0">Loading…</p></div></div>';
+  try {
+    const r = await call('registration_forms');
+    regForms = r.forms;
+    const form = regForms.find(f => f.id === id);
+    if (!form) throw new Error('Form not found');
+    regPanel = { id, form };
+    drawRegForm();
+  } catch (e) { el.innerHTML = `<div style="max-width:560px;margin:0 auto"><div class="card"><div class="error">${esc(e.message)}</div><button class="small" onclick="closeRegForm()">Close</button></div></div>`; }
+}
+function drawRegForm() {
+  const el = document.getElementById('regFormPanel'); if (!el || !regPanel) return;
+  const f = regPanel.form, def = f.form_def || {};
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px"><h3 style="margin:0">${esc(f.name)} — settings</h3><button class="small" onclick="closeRegForm()">Close</button></div>
+    <div class="card"><b>Status</b> ${regFormBadge(f)}
+      ${f.is_draft ? '<div class="hint" style="margin:8px 0">This is a <b>draft</b>: only you can see it, through the preview, until you open it.</div>' : ''}
+      <div class="tiny-actions" style="margin-top:8px">
+        ${f.is_draft ? '<button class="primary" style="width:auto;padding:9px 14px" onclick="doRegOpen()">Open the form</button>' : (f.active ? '<button class="small" onclick="doRegActive(false)">Close it (deactivate)</button>' : '<button class="small" onclick="doRegActive(true)">Re-open it (activate)</button>')}
+        <button class="small" onclick="doRegPreview()">Preview</button>
+        <button class="small" onclick="doCopyRegLink('${f.id}')">Copy link</button>
+        <button class="small" onclick="closeRegForm(); openRegResponses('${f.id}')">Responses (${f.total})</button>
+      </div></div>
+    <div class="card"><b>Dates</b>
+      <div class="muted" style="margin:2px 0 6px">The form takes registrations between these dates. Names, contact details, answers and files are removed 90 days after “keep until”.</div>
+      <label>Opens (optional)</label><input id="rfOpens" type="date" value="${esc(f.opens_on || '')}">
+      <label>Closes (optional — the last day people can register)</label><input id="rfCloses" type="date" value="${esc(f.closes_on || '')}">
+      <label>Keep the details until <b>*</b></label><input id="rfKeep" type="date" value="${esc(f.keep_until || '')}">
+      <button class="primary" style="margin-top:8px" onclick="doRegDates(false)">Save dates</button><div id="rfDatesMsg"></div></div>
+    <div class="card"><b>Places</b>
+      <div class="muted" style="margin:2px 0 6px">${f.total} taken. Leave blank for no limit.</div>
+      <input id="rfPlaces" type="number" min="1" max="2000" inputmode="numeric" value="${esc(f.places == null ? '' : f.places)}">
+      <button class="primary" style="margin-top:8px" onclick="doRegPlaces()">Save places</button><div id="rfPlacesMsg"></div></div>
+    ${f.places ? '<div class="card" id="wlCard"><b>Waiting list</b><div class="muted" style="margin-top:4px">Loading…</div></div>' : ''}
+    <div class="card"><b>The form</b>
+      <div class="muted" style="margin:2px 0 6px">${(def.fields || []).length} question${(def.fields || []).length === 1 ? '' : 's'} · ${(def.agreements || []).length} agreement${(def.agreements || []).length === 1 ? '' : 's'} · ${def.payment ? `payment £${def.payment.min}–£${def.payment.max}` : 'no payment'} · ${def.approval ? 'each one is checked' : 'no approval step'}</div>
+      <ol style="margin:6px 0 0;padding-left:20px;line-height:1.6">${(def.fields || []).map(q => `<li>${q.sensitive ? '🔒 ' : ''}${esc(q.label)}${q.required ? ' *' : ''} <span class="muted">(${esc(REG_TYPE_LABELS[q.type] || q.type)})</span></li>`).join('') || '<li class="muted">No questions of its own — just name and contact.</li>'}</ol>
+      <p class="muted" style="margin:8px 0 0">${f.total ? 'People have registered, so the questions can no longer be changed.' : 'To change the questions, make a new form (New form → “Or copy an earlier campaign”) and move this one to the Recycle Bin.'}</p></div>
+  </div>`;
+  if (f.places) loadWaitingCard();
+}
+async function regPanelRefresh() { await openRegForm(regPanel.id); }
+async function doRegOpen() {
+  if (!confirm('Open this form now? It becomes visible to the public and people can start registering.')) return;
+  try { await call('open_campaign', { campaign_id: regPanel.id }); toast('✓ Form opened — it is now live'); await regPanelRefresh(); } catch (e) { alert(e.message); }
+}
+async function doRegActive(active) {
+  try { await call('set_campaign_active', { campaign_id: regPanel.id, active }); toast(active ? '✓ Form re-opened' : '✓ Form closed — nobody can register until you re-open it'); await regPanelRefresh(); } catch (e) { alert(e.message); }
+}
+async function doRegPreview() {
+  const w = window.open('', '_blank');
+  try {
+    const { token } = await call('campaign_preview_link', { campaign_id: regPanel.id });
+    const url = `${location.origin}/register.html?campaign_id=${regPanel.id}&preview=${encodeURIComponent(token)}`;
+    if (w) { w.location.href = url; toast('✓ Preview opened in a new tab'); } else prompt('Copy this private preview link (it works for 24 hours):', url);
+  } catch (e) { if (w) w.close(); alert(e.message); }
+}
+async function doRegDates(confirmed) {
+  const msg = document.getElementById('rfDatesMsg');
+  try {
+    const r = await call('set_campaign_dates', { campaign_id: regPanel.id, opens_on: document.getElementById('rfOpens').value, closes_on: document.getElementById('rfCloses').value, keep_until: document.getElementById('rfKeep').value, confirm: !!confirmed });
+    toast(`✓ Dates saved — details will be removed on ${fmtDay(r.delete_on)}`);
+    await regPanelRefresh();
+  } catch (e) {
+    if (/confirm to remove them/.test(e.message) && !confirmed) { if (confirm(e.message)) return doRegDates(true); return; }
+    msg.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+async function doRegPlaces() {
+  const msg = document.getElementById('rfPlacesMsg');
+  try { await call('set_registration_places', { campaign_id: regPanel.id, places: document.getElementById('rfPlaces').value }); toast('✓ Places saved'); await regPanelRefresh(); }
+  catch (e) { msg.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
 function wizIsRaffle() { return wiz.kind === 'raffle'; }
 // The campaign-specific content, back to a blank slate for the chosen kind (the name is kept).
 function wizResetContent() {
-  wiz.type = 'physical'; wiz.audience = 'sellers'; wiz.detailsText = ''; wiz.waitingList = false;
+  wiz.type = 'physical'; wiz.audience = 'sellers'; wiz.detailsText = ''; wiz.waitingList = false; wiz.reg = newRegState(); wiz.places = '';
   wiz.defaultQty = wizIsRaffle() ? 5 : 0;
   wiz.physPay = ['cash', 'machine']; wiz.onlPay = ['cash', 'machine', 'link'];
   draftTiers = [{ name: '', price: '' }, { name: '', price: '' }];
   draftBlocks = [{ type: 'physical', label: '', range_start: '', range_end: '', number_prefix: '' }];
   wiz.copiedFrom = '';
 }
-async function openCampaignWizard() {
-  wiz = { kind: 'raffle', template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '' };
+async function openCampaignWizard(startKind) {
+  wiz = { kind: startKind || (state.user.role === 'superadmin' ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '' };
   wizResetContent();
   wizStep = 1;
   wizCampaigns = [];
   drawWizard();
-  try { wizCampaigns = (await call('list_campaigns', { include_inactive: true })).campaigns; if (wiz && wizStep === 1) drawWizard(); } catch { /* copying simply isn't offered */ }
+  try { wizCampaigns = (await call('list_campaigns', { include_inactive: true })).campaigns.filter(c => state.user.role === 'superadmin' || c.kind === 'registration'); if (wiz && wizStep === 1) drawWizard(); } catch { /* copying simply isn't offered */ }
   try { if (!wizOrg) wizOrg = (await call('get_org_settings')).organization; } catch { /* the lottery date check is simply skipped */ }
 }
 function closeCampaignWizard() { const el = document.getElementById('wizardPanel'); if (el) el.remove(); wiz = null; }
@@ -1616,6 +2029,18 @@ function wizApplyTemplate(id) {
 // Copy last year's (or any existing campaign): everything except the dates, which must be chosen afresh.
 function wizCopyCampaign(id) {
   const c = wizCampaigns.find(x => x.id === id); if (!c) return;
+  if (c.kind === 'registration') {   // a registration form: copy the whole form, with the dates left to choose afresh
+    const d = c.form_def || {};
+    wiz.kind = 'registration'; wiz.template = 'blank'; wizResetContent();
+    wiz.name = c.name + ' (copy)'; wiz.detailsText = c.details_text || '';
+    wiz.places = c.places == null ? '' : String(c.places); wiz.waitingList = !!c.waiting_list && c.places != null;
+    wiz.reg = Object.assign(newRegState(), { intro: d.intro || '', contactMode: d.contact_mode || 'either', approval: !!d.approval,
+      fields: (d.fields || []).map(f => regClone({ type: f.type, label: f.label, help: f.help || '', required: !!f.required, sensitive: !!f.sensitive, options: (f.options || []).join('\n') })),
+      agreements: (d.agreements || []).map(a => ({ kind: a.kind, text: a.text })),
+      payEnabled: !!d.payment, payMin: d.payment ? String(d.payment.min) : '', payMax: d.payment ? String(d.payment.max) : '500', payLabel: d.payment ? (d.payment.label || '') : '' });
+    wiz.opens_on = ''; wiz.closes_on = ''; wiz.keep_until = ''; wiz.copiedFrom = c.name;
+    drawWizard(); return;
+  }
   wiz.kind = c.kind === 'raffle' ? 'raffle' : 'event'; wiz.template = 'blank';
   wiz.name = c.name + ' (copy)'; wiz.detailsText = c.details_text || '';
   const hasP = c.blocks.some(b => b.type === 'physical'), hasD = c.blocks.some(b => b.type === 'digital');
@@ -1650,9 +2075,10 @@ function wizDateProblem() {
   return '';
 }
 function wizValidate(step) {
+  if (wiz.kind === 'registration') { const e = regValidateStep(step); if (e) return e; }
   if (step === 2) return wiz.name.trim() ? '' : 'Give the campaign a name.';
   if (step === 3) return wizDateProblem();
-  if (step === 5) {
+  if (step === 5 && wiz.kind !== 'registration') {
     if (!draftTiers.some(t => t.name.trim() !== '' && t.price !== '')) return 'Add at least one price.';
     const usable = draftBlocks.filter(b => b.range_start !== '' && b.range_end !== '');
     if (!usable.length) return 'Add at least one set of tickets with a first and last number.';
@@ -1664,7 +2090,7 @@ function wizNext() {
   const err = wizValidate(wizStep);
   const errEl = document.getElementById('wizErr');
   if (err) { if (errEl) errEl.innerHTML = `<div class="error">${esc(err)}</div>`; return; }
-  wizStep = Math.min(WIZ_STEPS.length, wizStep + 1);
+  wizStep = Math.min(wizSteps().length, wizStep + 1);
   drawWizard();
 }
 function wizBack() { wizStep = Math.max(1, wizStep - 1); drawWizard(); }
@@ -1691,28 +2117,29 @@ function wizSummaryHtml() {
 }
 
 function wizStepHtml() {
+  if (wiz.kind === 'registration' && wizStep >= 4) return regWizStepHtml();
   if (wizStep === 1) {
     const tpls = WIZ_TEMPLATES[wiz.kind] || [];
     return `
     <label style="margin-top:0">How do people sign up?</label>
-    <button type="button" class="kindcard ${wiz.kind === 'raffle' ? 'on' : ''}" onclick="setWizKind('raffle')"><b>🎟️ Raffle</b><span>People choose numbers, confirm they are 18 or over, and pay. Sellers can sell it in person too.</span></button>
-    <button type="button" class="kindcard ${wiz.kind === 'event' ? 'on' : ''}" onclick="setWizKind('event')"><b>🎫 Ticket event</b><span>People choose how many tickets, give their details and pay. A dinner, an outing, a pilgrimage.</span></button>
-    <button type="button" class="kindcard" disabled><b>📝 Registration</b><span>People give their details first, with an optional payment. Coming soon.</span></button>
+    ${state.user.role === 'superadmin' ? `<button type="button" class="kindcard ${wiz.kind === 'raffle' ? 'on' : ''}" onclick="setWizKind('raffle')"><b>🎟️ Raffle</b><span>People choose numbers, confirm they are 18 or over, and pay. Sellers can sell it in person too.</span></button>
+    <button type="button" class="kindcard ${wiz.kind === 'event' ? 'on' : ''}" onclick="setWizKind('event')"><b>🎫 Ticket event</b><span>People choose how many tickets, give their details and pay. A dinner, an outing, a pilgrimage.</span></button>` : ''}
+    <button type="button" class="kindcard ${wiz.kind === 'registration' ? 'on' : ''}" onclick="setWizKind('registration')"><b>📝 Registration</b><span>People fill in a form you design — details first, then an optional payment. A sacrament application, a children's film night, a seniors' evening.</span></button>
     <label style="margin-top:16px">Start from</label>
     <div class="toggle" style="flex-wrap:wrap">${tpls.map(t => `<button type="button" style="flex:1 1 110px" class="${wiz.template === t.id && !wiz.copiedFrom ? 'active' : ''}" onclick="wizApplyTemplate('${t.id}')">${esc(t.label)}</button>`).join('')}</div>
     ${wizCampaigns.length ? `<label>Or copy an earlier campaign <span class="muted">(everything except the dates)</span></label>
       <select id="wCopy" onchange="if (this.value) wizCopyCampaign(this.value)"><option value="">${wiz.copiedFrom ? 'Copied from ' + esc(wiz.copiedFrom) : 'Choose one…'}</option>${wizCampaigns.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>` : ''}`;
   }
   if (wizStep === 2) return `
-    <label style="margin-top:0">Campaign name</label><input id="wName" value="${esc(wiz.name)}" placeholder="${wizIsRaffle() ? 'e.g. Christmas Raffle 2026' : 'e.g. Parish Dinner 2026'}" oninput="wiz.name=this.value">
-    <label style="margin-top:14px">What should people know? <span class="muted">(optional — ${wizIsRaffle() ? 'prizes, draw date, tagline' : 'what it is, when, where'}; shown on the public page and in every ticket message)</span></label>
+    <label style="margin-top:0">Campaign name</label><input id="wName" value="${esc(wiz.name)}" placeholder="${wiz.kind === 'registration' ? 'e.g. First Holy Communion 2027' : wizIsRaffle() ? 'e.g. Christmas Raffle 2026' : 'e.g. Parish Dinner 2026'}" oninput="wiz.name=this.value">
+    <label style="margin-top:14px">What should people know? <span class="muted">(optional — ${wizIsRaffle() ? 'prizes, draw date, tagline' : 'what it is, when, where'}; ${wiz.kind === 'registration' ? 'shown under ℹ️ Details on the form' : 'shown on the public page and in every ticket message'})</span></label>
     <textarea id="wDetails" rows="5" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" oninput="wiz.detailsText=this.value" placeholder="${wizIsRaffle() ? 'e.g. 1st Prize — £1,200 · 2nd Prize — £500\nDraw Date: 20 December 2026' : 'e.g. Bring a chair — games and BBQ from 12pm.'}">${esc(wiz.detailsText)}</textarea>`;
   if (wizStep === 3) return `
     <label style="margin-top:0">Opens <span class="muted">(optional — blank means as soon as you open it)</span></label>
     <input type="date" id="wOpens" value="${esc(wiz.opens_on)}" oninput="wiz.opens_on=this.value">
     <label>Closes <span class="muted">(optional — the last day people can buy)</span></label>
     <input type="date" id="wCloses" value="${esc(wiz.closes_on)}" oninput="wiz.closes_on=this.value">
-    <label>Keep the details until <b>*</b> <span class="muted">${wizIsRaffle() ? '(for a raffle, usually the draw date)' : '(usually the date of the event)'}</span></label>
+    <label>Keep the details until <b>*</b> <span class="muted">${wiz.kind === 'registration' ? '(usually the end of the programme)' : wizIsRaffle() ? '(for a raffle, usually the draw date)' : '(usually the date of the event)'}</span></label>
     <input type="date" id="wKeep" value="${esc(wiz.keep_until)}" oninput="wiz.keep_until=this.value; wizDatesNote()">
     <button type="button" class="link" style="margin-top:6px" onclick="wizKeepSameAsClose()">Same as the closing date</button>
     <p class="muted" id="wizDelNote" style="margin-top:8px">${wiz.keep_until ? `Names, mobile numbers, emails and IP addresses will be removed on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}, ${RETENTION_DAYS_SHOWN} days after that. Amounts and ticket numbers are kept for the accounts.` : ''}</p>`;
@@ -1768,18 +2195,30 @@ function drawWizard() {
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
       <h3 style="margin:0">New Campaign</h3><button type="button" class="small" onclick="closeCampaignWizard()">Cancel</button>
     </div>
-    <p class="muted" style="margin:0 0 14px">Step ${wizStep} of ${WIZ_STEPS.length}: ${WIZ_STEPS[wizStep-1]}</p>
+    <p class="muted" style="margin:0 0 14px">Step ${wizStep} of ${wizSteps().length}: ${wizSteps()[wizStep-1]}</p>
     <div class="card">${wizStepHtml()}</div>
     <div id="wizErr"></div>
     <div style="display:flex;gap:8px;margin-top:14px">
       ${wizStep > 1 ? `<button type="button" class="secondary" style="flex:1" onclick="wizBack()">← Back</button>` : ''}
-      ${wizStep < WIZ_STEPS.length ? `<button type="button" class="primary" style="flex:1" onclick="wizNext()">Next →</button>` : ''}
+      ${wizStep < wizSteps().length ? `<button type="button" class="primary" style="flex:1" onclick="wizNext()">Next →</button>` : ''}
     </div>
   </div>`;
 }
 async function doCreateCampaignWizard(asDraft) {
   const resEl = document.getElementById('wizCreateResult');
   try {
+    if (wiz.kind === 'registration') {
+      const r = await call('create_campaign', {
+        kind: 'registration', name: wiz.name.trim(), details_text: wiz.detailsText,
+        opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
+        is_draft: !!asDraft, places: wiz.places, waiting_list: regWaitingApplicable() && !!wiz.waitingList, form_def: regBuildFormDef(),
+      }, 60000);
+      closeCampaignWizard();
+      toast(asDraft ? '✓ Saved as a draft — preview it, then open it when ready' : '✓ Form created and open');
+      if (adminTab === 'registrations') await renderRegistrationsTab(); else await renderCampaignsTab();
+      if (r.campaign) openRegForm(r.campaign.id);   // straight to Preview / Open
+      return;
+    }
     const tiers = draftTiers.filter(t=>t.name.trim()!=='' && t.price!=='').map(t=>({name:t.name.trim(), price:Number(t.price)}));
     const blocks = draftBlocks.filter(b=>b.range_start!=='' && b.range_end!=='').map(b => ({
       type:b.type, label:b.label.trim()||(b.type==='digital'?'Online':'Main'),
@@ -2263,18 +2702,6 @@ async function doAcceptConfidentiality() {
   try { await call('accept_confidentiality'); toast('✓ Thank you — confirmed'); if (confRetry) confRetry(); }
   catch (e) { if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
-async function renderRegistrationsTab() {
-  const seq = adminSeq;
-  try {
-    await call('registration_responses');
-    const el = adminEl(seq); if (!el) return;
-    el.innerHTML = `<div class="card"><h3 style="margin-top:0">Registrations</h3>
-      <p class="muted" style="margin:0">There are no registration forms yet. When a form is open, the answers will appear here. Only SuperAdmin, Finance and Priest can see them.</p></div>`;
-  } catch (e) {
-    if (e.code === 'confidentiality_required') return renderConfidentialityGate(seq, renderRegistrationsTab);
-    const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`;
-  }
-}
 
 // ---- Data and privacy (SuperAdmin) ----
 // Find everything held about one person (by the mobile number or email they gave), download it, or erase it.
@@ -2311,10 +2738,11 @@ async function doPrivacySearch() {
   try {
     const r = await call('privacy_search', { query: pvQuery });
     refreshPrivacyLog();
-    if (!r.records.length && !(r.waiting || []).length) { out.innerHTML = `<div class="info" style="margin-top:10px">Nothing is held for ${esc(r.subject)}.</div>`; return; }
+    if (!r.records.length && !(r.waiting || []).length && !(r.registrations || []).length) { out.innerHTML = `<div class="info" style="margin-top:10px">Nothing is held for ${esc(r.subject)}.</div>`; return; }
     const running = r.records.filter(x => x.campaign_still_running).length;
+    const regHtml = (r.registrations || []).length ? `<div class="card" style="margin:8px 0;background:var(--paper)"><b>Registrations</b>${r.registrations.map(g => `<div class="muted">${esc(g.number)} · ${esc(g.campaign)} · ${esc(g.status.replace('_', ' '))} · ${esc(new Date(g.created_at).toLocaleDateString('en-GB'))}</div>`).join('')}<div class="muted" style="margin-top:4px">Their answers and any files are held too; downloading includes them, erasing removes them.</div></div>` : '';
     const waitHtml = (r.waiting || []).length ? `<div class="card" style="margin:8px 0;background:var(--paper)"><b>On a waiting list</b>${r.waiting.map(w => `<div class="muted">${esc(w.campaign)} · joined ${esc(new Date(w.joined_at).toLocaleDateString('en-GB'))}</div>`).join('')}</div>` : '';
-    out.innerHTML = `${waitHtml}<p style="margin:12px 0 6px"><b>${r.records.length} sale${r.records.length === 1 ? '' : 's'}</b> for ${esc(r.subject)}</p>
+    out.innerHTML = `${waitHtml}${regHtml}<p style="margin:12px 0 6px"><b>${r.records.length} sale${r.records.length === 1 ? '' : 's'}</b> for ${esc(r.subject)}</p>
       ${running ? `<div class="hint">${running} of these ${running === 1 ? 'is' : 'are'} for a campaign that is still running. If you erase a raffle buyer, you can no longer reach them if they win.</div>` : ''}
       ${r.records.map(x => `<div class="card" style="margin:8px 0;background:var(--paper)">
         <b>${esc(x.campaign)}</b> · ${esc(new Date(x.created_at).toLocaleDateString('en-GB'))} · £${Number(x.amount).toFixed(2)} · ${esc(x.method)} · ${esc(x.status)}
@@ -2345,7 +2773,7 @@ async function doPrivacyErase() {
   if (!confirm('Erase the name, contact details and notes on every one of these sales? The amounts and ticket numbers stay. This cannot be undone.')) return;
   try {
     const r = await call('privacy_erase', { query: pvQuery, confirm: true });
-    el.innerHTML = `<div class="info" style="margin-top:8px">Erased from ${r.payments_erased} sale${r.payments_erased === 1 ? '' : 's'}${r.waiting_erased ? ` and ${r.waiting_erased} waiting list${r.waiting_erased === 1 ? '' : 's'}` : ''}.</div>`;
+    el.innerHTML = `<div class="info" style="margin-top:8px">Erased from ${r.payments_erased} sale${r.payments_erased === 1 ? '' : 's'}${r.waiting_erased ? ` and ${r.waiting_erased} waiting list${r.waiting_erased === 1 ? '' : 's'}` : ''}${r.registrations_erased ? ` and ${r.registrations_erased} registration${r.registrations_erased === 1 ? '' : 's'}` : ''}.</div>`;
     refreshPrivacyLog();
   } catch (e) { el.innerHTML = `<div class="error" style="margin-top:8px">${esc(e.message)}</div>`; }
 }
