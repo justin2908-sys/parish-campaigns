@@ -382,7 +382,7 @@ async function setCampaignDetails(session, { campaign_id, details_text }) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft }) {
+async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft, waiting_list }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
@@ -405,6 +405,12 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
   const wantsPublicPage = public_page_enabled === undefined ? true : !!public_page_enabled;
   if (wantsPublicPage && !blocks.some(b => b.type === 'digital')) {
     throw httpError(400, 'A public buy page needs at least one online series — add one, or turn the public page off for this campaign.');
+  }
+  // A waiting list is for a ticket event (not a raffle) sold on the public page.
+  const wantsList = !!waiting_list;
+  if (wantsList) {
+    if (campaignKind === 'raffle') throw httpError(400, "A raffle can't have a waiting list.");
+    if (!wantsPublicPage || !blocks.some(b => b.type === 'digital')) throw httpError(400, 'A waiting list needs a public buy page with online tickets.');
   }
   // Checked BEFORE anything is created, so a mistake leaves nothing half-built behind.
   const ranges = blocks.map((b, i) => {
@@ -441,7 +447,7 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
       ...dates,
       // A new campaign made through the wizard starts as a draft: invisible to Sellers and the public until opened.
       is_draft: !!is_draft, active: !is_draft,
-      public_page_enabled: wantsPublicPage,
+      public_page_enabled: wantsPublicPage, waiting_list: wantsList,
       // Left out = all three, as before. The wizard sends its own defaults (no payment link for physical).
       physical_payment_methods: physical_payment_methods === undefined ? PAYMENT_METHODS : cleanPaymentMethods(physical_payment_methods, 'physical tickets'),
       online_payment_methods: online_payment_methods === undefined ? PAYMENT_METHODS : cleanPaymentMethods(online_payment_methods, 'online tickets'),
@@ -1307,10 +1313,11 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   // This is the first thing every visitor waits for, so the three lookups run side by side (the
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
-  const [{ data: campaign }, { data: tiers }, { data: blocks }] = await Promise.all([
-    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, default_ticket_qty, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
+  const [{ data: campaign }, { data: tiers }, { data: blocks }, placesLeft, queued] = await Promise.all([
+    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, default_ticket_qty, waiting_list, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
+    onlinePlacesLeft(campaign_id), waitingCount(campaign_id),
   ]);
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   // A draft or switched-off campaign shows nothing to the public. A private preview link lets an Admin see it
@@ -1329,6 +1336,10 @@ async function publicCampaignInfo({ campaign_id, preview }) {
     state: isPreview ? 'open' : state,   // a preview always shows the buying page, whatever the dates
     opens_on: campaign.opens_on, closes_on: campaign.closes_on,
     preview: isPreview,
+    // Fully booked, and whether the waiting list is what the buyer should see instead of the buying page.
+    sold_out: placesLeft === 0,
+    waiting_list: !!campaign.waiting_list,
+    queue_open: !!campaign.waiting_list && (placesLeft === 0 || queued > 0),
     tiers, blocks,
   };
 }
@@ -1415,6 +1426,8 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   if (!campaign) throw httpError(404, 'This campaign is not available for purchase right now.');
   const openState = campaignOpenState(campaign);
   if (openState !== 'open') throw httpError(400, notOpenMessage(campaign, openState));
+  // While anyone is on the waiting list the places are held for them: nobody jumps the queue.
+  if (campaign.waiting_list && (await waitingCount(campaign.id)) > 0) throw httpError(409, 'All places are taken at the moment — please join the waiting list.');
   const { data: tiers } = await supabase.from('tiers').select('*').eq('campaign_id', campaign_id);
   const { data: onlineBlocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id).eq('type', 'digital');
   if (!onlineBlocks || !onlineBlocks.length) throw httpError(400, 'This campaign has no online tickets available.');
@@ -2217,6 +2230,66 @@ async function sellScreen(session, { campaign_id } = {}) {
 }
 
 // ---------- router ----------
+// ---------- Waiting list (ticket events, never raffles) ----------
+// A campaign with a waiting list says "fully booked — join the list" once every online place is taken. From then on the
+// public page stays closed to new bookings for as long as anyone is on the list (nobody jumps the queue): the organiser
+// emails everyone once from Settings, then clears the list, and the places open to everyone, first come first served.
+// Only an email address is kept, and only until the list is cleared (or the campaign's retention date).
+const MAX_WAITING_LIST = 1000;
+async function onlinePlacesLeft(campaign_id) {
+  const { count } = await supabase.from('tickets').select('id, ticket_blocks!inner(type)', { count: 'exact', head: true })
+    .eq('campaign_id', campaign_id).eq('status', 'unsold').eq('ticket_blocks.type', 'digital');
+  return count || 0;
+}
+async function waitingCount(campaign_id) {
+  const { count } = await supabase.from('waiting_list').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id);
+  return count || 0;
+}
+async function publicJoinWaitingList({ campaign_id, email }) {
+  if (clientIp && (await rateHit(`wl:${clientIp}`, 3600)) > 10) throw httpError(429, 'Too many attempts from your connection — please try again later.');
+  const { data: c } = await supabase.from('campaigns').select('id, active, binned, is_draft, opens_on, closes_on, waiting_list').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle();
+  if (!c || !c.waiting_list || campaignOpenState(c) !== 'open') throw httpError(404, 'There is no waiting list for this campaign.');
+  const v = String(email == null ? '' : email).trim().toLowerCase();
+  if (!v || v.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw httpError(400, 'Please enter your email address.');
+  const [left, queue] = await Promise.all([onlinePlacesLeft(c.id), waitingCount(c.id)]);
+  if (left > 0 && queue === 0) return { available: true };   // places are open after all: they can simply book
+  if (queue >= MAX_WAITING_LIST) throw httpError(409, 'The waiting list is full.');
+  const { error } = await supabase.from('waiting_list').insert({ campaign_id: c.id, email: v });
+  if (error && error.code !== '23505') throw httpError(500, 'Could not add you to the waiting list — please try again.');
+  return { ok: true, already: !!error };   // adding the same address twice is harmless
+}
+// SuperAdmin: who is waiting (the addresses are only handed to the browser to build one email), and how many places are free.
+async function waitingListGet(session, { campaign_id }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const { data: c } = await supabase.from('campaigns').select('name, waiting_list').eq('id', campaign_id).single();
+  const { data: rows } = await supabase.from('waiting_list').select('email').eq('campaign_id', campaign_id).order('created_at');
+  return { enabled: !!c.waiting_list, name: c.name, count: (rows || []).length, emails: (rows || []).map(r => r.email), places_left: await onlinePlacesLeft(campaign_id) };
+}
+async function setWaitingList(session, { campaign_id, enabled }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const { data: c } = await supabase.from('campaigns').select('kind, public_page_enabled, waiting_list').eq('id', campaign_id).single();
+  if (!enabled) {
+    if (c.waiting_list && (await waitingCount(campaign_id)) > 0) throw httpError(409, 'Email everyone on the list and clear it first — turning it off would leave their addresses behind.');
+  } else {
+    if (c.kind === 'raffle') throw httpError(400, "A raffle can't have a waiting list.");
+    const { count } = await supabase.from('ticket_blocks').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id).eq('type', 'digital');
+    if (!c.public_page_enabled || !count) throw httpError(400, 'A waiting list needs a public buy page with online tickets.');
+  }
+  const { error } = await supabase.from('campaigns').update({ waiting_list: !!enabled }).eq('id', campaign_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, enabled: !!enabled };
+}
+// "I've sent the email": the list is emptied (the addresses are deleted) and the places open to everyone.
+async function waitingListClear(session, { campaign_id, confirm }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  if (confirm !== true) throw httpError(400, 'Confirm that you have emailed everyone and want to clear the list.');
+  const { data } = await supabase.from('waiting_list').delete().eq('campaign_id', campaign_id).select('id');
+  return { ok: true, cleared: (data || []).length };
+}
+
 // ---------- Confidentiality statement ----------
 // Anyone who can see people's registrations (which can hold children's details) accepts a short statement once,
 // before the first time they do. Bumping the number makes everyone accept the new wording again.
@@ -2291,7 +2364,12 @@ async function findPersonRecords(session, query) {
       campaign_still_running: !!(camp.closes_on ? today <= camp.closes_on : !camp.keep_until || today <= camp.keep_until),
     };
   });
-  return { c, payments, records, ticketCount: (tix || []).length };
+  let waiting = [];
+  if (c.kind === 'email' && ids.length) {
+    const { data: w } = await supabase.from('waiting_list').select('id, campaign_id, created_at').in('campaign_id', ids).eq('email', c.value);
+    waiting = (w || []).map(x => ({ id: x.id, campaign: (campaignById[x.campaign_id] || {}).name || '', joined_at: x.created_at }));
+  }
+  return { c, payments, records, waiting, ticketCount: (tix || []).length };
 }
 function addDaysISO(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 async function logPrivacyRequest(session, kind, c, payments, tickets) {
@@ -2302,14 +2380,14 @@ async function privacySearch(session, { query }) {
   await requireConfidentiality(session);
   const r = await findPersonRecords(session, query);
   await logPrivacyRequest(session, 'search', r.c, r.records.length, r.ticketCount);
-  return { subject: maskSubject(r.c), kind: r.c.kind, records: r.records };
+  return { subject: maskSubject(r.c), kind: r.c.kind, records: r.records, waiting: r.waiting.map(({ id, ...w }) => w) };
 }
 async function privacyExport(session, { query }) {
   requireOrgRole(session, ['superadmin']);
   await requireConfidentiality(session);
   const r = await findPersonRecords(session, query);
   await logPrivacyRequest(session, 'export', r.c, r.records.length, r.ticketCount);
-  return { export: { generated_at: new Date().toISOString(), subject: r.c.value, kind: r.c.kind, note: 'Everything St Vincent\'s Parish Campaigns holds about this contact detail.', records: r.records } };
+  return { export: { generated_at: new Date().toISOString(), subject: r.c.value, kind: r.c.kind, note: 'Everything St Vincent\'s Parish Campaigns holds about this contact detail.', records: r.records, waiting_list: r.waiting.map(({ id, ...w }) => w) } };
 }
 // Erase = remove the person, keep the books: name, contact, scrambled address, attendee names and free-text notes go;
 // amounts, dates, methods and ticket numbers stay so the accounts and the draw still add up.
@@ -2326,8 +2404,9 @@ async function privacyErase(session, { query, confirm }) {
     const { data: t } = await supabase.from('tickets').update({ attendee_name: null }).in('payment_id', ids).not('attendee_name', 'is', null).select('id');
     tix = (t || []).length;
   }
+  if (r.waiting.length) await supabase.from('waiting_list').delete().in('id', r.waiting.map(w => w.id));
   await logPrivacyRequest(session, 'erase', r.c, ids.length, tix);
-  return { ok: true, payments_erased: ids.length, attendee_names_erased: tix };
+  return { ok: true, payments_erased: ids.length, attendee_names_erased: tix, waiting_erased: r.waiting.length };
 }
 async function privacyLog(session) {
   requireOrgRole(session, ['superadmin']);
@@ -2339,6 +2418,10 @@ async function privacyLog(session) {
 }
 
 const actions = {
+  public_join_waiting_list: (s, b) => publicJoinWaitingList(b),
+  waiting_list_get: (s, b) => waitingListGet(s, b),
+  set_waiting_list: (s, b) => setWaitingList(s, b),
+  waiting_list_clear: (s, b) => waitingListClear(s, b),
   confidentiality_status: (s) => confidentialityStatus(s),
   accept_confidentiality: (s) => acceptConfidentiality(s),
   registration_responses: (s) => registrationResponses(s),

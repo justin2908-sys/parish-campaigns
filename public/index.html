@@ -1478,7 +1478,7 @@ const WIZ_TEMPLATES = {
       draftBlocks = [{ type: 'digital', label: 'Online', range_start: '1', range_end: '', number_prefix: '' }];
     } },
     { id: 'pilgrimage', label: 'Pilgrimage', apply() {
-      wiz.type = 'digital'; wiz.audience = 'both';
+      wiz.type = 'digital'; wiz.audience = 'both'; wiz.waitingList = true;
       wiz.detailsText = 'Dates and itinerary:\nWhat is included:\nMeeting point and time:';
       draftTiers = [{ name: 'Place', price: '' }];
       draftBlocks = [{ type: 'digital', label: 'Places', range_start: '1', range_end: '', number_prefix: '' }];
@@ -1494,10 +1494,94 @@ function lotteryWarning(kind, closesOn, org) {
   if (!closesOn && ukTodayISO() > org.lottery_valid_until) return `Check your lottery registration: it ran until ${fmtDay(org.lottery_valid_until)}.`;
   return '';
 }
+// ---- Waiting list (ticket events only) ----
+// A waiting list is offered when the campaign is created (wizard, step "Prices and numbers") or turned on later in its Settings.
+function wizWaitingApplicable() { return wiz.kind === 'event' && wizCanGoPublic() && wiz.audience !== 'sellers'; }
+function setWizWaiting(v) { wiz.waitingList = !!v; drawWizard(); }
+function wizWaitingHtml() {
+  if (!wizWaitingApplicable()) return '';
+  return `<label style="margin-top:16px">When every place is taken</label>
+    <div class="toggle" style="width:100%;flex-wrap:wrap">
+      <button type="button" style="flex:1 1 110px" class="${!wiz.waitingList ? 'active' : ''}" onclick="setWizWaiting(false)">Stop selling</button>
+      <button type="button" style="flex:1 1 110px" class="${wiz.waitingList ? 'active alt' : ''}" onclick="setWizWaiting(true)">🔔 Waiting list</button>
+    </div>
+    <p class="muted" style="margin-top:8px">${wiz.waitingList
+      ? 'The public page offers a waiting list (email only, nothing to pay). While anyone is waiting, places that free up stay closed to the public. When you are ready you email everyone once, clear the list, and the places open to everyone — first come, first served.'
+      : 'The public page says it is fully booked.'}</p>`;
+}
+
+let wlData = null;
+async function loadWaitingCard() {
+  const el = document.getElementById('wlCard'); if (!el || !cset || !cset.campaign) return;
+  try { wlData = await call('waiting_list_get', { campaign_id: cset.id }); drawWaitingCard(); }
+  catch (e) { el.innerHTML = `<b>Waiting list</b><div class="error" style="margin-top:6px">${esc(e.message)}</div>`; }
+}
+function waitingEmailLinks() {
+  const d = wlData, c = cset.campaign, n = d.places_left;
+  const link = `${location.origin}/buy.html?campaign_id=${c.id}`;
+  const subject = `${n} place${n === 1 ? '' : 's'} now open — ${c.name}`;
+  const body = `Hello,\n\n${n} place${n === 1 ? ' has' : 's have'} now opened up for ${c.name}. To book, please use this link:\n${link}\n\nPlaces go to whoever books first.\n\nBest wishes,\n${churchName()}`;
+  const bcc = d.emails.join(',');
+  return {
+    gmail: `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(bcc)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+    mailto: `mailto:?bcc=${encodeURIComponent(bcc)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+  };
+}
+function drawWaitingCard() {
+  const el = document.getElementById('wlCard'); if (!el || !wlData) return;
+  const d = wlData;
+  if (!d.enabled) {
+    el.innerHTML = `<b>Waiting list</b>
+      <div class="muted" style="margin:4px 0 8px">Off. When every place is taken the public page says it is fully booked. Turn it on to let people leave their email instead, so you can tell them if places open up.</div>
+      <button class="primary" onclick="doSetWaiting(true)">Turn on the waiting list</button>`;
+    return;
+  }
+  if (!d.count) {
+    el.innerHTML = `<b>Waiting list</b> <span class="badge ok">On</span>
+      <div class="muted" style="margin:6px 0 8px">Nobody is waiting. When every place is taken the public page offers the waiting list. ${d.places_left} place${d.places_left === 1 ? ' is' : 's are'} free now.</div>
+      <button class="small" onclick="doSetWaiting(false)">Turn off</button>`;
+    return;
+  }
+  const links = waitingEmailLinks();
+  const long = d.emails.length > 80;
+  el.innerHTML = `<b>Waiting list</b> <span class="badge warn">${d.count} waiting</span>
+    <div style="margin:8px 0"><b>${d.places_left}</b> place${d.places_left === 1 ? ' is' : 's are'} free now. They are held back from the public while anyone is waiting.</div>
+    ${d.places_left === 0 ? '<div class="hint">No places are free yet. Add places (Edit series above) or wait for a cancellation before you email everyone.</div>' : ''}
+    <div class="muted" style="margin:8px 0 4px"><b>1.</b> Email everyone in one message (their addresses are hidden from each other). Make sure you are signed in to the parish Gmail first.</div>
+    <div class="tiny-actions">
+      <a class="small" style="display:inline-block;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);text-decoration:none" href="${esc(links.gmail)}" target="_blank" rel="noopener">✉ Email everyone in Gmail</a>
+      <a class="small" style="display:inline-block;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);text-decoration:none" href="${esc(links.mailto)}">Open in my email app</a>
+      <button class="small" onclick="doCopyWaiting()">Copy addresses</button>
+    </div>
+    ${long ? '<div class="muted" style="margin-top:6px">This is a long list — if the message does not open with everyone in it, use <b>Copy addresses</b> and paste them into the Bcc box.</div>' : ''}
+    <div class="muted" style="margin:12px 0 4px"><b>2.</b> Once you have sent it, clear the list. The addresses are deleted and the places open to everyone, first come first served.</div>
+    <button class="primary" onclick="doClearWaiting()">✓ I've sent it — clear the list</button>`;
+}
+async function doCopyWaiting() {
+  if (!wlData) return;
+  try { await navigator.clipboard.writeText(wlData.emails.join(', ')); toast('✓ ' + wlData.emails.length + ' address' + (wlData.emails.length === 1 ? '' : 'es') + ' copied'); }
+  catch { prompt('Copy these addresses:', wlData.emails.join(', ')); }
+}
+async function doClearWaiting() {
+  if (!confirm('Have you emailed everyone? This deletes their addresses and opens the places to everyone — it cannot be undone.')) return;
+  try {
+    const r = await call('waiting_list_clear', { campaign_id: cset.id, confirm: true });
+    toast(`✓ List cleared (${r.cleared}) — the places are now open to everyone`);
+    loadWaitingCard();
+  } catch (e) { alert(e.message); }
+}
+async function doSetWaiting(enabled) {
+  try {
+    await call('set_waiting_list', { campaign_id: cset.id, enabled });
+    toast(enabled ? '✓ Waiting list turned on' : '✓ Waiting list turned off');
+    openCampaignSettings(cset.id);
+  } catch (e) { alert(e.message); }
+}
+
 function wizIsRaffle() { return wiz.kind === 'raffle'; }
 // The campaign-specific content, back to a blank slate for the chosen kind (the name is kept).
 function wizResetContent() {
-  wiz.type = 'physical'; wiz.audience = 'sellers'; wiz.detailsText = '';
+  wiz.type = 'physical'; wiz.audience = 'sellers'; wiz.detailsText = ''; wiz.waitingList = false;
   wiz.defaultQty = wizIsRaffle() ? 5 : 0;
   wiz.physPay = ['cash', 'machine']; wiz.onlPay = ['cash', 'machine', 'link'];
   draftTiers = [{ name: '', price: '' }, { name: '', price: '' }];
@@ -1542,16 +1626,18 @@ function wizCopyCampaign(id) {
   wiz.defaultQty = c.default_ticket_qty || 0;
   wiz.physPay = c.physical_payment_methods || ['cash', 'machine']; wiz.onlPay = c.online_payment_methods || ['cash', 'machine', 'link'];
   wiz.opens_on = ''; wiz.closes_on = ''; wiz.keep_until = '';
+  wiz.waitingList = !!c.waiting_list && wizWaitingApplicable();
   wiz.copiedFrom = c.name;
   drawWizard();
 }
 function setWizType(t) {
   wiz.type = t;
   if (!wizCanGoPublic() && wiz.audience !== 'sellers') wiz.audience = 'sellers';
+  if (!wizWaitingApplicable()) wiz.waitingList = false;
   syncWizBlocksToType();
   drawWizard();
 }
-function setWizAudience(a) { wiz.audience = a; drawWizard(); }
+function setWizAudience(a) { wiz.audience = a; if (!wizWaitingApplicable()) wiz.waitingList = false; drawWizard(); }
 function goToWizStep(n) { wizStep = n; drawWizard(); }
 
 // The same ordering rules the server applies, so a mistake shows up here in plain words first.
@@ -1601,7 +1687,7 @@ function wizSummaryHtml() {
   const close = wiz.closes_on ? `They close on ${fmtDay(wiz.closes_on)}.` : 'There is no closing date.';
   const lot = lotteryWarning(wiz.kind, wiz.closes_on, wizOrg);
   const keep = wiz.keep_until ? `Names and contact details are kept until ${fmtDay(wiz.keep_until)} and removed 90 days later, on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}.` : '';
-  return `<b>${n}</b> is a ${kind}, sold ${who}. ${open} ${close} ${prices || 'No prices yet'}; ${places} ticket${places === 1 ? '' : 's'} in total. ${keep}${lot ? ` <b class="warnText">${lot}</b>` : ''}`;
+  return `<b>${n}</b> is a ${kind}, sold ${who}. ${open} ${close} ${prices || 'No prices yet'}; ${places} ticket${places === 1 ? '' : 's'} in total. ${wizWaitingApplicable() ? (wiz.waitingList ? 'When every place is taken, a waiting list opens. ' : 'When every place is taken, sales stop. ') : ''}${keep}${lot ? ` <b class="warnText">${lot}</b>` : ''}`;
 }
 
 function wizStepHtml() {
@@ -1653,7 +1739,8 @@ function wizStepHtml() {
     <button type="button" class="ghost" onclick="addTierRow()">+ Add another price</button>
     <label style="margin-top:16px">Ticket numbers ${locked ? '' : '<span class="muted">— printed, online, or both</span>'}</label>
     <div id="blockRows">${draftBlocks.map((b,i)=>blockRowHtml(b,i,locked)).join('')}</div>
-    <button type="button" class="ghost" onclick="addBlockRow()">+ Add another set of numbers</button>`; }
+    <button type="button" class="ghost" onclick="addBlockRow()">+ Add another set of numbers</button>
+    ${wizWaitingHtml()}`; }
   // step 6: review
   const single = draftTiers.filter(t => t.name.trim() && t.price !== '').length === 1;
   const audienceLabel = { public: 'Public page only', sellers: 'Sellers only', both: 'Sellers and the public page' }[wiz.audience];
@@ -1667,6 +1754,7 @@ function wizStepHtml() {
     <div class="stat"><span>Tickets <button type="button" class="link" onclick="goToWizStep(4)">Edit</button></span><b>${({physical:'Printed',digital:'Online',both:'Printed and online'})[wiz.type]} · ${audienceLabel}</b></div>
     <div class="stat"><span>Prices <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${tierList}</b></div>
     <div class="stat"><span>Numbers <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${blockList}</b></div>
+    ${wizWaitingApplicable() ? `<div class="stat"><span>When full <button type="button" class="link" onclick="goToWizStep(5)">Edit</button></span><b>${wiz.waitingList ? 'Waiting list' : 'Stop selling'}</b></div>` : ''}
     <p class="muted" style="margin:10px 0 0">Sellers get ${wiz.type !== 'digital' ? '<b>' + wiz.physPay.map(m => ({cash:'Cash',machine:'Machine',link:'Pay by link'})[m]).join(', ') + '</b> for printed tickets' : ''}${wiz.type === 'both' ? ', and ' : ''}${wiz.type !== 'physical' ? '<b>' + wiz.onlPay.map(m => ({cash:'Cash',machine:'Machine',link:'Pay by link'})[m]).join(', ') + '</b> for online tickets' : ''}.${single && wiz.defaultQty > 0 ? ` Each sale starts at <b>${wiz.defaultQty} ticket${wiz.defaultQty === 1 ? '' : 's'}</b> on the Sell screen.` : ''} You can change any of that later in the campaign's ⚙ Settings.</p>
     <p class="muted" style="margin:10px 0 0">Saving as a draft means only you can see it, through a private preview, until you open it.</p>
     <button type="button" class="primary" style="margin-top:14px" onclick="doCreateCampaignWizard(true)">Save as draft</button>
@@ -1709,6 +1797,7 @@ async function doCreateCampaignWizard(asDraft) {
       physical_payment_methods: wiz.physPay,
       online_payment_methods: wiz.onlPay,
       default_ticket_qty: tiers.length === 1 ? wiz.defaultQty : 0,
+      waiting_list: wizWaitingApplicable() && !!wiz.waitingList,
     }, 60000);
     closeCampaignWizard();
     toast(asDraft ? '✓ Saved as a draft — preview it, then open it when ready' : '✓ Campaign created and open');
@@ -1794,6 +1883,7 @@ function drawCampaignSettings() {
       </div>
       ${hasPhysical ? payGroupHtml('physical', 'Payment options — physical tickets', 'What a Seller can tap when selling printed tickets. They are usually paid for on the spot, so Pay by link is often not needed.', c.physical_payment_methods || ['cash', 'machine', 'link']) : ''}
       ${hasOnline ? payGroupHtml('online', 'Payment options — online tickets', 'What a Seller can tap when selling online tickets. The public buy page is not affected — it always pays by link.', c.online_payment_methods || ['cash', 'machine', 'link']) : ''}
+      ${c.kind !== 'raffle' && hasOnline && c.public_page_enabled ? '<div class="card" id="wlCard"><b>Waiting list</b><div class="muted" style="margin-top:4px">Loading…</div></div>' : ''}
       <div class="card">
         <b>Starting quantity</b>
         <div class="muted" style="margin:2px 0 6px">How many tickets are already filled in at the start of every sale, on the Sell screen and on the public buy page. A Seller or buyer can still change it; 0 starts empty. On the public page the quick-pick buttons are this number and its multiples (5, 10, 20 for 5).</div>
@@ -1828,6 +1918,7 @@ function drawCampaignSettings() {
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px"><h3 style="margin:0">${c ? esc(c.name) : 'Campaign'} — settings</h3><button class="small" onclick="closeCampaignSettings()">Close</button></div>
     ${body}
   </div>`;
+  if (c && !cset.loading && !cset.error && c.kind !== 'raffle' && c.public_page_enabled && c.blocks.some(b => b.type === 'digital')) loadWaitingCard();
 }
 async function doSavePayOptions(kind) {
   const vals = [...document.querySelectorAll('.pay-' + kind + ':checked')].map(i => i.value);
@@ -2220,9 +2311,10 @@ async function doPrivacySearch() {
   try {
     const r = await call('privacy_search', { query: pvQuery });
     refreshPrivacyLog();
-    if (!r.records.length) { out.innerHTML = `<div class="info" style="margin-top:10px">Nothing is held for ${esc(r.subject)}.</div>`; return; }
+    if (!r.records.length && !(r.waiting || []).length) { out.innerHTML = `<div class="info" style="margin-top:10px">Nothing is held for ${esc(r.subject)}.</div>`; return; }
     const running = r.records.filter(x => x.campaign_still_running).length;
-    out.innerHTML = `<p style="margin:12px 0 6px"><b>${r.records.length} sale${r.records.length === 1 ? '' : 's'}</b> for ${esc(r.subject)}</p>
+    const waitHtml = (r.waiting || []).length ? `<div class="card" style="margin:8px 0;background:var(--paper)"><b>On a waiting list</b>${r.waiting.map(w => `<div class="muted">${esc(w.campaign)} · joined ${esc(new Date(w.joined_at).toLocaleDateString('en-GB'))}</div>`).join('')}</div>` : '';
+    out.innerHTML = `${waitHtml}<p style="margin:12px 0 6px"><b>${r.records.length} sale${r.records.length === 1 ? '' : 's'}</b> for ${esc(r.subject)}</p>
       ${running ? `<div class="hint">${running} of these ${running === 1 ? 'is' : 'are'} for a campaign that is still running. If you erase a raffle buyer, you can no longer reach them if they win.</div>` : ''}
       ${r.records.map(x => `<div class="card" style="margin:8px 0;background:var(--paper)">
         <b>${esc(x.campaign)}</b> · ${esc(new Date(x.created_at).toLocaleDateString('en-GB'))} · £${Number(x.amount).toFixed(2)} · ${esc(x.method)} · ${esc(x.status)}
@@ -2253,7 +2345,7 @@ async function doPrivacyErase() {
   if (!confirm('Erase the name, contact details and notes on every one of these sales? The amounts and ticket numbers stay. This cannot be undone.')) return;
   try {
     const r = await call('privacy_erase', { query: pvQuery, confirm: true });
-    el.innerHTML = `<div class="info" style="margin-top:8px">Erased from ${r.payments_erased} sale${r.payments_erased === 1 ? '' : 's'}.</div>`;
+    el.innerHTML = `<div class="info" style="margin-top:8px">Erased from ${r.payments_erased} sale${r.payments_erased === 1 ? '' : 's'}${r.waiting_erased ? ` and ${r.waiting_erased} waiting list${r.waiting_erased === 1 ? '' : 's'}` : ''}.</div>`;
     refreshPrivacyLog();
   } catch (e) { el.innerHTML = `<div class="error" style="margin-top:8px">${esc(e.message)}</div>`; }
 }
