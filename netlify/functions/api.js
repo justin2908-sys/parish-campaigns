@@ -2367,7 +2367,7 @@ async function findPersonRecords(session, query) {
   let waiting = [];
   if (c.kind === 'email' && ids.length) {
     const { data: w } = await supabase.from('waiting_list').select('id, campaign_id, created_at').in('campaign_id', ids).eq('email', c.value);
-    waiting = (w || []).map(x => ({ id: x.id, campaign: (campaignById[x.campaign_id] || {}).name || '', joined_at: x.created_at }));
+    waiting = (w || []).map(x => ({ id: x.id, campaign: (campById[x.campaign_id] || {}).name || '', joined_at: x.created_at }));
   }
   return { c, payments, records, waiting, ticketCount: (tix || []).length };
 }
