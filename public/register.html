@@ -357,6 +357,10 @@ async function boot() {
     else info = await call('public_registration_info', { campaign_id: campaignId, preview: previewToken });
   } catch (e) { app.innerHTML = `<div class="fatal"><div class="card"><div class="err">${esc(e.message)}</div></div></div>`; return; }
   document.title = info.campaign.name;
+  if (info.state === 'inactive') {
+    app.innerHTML = statusPage(`<p class="note" style="font-size:18px;margin-top:14px"><b>This form isn't taking registrations at the moment.</b></p><p class="note">Please check again later, or contact the parish office.</p>`);
+    wireSheets(); $('findBtn').onclick = findRegistration; return;
+  }
   if (info.state === 'not_open' || info.state === 'closed') {
     app.innerHTML = statusPage(`<p class="note" style="font-size:18px;margin-top:14px"><b>${info.state === 'not_open' ? 'Opens on ' + esc(dayText(info.opens_on)) : 'Closed on ' + esc(dayText(info.closes_on))}.</b></p>${info.state === 'closed' ? '<p class="note">Thank you to everyone who took part.</p>' : ''}`);
     wireSheets(); $('findBtn').onclick = findRegistration; return;

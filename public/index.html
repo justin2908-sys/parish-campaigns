@@ -1951,12 +1951,22 @@ function drawRegForm() {
       <input id="rfPlaces" type="number" min="1" max="2000" inputmode="numeric" value="${esc(f.places == null ? '' : f.places)}">
       <button class="primary" style="margin-top:8px" onclick="doRegPlaces()">Save places</button><div id="rfPlacesMsg"></div></div>
     ${f.places ? '<div class="card" id="wlCard"><b>Waiting list</b><div class="muted" style="margin-top:4px">Loading…</div></div>' : ''}
+    <div class="card"><b>More</b>
+      <div class="tiny-actions" style="margin-top:8px">
+        <button class="small" onclick="doDownloadRegistrations('${f.id}')">⬇ Download all answers (CSV)</button>
+        <button class="small" onclick="doRegBin()">Move to Recycle Bin</button>
+      </div>
+      <p class="muted" style="margin:8px 0 0">Closing a form just pauses it — the link keeps working and says it isn't taking registrations. The Recycle Bin removes it from the lists and the link stops working; the SuperAdmin can restore it. Either way, people's details are removed automatically 90 days after “keep until”.</p></div>
     <div class="card"><b>The form</b>
       <div class="muted" style="margin:2px 0 6px">${(def.fields || []).length} question${(def.fields || []).length === 1 ? '' : 's'} · ${(def.agreements || []).length} agreement${(def.agreements || []).length === 1 ? '' : 's'} · ${def.payment ? `payment £${def.payment.min}–£${def.payment.max}` : 'no payment'} · ${def.approval ? 'each one is checked' : 'no approval step'}</div>
       <ol style="margin:6px 0 0;padding-left:20px;line-height:1.6">${(def.fields || []).map(q => `<li>${q.sensitive ? '🔒 ' : ''}${esc(q.label)}${q.required ? ' *' : ''} <span class="muted">(${esc(REG_TYPE_LABELS[q.type] || q.type)})</span></li>`).join('') || '<li class="muted">No questions of its own — just name and contact.</li>'}</ol>
       <p class="muted" style="margin:8px 0 0">${f.total ? 'People have registered, so the questions can no longer be changed.' : 'To change the questions, make a new form (New form → “Or copy an earlier campaign”) and move this one to the Recycle Bin.'}</p></div>
   </div>`;
   if (f.places) loadWaitingCard();
+}
+async function doRegBin() {
+  if (!confirm(`Move "${regPanel.form.name}" to the Recycle Bin? The link stops working and it leaves the lists. The SuperAdmin can restore it.`)) return;
+  try { await call('bin_campaign', { campaign_id: regPanel.id }); toast('✓ Moved to the Recycle Bin'); closeRegForm(); } catch (e) { alert(e.message); }
 }
 async function regPanelRefresh() { await openRegForm(regPanel.id); }
 async function doRegOpen() {

@@ -903,8 +903,7 @@ async function setCampaignActive(session, { campaign_id, active }) {
 // purposes — while the underlying tickets/payments are kept, not wiped, so a mistaken bin
 // can be undone and reports can still be pulled if needed.
 async function binCampaign(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin']);
-  await requireCampaignsInOwnOrg(session, [campaign_id]);
+  await requireCampaignManager(session, campaign_id);   // SuperAdmin, or Finance / Priest for a registration form they made
   const { error } = await supabase.from('campaigns').update({ binned: true }).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
@@ -2417,7 +2416,8 @@ async function publicRegistrationInfo({ campaign_id, preview }) {
   if (!campaign) throw httpError(404, 'This form is not available right now.');
   const isPreview = validPreviewToken(preview, campaign.id);
   const state = campaignOpenState(campaign);
-  if (!isPreview && (state === 'draft' || state === 'inactive' || state === 'unavailable')) throw httpError(404, 'This form is not available right now.');
+  // A draft or a binned form shows nothing. A paused (deactivated) one says so plainly instead of looking broken.
+  if (!isPreview && (state === 'draft' || state === 'unavailable')) throw httpError(404, 'This form is not available right now.');
   const [left, queued] = await Promise.all([registrationPlacesLeft(campaign), waitingCount(campaign.id)]);
   const def = campaign.form_def || { fields: [], agreements: [], contact_mode: 'either' };
   const org = campaign.organizations;
