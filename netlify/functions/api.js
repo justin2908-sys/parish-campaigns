@@ -3042,3 +3042,405 @@ exports.handler = async (event) => {
     return json(e.status || 500, e.code ? { error: e.message || 'Server error', code: e.code } : { error: e.message || 'Server error' });
   }
 };
+
+// ---------- Parish Gateway (Phase 1): one public page per organisation, at /go/<slug> ----------
+// Everything below is additive. The page is OFF for every organisation until a SuperAdmin switches it on, and a campaign
+// is only listed once somebody switches it on. The public side shows names, dates, places left and the organisation's
+// own details — never a person, a payment, a ticket or a registration, and never a raffle's sales.
+// It keeps its own "today" (in the organisation's time zone) instead of ukToday(), and its own opening test instead of
+// campaignOpenState(), so nothing the rest of the app does can move.
+const GATEWAY_ROLES = ['superadmin', 'admin', 'finance', 'priest'];   // may change what is on the page
+const GATEWAY_RESERVED_SLUGS = ['api', 'admin', 'go', 'assets', 'fonts'];
+// All wording the public sees that comes from the server lives here, one object per kind of organisation.
+const GATEWAY_WORDING = {
+  church: { cta: { raffle: 'Buy tickets', event: 'Reserve a place', registration: 'Register' } },
+};
+const GATEWAY_VERTICAL = 'church';
+const GATEWAY_SECTIONS = ['involved', 'registration'];
+const gwSectionOf = (kind) => (kind === 'registration' ? 'registration' : 'involved');
+
+// ----- time, in the organisation's own zone
+function gwValidTimezone(tz) {
+  if (typeof tz !== 'string' || !tz || tz.length > 64) return false;
+  try { new Intl.DateTimeFormat('en-GB', { timeZone: tz }); return true; } catch { return false; }
+}
+function gwToday(tz, at) { return (at || new Date()).toLocaleDateString('en-CA', { timeZone: tz }); }
+function gwParts(ms, tz) {
+  const p = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms));
+  const g = (t) => Number(p.find(x => x.type === t).value);
+  return { y: g('year'), mo: g('month'), d: g('day'), h: g('hour'), mi: g('minute'), s: g('second') };
+}
+function gwOffsetMs(ms, tz) { const t = gwParts(ms, tz); return Date.UTC(t.y, t.mo - 1, t.d, t.h, t.mi, t.s) - Math.floor(ms / 1000) * 1000; }
+// '2026-11-03T18:30' typed in the organisation's zone → the exact moment (ISO, UTC); null if it isn't a real date and time
+function gwLocalToIso(naive, tz) {
+  const s = String(naive == null ? '' : naive).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(s);
+  if (!m) return null;
+  const asUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  if (Number.isNaN(asUtc) || new Date(asUtc).toISOString().slice(0, 16) !== s) return null;
+  if (+m[1] < 2020 || +m[1] > 2100) return null;
+  let guess = asUtc - gwOffsetMs(asUtc, tz);
+  guess = asUtc - gwOffsetMs(guess, tz);   // second pass settles the hour either side of a clock change
+  return new Date(guess).toISOString();
+}
+function gwIsoToLocal(iso, tz) {
+  if (!iso) return '';
+  const t = gwParts(new Date(iso).getTime(), tz), p2 = (n) => String(n).padStart(2, '0');
+  return `${t.y}-${p2(t.mo)}-${p2(t.d)}T${p2(t.h)}:${p2(t.mi)}`;
+}
+// draft / inactive / not_open / closed / open, judged on the organisation's own calendar day
+function gwOpenState(c, today) {
+  if (c.binned) return 'unavailable';
+  if (c.is_draft) return 'draft';
+  if (!c.active) return 'inactive';
+  if (c.opens_on && today < c.opens_on) return 'not_open';
+  if (c.closes_on && today > c.closes_on) return 'closed';
+  return 'open';
+}
+
+// ----- checks on what an admin types (the browser is never trusted)
+function gwText(v, max, what, { required } = {}) {
+  const s = String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (required && !s) throw httpError(400, `${what} can't be empty.`);
+  if (s.length > max) throw httpError(400, `${what} is too long (${max} characters at most).`);
+  return s;
+}
+// https only, a real host with a dot, no spaces. javascript:, data:, mailto:, http: and the rest are refused.
+function gwUrl(v, what, { required } = {}) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) { if (required) throw httpError(400, `Add ${what}.`); return null; }
+  const bad = () => httpError(400, `${what} must start with https:// and be a full web address.`);
+  if (s.length > 2000 || /[\s\u0000-\u001f\u007f<>"']/.test(s) || !/^https:\/\//i.test(s)) throw bad();
+  let u; try { u = new URL(s); } catch { throw bad(); }
+  if (u.protocol !== 'https:' || !u.hostname.includes('.') || /^\.|\.$|\.\./.test(u.hostname) || u.username || u.password) throw bad();
+  return u.href.length <= 2000 ? u.href : s;
+}
+function gwSlug(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(400, 'The page address can use lowercase letters, numbers and hyphens, 3 to 40 characters.');
+  if (GATEWAY_RESERVED_SLUGS.includes(s)) throw httpError(400, 'That address is reserved. Please choose another.');
+  return s;
+}
+
+// ----- what the page lists
+const gwByClose = (a, b) => String(a.closes_on || '9999-12-31').localeCompare(String(b.closes_on || '9999-12-31')) || String(a.name).localeCompare(String(b.name));
+// Automatic: closing soonest. Custom: the stored order; anything not in it goes to the end (soonest first).
+function gwSort(items, stored) {
+  if (!stored) return items.slice().sort(gwByClose);
+  const pos = new Map(stored.map((id, i) => [id, i]));
+  return items.slice().sort((a, b) => ((pos.has(a.id) ? pos.get(a.id) : 1e9) - (pos.has(b.id) ? pos.get(b.id) : 1e9)) || gwByClose(a, b));
+}
+async function gwOnlineCampaignIds(ids) {   // campaigns that have online (digital) tickets
+  if (!ids.length) return new Set();
+  const { data } = await supabase.from('ticket_blocks').select('campaign_id').eq('type', 'digital').in('campaign_id', ids);
+  return new Set((data || []).map(b => b.campaign_id));
+}
+async function gwOnlinePlacesTotal(campaign_id) {   // every online place a campaign has, taken or not
+  const { count } = await supabase.from('tickets').select('id, ticket_blocks!inner(type)', { count: 'exact', head: true }).eq('campaign_id', campaign_id).eq('ticket_blocks.type', 'digital');
+  return count || 0;
+}
+async function gwOrders(orgId) {
+  const { data } = await supabase.from('gateway_order').select('section, item_ids').eq('org_id', orgId);
+  const out = { involved: null, registration: null };
+  for (const r of data || []) out[r.section] = r.item_ids || [];
+  return out;
+}
+
+// ---- the public page's data
+const GATEWAY_PUBLIC_MAX = 240, GATEWAY_PUBLIC_WINDOW_SECONDS = 300;
+async function publicGateway({ slug }) {
+  const s = String(slug == null ? '' : slug).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
+  const [org, hits] = await Promise.all([
+    supabase.from('organizations').select('id, name, display_name, address, contact_email, timezone, gateway_enabled, gateway_phone, gateway_hours').eq('slug', s).maybeSingle().then(r => r.data),
+    clientIp ? rateHit(`gw:${clientIp}`, GATEWAY_PUBLIC_WINDOW_SECONDS) : 0,
+  ]);
+  if (hits > GATEWAY_PUBLIC_MAX) throw httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
+  if (!org || !org.gateway_enabled) throw httpError(404, 'This page is not available.');
+  const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London';
+  const now = new Date(), today = gwToday(tz, now);
+  const [linksRes, annsRes, campsRes, itemsRes, orders] = await Promise.all([
+    supabase.from('gateway_links').select('position, label, sub, url').eq('org_id', org.id).order('position'),
+    supabase.from('gateway_announcements').select('message, link_url, urgent, starts_at, ends_at, created_at').eq('org_id', org.id).lte('starts_at', now.toISOString()).order('created_at', { ascending: false }).limit(50),
+    supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, places, waiting_list, gateway_cta').eq('org_id', org.id).eq('listed_on_gateway', true).eq('binned', false),
+    supabase.from('gateway_items').select('id, section, label, url, cta, starts_on, ends_on').eq('org_id', org.id).eq('listed', true),
+    gwOrders(org.id),
+  ]);
+  const wording = GATEWAY_WORDING[GATEWAY_VERTICAL];
+  const live = (annsRes.data || []).find(a => !a.ends_at || new Date(a.ends_at) > now);   // newest one that has started and not ended
+  // Only a campaign with a working public page is listed: a registration form, or tickets sold online.
+  const open = (campsRes.data || []).filter(c => c.public_page_enabled && gwOpenState(c, today) === 'open');
+  const online = await gwOnlineCampaignIds(open.filter(c => c.kind !== 'registration').map(c => c.id));
+  const campaigns = [];
+  for (const c of open) {
+    if (c.kind !== 'registration' && !online.has(c.id)) continue;
+    let left = null, total = null, full = false;
+    if (c.kind === 'registration') { left = await registrationPlacesLeft(c); total = c.places == null ? null : c.places; }
+    else if (c.kind !== 'raffle') { left = await onlinePlacesLeft(c.id); total = await gwOnlinePlacesTotal(c.id); }   // a raffle never shows how many are left, or sold
+    if (left !== null) full = left === 0;
+    if (c.waiting_list && c.kind !== 'raffle' && !full && await waitingCount(c.id) > 0) full = true;   // somebody is queuing: nobody jumps the queue
+    campaigns.push({
+      section: gwSectionOf(c.kind),
+      item: { id: c.id, source: 'campaign', name: c.name, closes_on: c.closes_on, opens_on: c.opens_on, places_left: left, places_total: total, full, waiting_list: !!c.waiting_list && c.kind !== 'raffle',
+        cta: c.gateway_cta || wording.cta[c.kind] || wording.cta.event,
+        href: `${c.kind === 'registration' ? '/register.html' : '/buy.html'}?campaign_id=${c.id}` },
+    });
+  }
+  const manual = (itemsRes.data || []).filter(i => i.starts_on <= today && today <= i.ends_on).map(i => ({
+    section: i.section,
+    item: { id: i.id, source: 'manual', name: i.label, closes_on: i.ends_on, opens_on: i.starts_on, places_left: null, places_total: null, full: false, waiting_list: false, cta: i.cta || wording.cta[i.section === 'registration' ? 'registration' : 'event'] || 'Find out more', href: i.url },
+  }));
+  const sections = {};
+  for (const sec of GATEWAY_SECTIONS) sections[sec] = gwSort([...campaigns, ...manual].filter(x => x.section === sec).map(x => x.item), orders[sec]);
+  return {
+    org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null },
+    links: (linksRes.data || []).map(l => ({ label: l.label, sub: l.sub || '', url: l.url })),
+    announcement: live ? { message: live.message, link_url: live.link_url || null, urgent: !!live.urgent, ends_at: live.ends_at || null } : null,
+    sections,
+  };
+}
+
+// ---- the admin screen
+async function gwOrg(session) {
+  requireOrgRole(session, GATEWAY_ROLES);
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, gateway_enabled, timezone, display_name, gateway_phone, gateway_hours').eq('id', session.org_id).maybeSingle();
+  if (!org) throw httpError(404, 'Organisation not found');
+  if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
+  return org;
+}
+function gwAnnouncementState(a, now) {
+  if (!a) return 'off';
+  if (new Date(a.starts_at) > now) return 'scheduled';
+  if (a.ends_at && new Date(a.ends_at) <= now) return 'ended';
+  return 'live';
+}
+async function gatewayGet(session) {
+  const org = await gwOrg(session), tz = org.timezone, now = new Date(), today = gwToday(tz, now);
+  const [linksRes, annsRes, campsRes, itemsRes, orders] = await Promise.all([
+    supabase.from('gateway_links').select('position, label, sub, url').eq('org_id', org.id).order('position'),
+    supabase.from('gateway_announcements').select('id, message, link_url, urgent, starts_at, ends_at, created_at').eq('org_id', org.id).order('created_at', { ascending: false }).limit(20),
+    supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, listed_on_gateway, gateway_cta').eq('org_id', org.id).eq('binned', false),
+    supabase.from('gateway_items').select('id, section, label, url, cta, starts_on, ends_on, listed').eq('org_id', org.id),
+    gwOrders(org.id),
+  ]);
+  const camps = campsRes.data || [];
+  const online = await gwOnlineCampaignIds(camps.filter(c => c.kind !== 'registration').map(c => c.id));
+  const rows = [
+    ...camps.map(c => {
+      const eligible = !!c.public_page_enabled && (c.kind === 'registration' || online.has(c.id));
+      return { id: c.id, source: 'campaign', section: gwSectionOf(c.kind), kind: c.kind, name: c.name, opens_on: c.opens_on, closes_on: c.closes_on, listed: !!c.listed_on_gateway,
+        state: gwOpenState(c, today), eligible, reason: eligible ? '' : (!c.public_page_enabled ? 'Its public page is switched off' : 'It has no online tickets'), cta: c.gateway_cta || '' };
+    }),
+    ...(itemsRes.data || []).map(i => ({ id: i.id, source: 'manual', section: i.section, kind: 'link', name: i.label, opens_on: i.starts_on, closes_on: i.ends_on, listed: !!i.listed, state: today < i.starts_on ? 'not_open' : today > i.ends_on ? 'closed' : 'open', eligible: true, reason: '', cta: i.cta || '', url: i.url })),
+  ];
+  const sections = {};
+  for (const sec of GATEWAY_SECTIONS) sections[sec] = { mode: orders[sec] ? 'custom' : 'automatic', items: gwSort(rows.filter(r => r.section === sec), orders[sec]) };
+  const anns = annsRes.data || [];
+  const current = anns.find(a => gwAnnouncementState(a, now) === 'live') || anns.find(a => gwAnnouncementState(a, now) === 'scheduled') || anns[0] || null;
+  const link = (n) => { const l = (linksRes.data || []).find(x => x.position === n); return { position: n, label: l ? l.label : '', sub: l ? l.sub : '', url: l ? l.url : '' }; };
+  return {
+    can_manage: session.role === 'superadmin',
+    org: { name: org.name, slug: org.slug || '', enabled: !!org.gateway_enabled, timezone: tz, display_name: org.display_name || '', phone: org.gateway_phone || '', hours: org.gateway_hours || '', page_path: org.slug ? `/go/${org.slug}` : null },
+    links: [link(1), link(2), link(3)],
+    announcement: current ? { message: current.message, link_url: current.link_url || '', urgent: !!current.urgent, starts_at: gwIsoToLocal(current.starts_at, tz), ends_at: gwIsoToLocal(current.ends_at, tz), state: gwAnnouncementState(current, now) } : null,
+    sections, today, now_local: gwIsoToLocal(now.toISOString(), tz),
+  };
+}
+
+async function gatewaySaveLinks(session, { links }) {
+  const org = await gwOrg(session);
+  if (!Array.isArray(links) || !links.length || links.length > 3) throw httpError(400, 'Nothing to save.');
+  const clean = [], clear = [];
+  for (const l of links) {
+    const position = Number(l && l.position);
+    if (![1, 2, 3].includes(position)) throw httpError(400, 'A link must be number 1, 2 or 3.');
+    const label = gwText(l.label, 60, 'The title'), sub = gwText(l.sub, 60, 'The line underneath'), rawUrl = String(l.url == null ? '' : l.url).trim();
+    if (!label && !rawUrl && !sub) { clear.push(position); continue; }   // an empty row removes that link
+    if (!label) throw httpError(400, `Link ${position}: give it a title.`);
+    let url; try { url = gwUrl(rawUrl, 'The web address', { required: true }); } catch (e) { throw httpError(400, `Link ${position}: ${e.message}`); }
+    clean.push({ org_id: org.id, position, label, sub, url, updated_by: session.uid, updated_at: new Date().toISOString() });
+  }
+  if (clean.length) {
+    const { error } = await supabase.from('gateway_links').upsert(clean, { onConflict: 'org_id,position' });
+    if (error) throw httpError(400, error.message);
+  }
+  if (clear.length) await supabase.from('gateway_links').delete().eq('org_id', org.id).in('position', clear);
+  return { ok: true };
+}
+
+async function gatewaySaveAnnouncement(session, b) {
+  const org = await gwOrg(session), tz = org.timezone, now = new Date();
+  const message = gwText(b.message, 200, 'The message', { required: true });
+  const link_url = gwUrl(b.link_url, 'The link');
+  const starts = b.starts_at ? gwLocalToIso(b.starts_at, tz) : now.toISOString();
+  if (!starts) throw httpError(400, "The start isn't a valid date and time.");
+  let ends = null;
+  if (b.ends_at) { ends = gwLocalToIso(b.ends_at, tz); if (!ends) throw httpError(400, "The end isn't a valid date and time."); }
+  if (ends && new Date(ends) <= new Date(starts)) throw httpError(400, "The end can't be before the start.");
+  if (ends && new Date(ends) <= now) throw httpError(400, 'That end time has already passed.');
+  const { error } = await supabase.from('gateway_announcements').insert({ org_id: org.id, message, link_url, urgent: !!b.urgent, starts_at: starts, ends_at: ends, created_by: session.uid });
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+// Takes the notice down: one that is showing ends now; one still waiting for its start is removed.
+async function gatewayClearAnnouncement(session) {
+  const org = await gwOrg(session), nowIso = new Date().toISOString();
+  const { data } = await supabase.from('gateway_announcements').select('id, starts_at, ends_at').eq('org_id', org.id);
+  const ended = [], waiting = [];
+  for (const a of data || []) {
+    if (a.ends_at && new Date(a.ends_at) <= new Date(nowIso)) continue;
+    (new Date(a.starts_at) > new Date(nowIso) ? waiting : ended).push(a.id);
+  }
+  if (ended.length) await supabase.from('gateway_announcements').update({ ends_at: nowIso }).eq('org_id', org.id).in('id', ended);
+  if (waiting.length) await supabase.from('gateway_announcements').delete().eq('org_id', org.id).in('id', waiting);
+  return { ok: true, ended: ended.length, removed: waiting.length };
+}
+
+// ----- the order of each section
+async function gwOrderRemove(orgId, id) {
+  const { data } = await supabase.from('gateway_order').select('section, item_ids').eq('org_id', orgId);
+  for (const r of data || []) {
+    if ((r.item_ids || []).includes(id)) await supabase.from('gateway_order').update({ item_ids: r.item_ids.filter(x => x !== id), updated_at: new Date().toISOString() }).eq('org_id', orgId).eq('section', r.section);
+  }
+}
+async function gwOrderPrepend(orgId, section, id) {   // only when that section has a custom order
+  const { data } = await supabase.from('gateway_order').select('item_ids').eq('org_id', orgId).eq('section', section).maybeSingle();
+  if (data) await supabase.from('gateway_order').update({ item_ids: [id, ...(data.item_ids || []).filter(x => x !== id)], updated_at: new Date().toISOString() }).eq('org_id', orgId).eq('section', section);
+}
+async function gatewaySetOrder(session, { section, ids }) {
+  const org = await gwOrg(session);
+  if (!GATEWAY_SECTIONS.includes(section)) throw httpError(400, 'Unknown section.');
+  if (ids === null || ids === undefined) {   // back to automatic
+    await supabase.from('gateway_order').delete().eq('org_id', org.id).eq('section', section);
+    return { ok: true, mode: 'automatic' };
+  }
+  if (!Array.isArray(ids) || ids.length > 200 || ids.some(x => typeof x !== 'string' || x.length > 64) || new Set(ids).size !== ids.length) throw httpError(400, 'That order is not valid.');
+  const [{ data: camps }, { data: items }] = await Promise.all([
+    supabase.from('campaigns').select('id, kind').eq('org_id', org.id).eq('binned', false),
+    supabase.from('gateway_items').select('id').eq('org_id', org.id).eq('section', section),
+  ]);
+  const valid = new Set([...(camps || []).filter(c => gwSectionOf(c.kind) === section).map(c => c.id), ...(items || []).map(i => i.id)]);
+  if (ids.some(id => !valid.has(id))) throw httpError(400, 'That order includes something that is not in this section.');   // never moves an item between sections, never reaches another organisation
+  const { error } = await supabase.from('gateway_order').upsert({ org_id: org.id, section, item_ids: ids, updated_at: new Date().toISOString() }, { onConflict: 'org_id,section' });
+  if (error) throw httpError(400, error.message);
+  return { ok: true, mode: 'custom' };
+}
+
+// ----- items added by hand
+async function gatewayItemSave(session, b) {
+  const org = await gwOrg(session);
+  if (!GATEWAY_SECTIONS.includes(b.section)) throw httpError(400, 'Choose where it should appear.');
+  const row = {
+    section: b.section,
+    label: gwText(b.label, 60, 'The name', { required: true }),
+    url: gwUrl(b.url, 'The web address', { required: true }),
+    cta: gwText(b.cta, 24, 'The button words') || null,
+    starts_on: cleanDate(b.starts_on, 'The start date', { required: true }),
+    ends_on: cleanDate(b.ends_on, 'The end date', { required: true }),
+  };
+  if (row.ends_on < row.starts_on) throw httpError(400, 'The end date is before the start date.');
+  if (b.id) {
+    const { data: old } = await supabase.from('gateway_items').select('id, section').eq('id', b.id).eq('org_id', org.id).maybeSingle();
+    if (!old) throw httpError(404, 'Item not found');
+    const { error } = await supabase.from('gateway_items').update(row).eq('id', old.id).eq('org_id', org.id);
+    if (error) throw httpError(400, error.message);
+    if (old.section !== row.section) { await gwOrderRemove(org.id, old.id); await gwOrderPrepend(org.id, row.section, old.id); }
+    return { ok: true, id: old.id };
+  }
+  const { data, error } = await supabase.from('gateway_items').insert({ ...row, org_id: org.id, listed: true, created_by: session.uid }).select('id').single();
+  if (error) throw httpError(400, error.message);
+  await gwOrderPrepend(org.id, row.section, data.id);   // a new item lands at the top of a custom order
+  return { ok: true, id: data.id };
+}
+async function gatewayItemDelete(session, { id }) {
+  const org = await gwOrg(session);
+  const { data: old } = await supabase.from('gateway_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!old) throw httpError(404, 'Item not found');
+  await supabase.from('gateway_items').delete().eq('id', old.id).eq('org_id', org.id);
+  await gwOrderRemove(org.id, old.id);
+  return { ok: true };
+}
+// "On the page" for a manual item
+async function gatewayItemSetListed(session, { id, listed }) {
+  const org = await gwOrg(session);
+  const { data: old } = await supabase.from('gateway_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!old) throw httpError(404, 'Item not found');
+  await supabase.from('gateway_items').update({ listed: !!listed }).eq('id', old.id).eq('org_id', org.id);
+  return { ok: true };
+}
+// "On the page" for a campaign. Only a campaign with a working public page can be put on.
+async function campaignSetListed(session, { campaign_id, listed, cta }) {
+  const org = await gwOrg(session);
+  const { data: c } = await supabase.from('campaigns').select('id, kind, org_id, public_page_enabled, binned').eq('id', campaign_id).maybeSingle();
+  if (!c || c.org_id !== org.id || c.binned) throw httpError(404, 'Campaign not found');
+  const patch = { listed_on_gateway: !!listed };
+  if (cta !== undefined) patch.gateway_cta = gwText(cta, 24, 'The button words') || null;
+  if (listed) {
+    const ok = c.public_page_enabled && (c.kind === 'registration' || (await gwOnlineCampaignIds([c.id])).has(c.id));
+    if (!ok) throw httpError(400, c.public_page_enabled ? 'This campaign has no online tickets, so it has no page to link to.' : 'This campaign has no public page to link to. Switch its public page on first.');
+  }
+  const { error } = await supabase.from('campaigns').update(patch).eq('id', c.id).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// ----- the organisation's own details on the page
+async function gatewaySetDetails(session, { phone, hours }) {
+  const org = await gwOrg(session);
+  const patch = { gateway_phone: gwText(phone, 40, 'The phone number') || null, gateway_hours: gwText(hours, 120, 'The office hours') || null };
+  const { error } = await supabase.from('organizations').update(patch).eq('id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+// SuperAdmin only: the page address and the name shown on it. Changing an address that is already in use needs confirm: true,
+// because every printed code or short link that points to the old one stops working until it is re-pointed.
+async function gatewaySetAddress(session, b) {
+  requireOrgRole(session, ['superadmin']);
+  const org = await gwOrg(session), patch = {};
+  if (b.slug !== undefined) {
+    const slug = gwSlug(b.slug);
+    if (org.slug && org.slug !== slug && !b.confirm) throw Object.assign(httpError(409, `Changing the address stops "/go/${org.slug}" working. Any short link or QR code pointing to it must be re-pointed. Confirm to continue.`), { code: 'confirm_slug_change' });
+    patch.slug = slug;
+  }
+  if (b.display_name !== undefined) patch.display_name = gwText(b.display_name, 80, 'The name') || null;
+  if (b.timezone !== undefined) { if (!gwValidTimezone(b.timezone)) throw httpError(400, "That isn't a time zone the page knows (for example Europe/London)."); patch.timezone = b.timezone; }
+  if (!Object.keys(patch).length) throw httpError(400, 'Nothing to change.');
+  const { error } = await supabase.from('organizations').update(patch).eq('id', org.id);
+  if (error) throw httpError(error.code === '23505' ? 409 : 400, error.code === '23505' ? 'That address is already used by another organisation.' : error.message);
+  return { ok: true, page_path: `/go/${patch.slug || org.slug}` };
+}
+async function gatewaySetEnabled(session, { enabled }) {
+  requireOrgRole(session, ['superadmin']);
+  const org = await gwOrg(session);
+  if (enabled && !org.slug) throw httpError(400, 'Give the page an address first.');
+  const { error } = await supabase.from('organizations').update({ gateway_enabled: !!enabled }).eq('id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, enabled: !!enabled };
+}
+
+Object.assign(actions, {
+  public_gateway: (s, b) => publicGateway(b),
+  gateway_get: (s) => gatewayGet(s),
+  gateway_save_links: (s, b) => gatewaySaveLinks(s, b),
+  gateway_save_announcement: (s, b) => gatewaySaveAnnouncement(s, b),
+  gateway_clear_announcement: (s) => gatewayClearAnnouncement(s),
+  gateway_item_save: (s, b) => gatewayItemSave(s, b),
+  gateway_item_delete: (s, b) => gatewayItemDelete(s, b),
+  gateway_item_set_listed: (s, b) => gatewayItemSetListed(s, b),
+  gateway_set_order: (s, b) => gatewaySetOrder(s, b),
+  campaign_set_listed: (s, b) => campaignSetListed(s, b),
+  gateway_set_details: (s, b) => gatewaySetDetails(s, b),
+  gateway_set_address: (s, b) => gatewaySetAddress(s, b),
+  gateway_set_enabled: (s, b) => gatewaySetEnabled(s, b),
+});
+READ_ONLY_PUBLIC.add('public_gateway');   // a pure look-up, so the flood check runs alongside it
+
+// The page's data may be reused briefly by the network between visits; it carries no cookies and no personal data.
+const baseHandler = exports.handler;
+exports.handler = async (event) => {
+  const res = await baseHandler(event);
+  if (res && res.statusCode === 200 && String(event.path || '').split('/').pop() === 'public_gateway') {
+    res.headers = { ...res.headers, 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' };
+  }
+  return res;
+};

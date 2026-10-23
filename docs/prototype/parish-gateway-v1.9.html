@@ -1,0 +1,761 @@
+<title>Parish Gateway</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Spectral:wght@500;600&display=swap">
+<style>
+/* Layout: built for older eyes and thumbs. Compact masthead, a slim Notices bar, three large service buttons as the hero, then Get Involved and Registrations as the second hero. Save-to-phone sits last. The admin tab lists everything on the page in two ordered groups, with manual items and drag-to-reorder. */
+:root {
+  --bg: #f3f4f1;
+  --surface: #ffffff;
+  --fg: #151c18;
+  --muted: #3d4843;
+  --line: #c9d0cb;
+  --brand: #225840;
+  --brand-text: #225840;
+  --brand-tint: #e0eee6;
+  --warn: #7a3f00;
+  --warn-tint: #fbeccd;
+  --bad: #a31f1f;
+  --font-display: "Spectral", Georgia, "Times New Roman", serif;
+  --font-body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101512; --surface: #1b2220; --fg: #f1f4f0; --muted: #c0cbc4; --line: #3a4640;
+    --brand: #2f7a58; --brand-text: #9fdcbd; --brand-tint: #1f3329;
+    --warn: #f5c070; --warn-tint: #3a2a10; --bad: #ff9a9a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101512; --surface: #1b2220; --fg: #f1f4f0; --muted: #c0cbc4; --line: #3a4640;
+  --brand: #2f7a58; --brand-text: #9fdcbd; --brand-tint: #1f3329;
+  --warn: #f5c070; --warn-tint: #3a2a10; --bad: #ff9a9a;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 1.0625rem; line-height: 1.4; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 4px solid var(--brand-text); outline-offset: 2px; border-radius: 6px; }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 560px; margin: 0 auto; }
+
+/* prototype strip */
+.tabs { background: #151c18; color: #f1f4f0; padding-block: 4px; }
+.tabs .wrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+@media (max-width: 480px) { .tabs small { display: none; } }
+.tabs small { opacity: .75; margin-right: auto; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; }
+.tabs button { background: transparent; border: 1px solid rgba(241,244,240,.45); color: #f1f4f0; border-radius: 999px; padding: 0 14px; min-height: 34px; font-size: .85rem; font-weight: 600; }
+.tabs button[aria-pressed="true"] { background: #f1f4f0; color: #151c18; }
+
+/* masthead */
+.mast { background: var(--brand); color: #fff; padding-block: 12px 10px; }
+.mast .wrap { display: grid; gap: 0; }
+.mast .id { display: flex; align-items: center; gap: 10px; }
+.crest { width: 28px; height: 28px; flex: none; color: #fff; opacity: .95; }
+.mast h1 { font-family: var(--font-display); font-weight: 600; font-size: 1.6rem; line-height: 1.1; margin: 0; text-wrap: balance; }
+.nextline { font-size: 1rem; font-weight: 600; margin: 2px 0 0; }
+.mail { display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 44px; padding: 0 14px; border: 2px solid rgba(255,255,255,.55); border-radius: 999px; background: transparent; color: #fff; font-size: .95rem; font-weight: 600; }
+.mast .id h1 { flex: 1; min-width: 0; }
+
+/* notices bar */
+.notices { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding-block: 6px; background: var(--surface); border: 0; border-bottom: 2px solid var(--line); text-align: left; }
+.notices .lab { font-weight: 700; }
+.notices .badge { flex: none; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 999px; background: var(--brand); color: #fff; font-weight: 700; font-size: .85rem; display: grid; place-items: center; }
+.notices .txt { min-width: 0; flex: 1; display: grid; line-height: 1.25; }
+.notices .sub { color: var(--muted); font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notices .go { flex: none; font-weight: 600; color: var(--brand-text); }
+.notices.urgent { background: var(--warn-tint); border-bottom: 3px solid var(--warn); }
+.notices.urgent .lab { color: var(--warn); }
+.notices.urgent .sub { color: var(--fg); white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-weight: 600; }
+.notices.urgent .go { color: var(--warn); }
+
+/* sheet */
+.sheet { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; }
+.sheet-card { background: var(--surface); width: 100%; max-width: 560px; max-height: 88%; overflow: auto; border-radius: 20px 20px 0 0; padding: 20px max(16px, env(safe-area-inset-left, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 18px; }
+.sheet-card:focus { outline: none; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sheet-head h2 { margin: 0; font-family: var(--font-display); font-size: 1.6rem; }
+.note { border: 2px solid var(--brand-text); background: var(--brand-tint); border-radius: 14px; padding: 14px 16px; display: grid; gap: 6px; }
+.note.urgent { border-color: var(--warn); background: var(--warn-tint); }
+.note b.k { font-size: .95rem; letter-spacing: .04em; text-transform: uppercase; color: var(--brand-text); }
+.note.urgent b.k { color: var(--warn); }
+.note p { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
+.note .until { color: var(--muted); font-size: 1rem; }
+.note a.more { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; min-height: 44px; display: inline-flex; align-items: center; }
+.saint { display: grid; gap: 4px; }
+.saint b.k { font-size: .95rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.saint .nm { font-family: var(--font-display); font-weight: 600; font-size: 1.3rem; line-height: 1.25; }
+.saint p { margin: 0; }
+
+main { padding-bottom: 32px; }
+
+/* hero: the three services */
+.doors { display: grid; gap: 10px; margin-top: 12px; }
+.door { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 66px; padding: 10px 14px; background: var(--surface); border: 2px solid var(--brand-text); border-radius: 16px; }
+.door:active { background: var(--brand-tint); }
+.door .ico { width: 40px; height: 40px; border-radius: 10px; background: var(--brand); color: #fff; display: grid; place-items: center; }
+.door h2 { margin: 0; font-size: 1.15rem; line-height: 1.15; overflow-wrap: anywhere; }
+.door p { margin: 1px 0 0; color: var(--muted); font-size: .95rem; line-height: 1.25; overflow-wrap: anywhere; }
+.chev { color: var(--brand-text); }
+
+/* second hero */
+.sect { margin-top: 20px; }
+.sect h2.title { font-family: var(--font-display); font-size: 1.35rem; margin: 0 0 8px; font-weight: 600; }
+.list { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
+.card { background: var(--surface); border: 2px solid var(--line); border-radius: 14px; padding: 10px 12px 10px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 1px; align-items: center; }
+.card h3 { margin: 0; font-size: 1.15rem; line-height: 1.2; overflow-wrap: anywhere; }
+.card p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.card p.bl { font-size: .95rem; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card p.sl { color: var(--fg); font-weight: 700; font-size: .95rem; line-height: 1.25; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card > h3, .card > p.sl { grid-column: 1; }
+.card > .cta { grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end; }
+.card p.sl.hot { color: var(--warn); }
+.cta { display: flex; align-items: center; justify-content: center; text-align: center; min-height: 48px; padding: 4px 8px; border-radius: 12px; background: var(--brand); color: #fff; font-weight: 700; font-size: .95rem; line-height: 1.15; flex: none; width: 7rem; }
+.cta.alt { background: transparent; color: var(--brand-text); border: 2px solid var(--brand-text); }
+.cta.off { background: var(--line); color: var(--fg); }
+.cta:active { filter: brightness(.9); }
+.more { width: 100%; margin-top: 10px; }
+.empty { border: 2px dashed var(--line); border-radius: 14px; padding: 16px; text-align: center; color: var(--muted); }
+
+/* save to phone */
+.save { margin-top: 20px; background: var(--brand-tint); border: 2px solid var(--brand-text); border-radius: 14px; padding: 12px 14px; display: grid; gap: 10px; }
+.save .hd { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; }
+.save .hd svg { color: var(--brand-text); }
+.save b { display: block; font-size: 1.05rem; line-height: 1.2; }
+.save .hd span { color: var(--muted); }
+.btn { min-height: 48px; padding: 0 16px; border-radius: 12px; border: 2px solid var(--brand-text); background: transparent; color: var(--brand-text); font-weight: 700; font-size: 1rem; }
+.btn.solid { background: var(--brand); border-color: var(--brand); color: #fff; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.save ol { margin: 0; padding-left: 26px; display: grid; gap: 10px; }
+.save li::marker { font-weight: 700; color: var(--brand-text); }
+.save-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.info { margin-top: 20px; display: grid; gap: 6px; color: var(--muted); }
+.info strong { color: var(--fg); }
+.foot { margin-top: 14px; font-size: .9rem; color: var(--muted); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 20px); opacity: 0; pointer-events: none; background: var(--fg); color: var(--bg); padding: 14px 20px; border-radius: 12px; font-size: 1rem; max-width: calc(100% - 32px); transition: opacity .2s, transform .2s; z-index: 40; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+/* prototype panel + admin (office use) */
+.proto { margin-top: 24px; border: 2px dashed var(--line); border-radius: 12px; background: var(--surface); font-size: 1rem; }
+.proto summary { cursor: pointer; padding: 14px 16px; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 8px; min-height: 52px; align-items: center; }
+.proto summary span { font-weight: 500; color: var(--muted); font-size: .9rem; }
+.proto-body { padding: 4px 16px 16px; display: grid; gap: 14px; }
+h4 { margin: 0; font-size: .85rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { min-height: 48px; padding: 0 16px; border-radius: 999px; border: 2px solid var(--line); background: var(--bg); font-size: .95rem; font-weight: 600; }
+.pill[aria-checked="true"] { background: var(--brand); border-color: var(--brand); color: #fff; }
+select, input[type="text"], input[type="date"], input[type="datetime-local"], textarea { font: inherit; font-size: 1rem; background: var(--bg); color: var(--fg); border: 2px solid var(--line); border-radius: 8px; padding: 10px; min-height: 48px; width: 100%; max-width: 100%; }
+textarea { min-height: 96px; resize: vertical; }
+input.bad { border-color: var(--bad); }
+.lede { margin: 0 0 14px; color: var(--muted); }
+
+.admin { padding-block: 24px 40px; font-size: 1rem; }
+.admin h1 { font-family: var(--font-display); font-size: 1.7rem; margin: 0 0 4px; }
+.admin .block { margin-top: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 14px; }
+.admin .block h2 { margin: 0; font-size: 1.15rem; }
+.admin .block > .lede { margin: -8px 0 0; }
+.field { display: grid; gap: 4px; }
+.field label, .field .lbl { font-size: .9rem; font-weight: 600; color: var(--muted); }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 480px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.linkrow { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.linkrow:first-of-type { border-top: 0; padding-top: 0; }
+.lock { font-size: .85rem; color: var(--muted); }
+.msg { font-size: .9rem; color: var(--muted); min-height: 1.2em; }
+.msg.err { color: var(--bad); }
+.msg.ok { color: var(--brand-text); }
+.status { display: inline-block; font-size: .85rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--line); color: var(--fg); }
+.status.live { background: var(--brand-tint); color: var(--brand-text); }
+.status.sched { background: var(--warn-tint); color: var(--warn); }
+.warns { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.warns li { background: var(--warn-tint); color: var(--fg); border-left: 4px solid var(--warn); border-radius: 6px; padding: 8px 10px; font-size: .95rem; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.warns li.err { border-left-color: var(--bad); }
+.warns li .btn { min-height: 44px; padding: 0 12px; font-size: .9rem; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 60px; border-top: 1px solid var(--line); padding-block: 8px; }
+.row:first-of-type { border-top: 0; }
+.row .meta { min-width: 0; }
+.row .meta b { display: block; overflow-wrap: anywhere; }
+.row .meta small { color: var(--muted); font-size: .9rem; }
+.switch { position: relative; width: 56px; height: 32px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }
+.switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: background .15s; }
+.switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 26px; height: 26px; background: #fff; border-radius: 50%; transition: transform .15s; box-shadow: 0 1px 3px rgb(0 0 0 / .3); }
+.switch input:checked + span { background: var(--brand); }
+.switch input:checked + span::after { transform: translateX(24px); }
+.switch input:focus-visible + span { outline: 4px solid var(--brand-text); outline-offset: 2px; }
+
+/* admin: ordered groups */
+.group { display: grid; gap: 10px; }
+.group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.group-head h3 { margin: 0; font-size: 1.05rem; }
+.mode { font-size: .85rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--line); color: var(--fg); }
+.mode.custom { background: var(--warn-tint); color: var(--warn); }
+.mini { min-height: 44px; padding: 0 12px; border-radius: 10px; border: 2px solid var(--line); background: var(--bg); font-weight: 600; font-size: .9rem; }
+.mini:disabled { opacity: .4; cursor: not-allowed; }
+.mini.danger { border-color: var(--bad); color: var(--bad); }
+.arows { display: grid; gap: 10px; }
+.arow { border: 2px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; background: var(--bg); }
+.arow.dim { opacity: .75; }
+.arow.dragging { border-color: var(--brand-text); box-shadow: 0 8px 20px rgb(0 0 0 / .25); background: var(--surface); position: relative; z-index: 2; }
+.arow-top { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; }
+.grip { width: 44px; height: 52px; display: grid; place-items: center; color: var(--muted); cursor: grab; touch-action: none; border-radius: 8px; user-select: none; }
+.grip:active { cursor: grabbing; }
+.arow b.nm { overflow-wrap: anywhere; }
+.arow small { color: var(--muted); font-size: .9rem; display: block; }
+.tag { display: inline-block; font-size: .75rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; margin-left: 6px; vertical-align: middle; background: var(--line); color: var(--fg); }
+.tag.mine { background: var(--brand-tint); color: var(--brand-text); }
+.arow-act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.onpage { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; font-weight: 600; margin-right: auto; }
+.mform { border: 2px solid var(--brand-text); border-radius: 12px; padding: 14px; display: grid; gap: 14px; background: var(--bg); }
+.mform h3 { margin: 0; font-size: 1.1rem; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="tabs gutter">
+  <div class="wrap">
+    <small>Prototype</small>
+    <button type="button" id="tabPub" aria-pressed="true">Public page</button>
+    <button type="button" id="tabAdm" aria-pressed="false">Admin: Parish Page</button>
+  </div>
+</div>
+
+<div id="pubView">
+<header class="mast gutter">
+  <div class="wrap">
+    <div class="id">
+      <svg class="crest" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 4v32M11 14h18"/><circle cx="20" cy="20" r="17" stroke-width="1.4" opacity=".6"/></svg>
+      <h1>St Mary’s Parish</h1>
+      <button class="mail" type="button" data-copy="office@stmarys-example.org" aria-label="Copy parish email address office@stmarys-example.org">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        <span>Email us</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<button class="notices gutter" type="button" id="notices" aria-haspopup="dialog"></button>
+
+<main class="gutter">
+  <div class="wrap">
+    <nav class="doors" id="doors" aria-label="Parish services"></nav>
+
+    <section class="sect" id="involvedSect" aria-labelledby="involvedTitle">
+      <h2 class="title" id="involvedTitle">Get Involved</h2>
+      <ul class="list" id="involved"></ul>
+      <button class="btn more" type="button" id="more-involved" data-more="involved" hidden></button>
+    </section>
+
+    <section class="sect" id="regSect" aria-labelledby="regTitle">
+      <h2 class="title" id="regTitle">Registrations</h2>
+      <ul class="list" id="regs"></ul>
+      <button class="btn more" type="button" id="more-registration" data-more="registration" hidden></button>
+    </section>
+
+    <div class="empty sect" id="nothing" hidden>Nothing is open right now. Please check back soon, or ask at the parish office.</div>
+
+    <section class="save" id="save" hidden aria-label="Keep this page on your phone">
+      <div class="hd">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6m-3-3 3 3 3-3"/></svg>
+        <div><b>Keep this on your phone</b><span>Then you can open it next time. No need to scan.</span></div>
+      </div>
+      <button class="btn solid" type="button" id="saveOpen" aria-expanded="false" aria-controls="saveBody">Show me how</button>
+      <div id="saveBody" hidden style="display:grid;gap:14px">
+        <ol id="steps"></ol>
+        <div class="save-actions">
+          <button class="btn solid" type="button" id="installBtn" hidden>Add to Home Screen</button>
+          <button class="btn" type="button" id="copyLink">Copy link</button>
+          <button class="btn" type="button" id="saveDone">Done, don’t show again</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="info" aria-label="Parish office">
+      <div><strong>St Mary’s Parish</strong> · 12 Church Lane, Anytown AB1 2CD</div>
+      <div><strong>Parish office</strong> · Tue–Fri, 10:00 am – 1:00 pm</div>
+      <div>Phone <span style="user-select:all">01234 567 890</span></div>
+      <div>Email <span style="user-select:all">office@stmarys-example.org</span></div>
+    </section>
+
+    <details class="proto">
+      <summary>Prototype controls <span>not part of the page</span></summary>
+      <div class="proto-body">
+        <div class="field">
+          <h4>Announcement</h4>
+          <div class="pills" id="annPresets">
+            <button class="pill" type="button" data-p="off">Off</button>
+            <button class="pill" type="button" data-p="scheduled">Scheduled</button>
+            <button class="pill" type="button" data-p="live">Live</button>
+            <button class="pill" type="button" data-p="urgent">Urgent</button>
+          </div>
+        </div>
+        <div class="field">
+          <h4>Phone</h4>
+          <select id="phoneSel" aria-label="Phone type"><option value="auto">Automatic</option><option value="ios">iPhone</option><option value="android">Android</option><option value="desktop">Computer</option></select>
+          <button class="pill" type="button" id="saveReset" style="margin-top:8px">Show the save card again</button>
+        </div>
+        <p class="lede" style="margin:0">Parish name, address, email, Mass times and phone are placeholders. “Today in the Church” is a sample. Links, the announcement, items and their order are edited in the Admin tab above.</p>
+      </div>
+    </details>
+
+    <div class="foot"><span>Parish Gateway v1.9 (prototype)</span><span>One QR code, always current</span></div>
+  </div>
+</main>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-card" id="sheetCard" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1">
+    <div class="sheet-head"><h2 id="sheetTitle">Notices</h2><button class="btn" type="button" id="sheetClose">Close</button></div>
+    <div id="sheetBody" style="display:grid;gap:18px"></div>
+  </div>
+</div>
+
+<div id="adminView" class="admin gutter" hidden>
+  <div class="wrap">
+    <h1>Parish Page</h1>
+    <p class="lede" style="margin:0">Everything on the public page is managed here. Changes show straight away. Mock-up for the Parish Campaigns app.</p>
+    <button class="btn" type="button" id="seeLive" style="margin-top:12px">See the public page</button>
+
+    <section class="block" aria-labelledby="aLinks">
+      <h2 id="aLinks">Permanent links</h2>
+      <p class="lede">Hall and Mass Intentions always stay first. Links must start with https://</p>
+      <div id="linkEditor"></div>
+    </section>
+
+    <section class="block" aria-labelledby="aAnn">
+      <h2 id="aAnn">Announcement <span class="status" id="annStatus">Off</span></h2>
+      <p class="lede">Optional. Shows in the Notices bar between the dates you choose. An urgent one puts its message in the bar itself.</p>
+      <div class="field">
+        <label for="annMsg">Message <span id="annCount" style="font-weight:400"></span></label>
+        <textarea id="annMsg" maxlength="200" placeholder="Tap the microphone on your keyboard to speak it"></textarea>
+        <div class="pills" id="annTpl">
+          <button class="pill" type="button" data-t="Mass is cancelled today. We are sorry for the short notice.">Mass cancelled</button>
+          <button class="pill" type="button" data-t="Funeral arrangements will be posted here as soon as they are confirmed.">Funeral arrangements</button>
+          <button class="pill" type="button" data-t="The parish office is closed this week. It reopens on Tuesday at 10:00 am.">Office closed</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="annLink">Link (optional)</label>
+        <input type="text" id="annLink" inputmode="url" autocomplete="off" placeholder="https://">
+        <div class="msg" id="annLinkMsg"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="annStart">Shows from</label><input type="datetime-local" id="annStart"></div>
+        <div class="field"><label for="annEnd">Hides at</label><input type="datetime-local" id="annEnd"></div>
+      </div>
+      <div class="row" style="border-top:0"><div class="meta"><b>Urgent</b><small>Shows the message in the bar so nobody misses it.</small></div><label class="switch"><input type="checkbox" id="annUrgent" aria-label="Urgent"><span></span></label></div>
+      <ul class="warns" id="annWarn" aria-live="polite"></ul>
+    </section>
+
+    <section class="block" aria-labelledby="aItems">
+      <h2 id="aItems">What’s on the page</h2>
+      <p class="lede">Campaigns and registrations come from Parish Campaigns. You can also add something that isn’t there. Each group is ordered by closing date unless you change it. Drag the handle, or use Up and Down.</p>
+      <div><button class="btn solid" type="button" id="addBtn">Add something</button></div>
+
+      <div class="mform" id="manualForm" hidden>
+        <h3 id="mTitle">Add something</h3>
+        <div class="field"><label for="mLabel">What is it called?</label><input type="text" id="mLabel" maxlength="60" autocomplete="off" placeholder="Tap the microphone on your keyboard to speak it"></div>
+        <div class="field"><span class="lbl" id="mCatLbl">Where should it appear?</span>
+          <div class="pills" role="radiogroup" aria-labelledby="mCatLbl">
+            <button class="pill" type="button" role="radio" aria-checked="true" data-cat="involved">Get Involved</button>
+            <button class="pill" type="button" role="radio" aria-checked="false" data-cat="registration">Registrations</button>
+          </div>
+        </div>
+        <div class="two">
+          <div class="field"><label for="mStart">Starts</label><input type="date" id="mStart"></div>
+          <div class="field"><label for="mEnd">Ends (required)</label><input type="date" id="mEnd"></div>
+        </div>
+        <div class="field"><label for="mUrl">Web address</label><input type="text" id="mUrl" inputmode="url" autocomplete="off" placeholder="https://"></div>
+        <div class="field"><label for="mCta">Button words (optional)</label><input type="text" id="mCta" maxlength="24" autocomplete="off" placeholder="Find out more"></div>
+        <ul class="warns" id="mIssues" aria-live="polite"></ul>
+        <div class="pills"><button class="btn solid" type="button" id="mSave">Add to the page</button><button class="btn" type="button" id="mCancel">Cancel</button></div>
+      </div>
+
+      <div class="group"><div class="group-head"><h3>Get Involved</h3><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="mode" id="modeinvolved"></span><button class="mini" type="button" data-auto="involved" id="autoinvolved" hidden>Back to automatic</button></span></div><div class="arows" id="gInvolved" data-sec="involved"></div></div>
+      <div class="group"><div class="group-head"><h3>Registrations</h3><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="mode" id="moderegistration"></span><button class="mini" type="button" data-auto="registration" id="autoregistration" hidden>Back to automatic</button></span></div><div class="arows" id="gReg" data-sec="registration"></div></div>
+    </section>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  var DAY = 864e5, HOUR = 36e5;
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  function plus(n) { return new Date(today.getTime() + n * DAY); }
+  function fmt(d) { return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); }
+  function fmtDT(d) { return d.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function toInput(d) { return d ? d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) : ''; }
+  function fromInput(v) { return v ? new Date(v) : null; }
+  function toDay(d) { return d ? d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) : ''; }
+  function fromDay(v) { if (!v) return null; var p = v.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
+  function okUrl(u) { return /^https:\/\/[^\s\/$.?#][^\s]*\.[^\s]+$/i.test(u); }   // https only: no javascript:, no mailto:
+
+  var toast = $('toast'), tt;
+  function say(msg) { toast.textContent = msg; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(function () { toast.classList.remove('on'); }, 2600); }
+
+  /* ---------- state ---------- */
+  var icons = {
+    hall: '<path d="M3 21h18M5 21V10l7-6 7 6v11M9 21v-6h6v6"/>',
+    mass: '<path d="M12 2c1.6 2 2.2 3.4 2.2 4.6a2.2 2.2 0 0 1-4.4 0C9.8 5.4 10.4 4 12 2ZM8 12h8v9H8zM6 21h12"/>',
+    news: '<path d="M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V4ZM18 9h2v9a2 2 0 0 1-2 2M8 8h7M8 12h7M8 16h4"/>'
+  };
+  var links = [
+    { id: 'hall', icon: 'hall', label: 'Book the Parish Hall', sub: 'Check dates and send a request', url: 'https://stmarys-example.org/hall' },
+    { id: 'mass', icon: 'mass', label: 'Request a Mass Intention', sub: 'For the living or the departed', url: 'https://stmarys-example.org/mass-intentions' },
+    { id: 'news', icon: 'news', label: 'Parish Newsletter', sub: 'This week’s notices and news', url: 'https://stmarys-example.org/newsletter' }
+  ];
+  var saint = { name: 'Teresa of Ávila, Virgin and Doctor of the Church', short: 'Teresa of Ávila', text: 'A Carmelite who reformed her order and wrote on prayer. In 1970 she was one of the first two women named a Doctor of the Church.' };
+
+  /* Everything on the page. source 'campaigns' rows come from Parish Campaigns (name and dates are edited there).
+     source 'manual' rows are added here. "listed" is the one switch; dates do the rest. */
+  var items = [
+    { id: 'raffle', source: 'campaigns', kind: 'raffle', section: 'involved', name: 'Autumn Raffle', blurb: 'Tickets £2 each. Prizes include a hamper and a weekend away. All proceeds go to the roof fund.', cta: 'Buy tickets', slug: '/buy.html', opens: plus(-10), closes: plus(9), listed: true },
+    { id: 'walsingham', source: 'campaigns', kind: 'event', section: 'involved', name: 'Walsingham Pilgrimage', blurb: 'Parish coach pilgrimage to the National Shrine. Lunch included.', cta: 'Reserve a place', slug: '/buy.html', opens: plus(-30), closes: plus(21), done: 38, total: 50, listed: true },
+    { id: 'hampers', source: 'manual', kind: 'link', section: 'involved', name: 'Christmas Hamper Collection', blurb: 'Bring tinned and dry food to the back of church. It goes to the local food bank.', cta: 'Find out more', url: 'https://stmarys-example.org/hampers', opens: plus(-3), closes: plus(35), listed: true },
+    { id: 'coffee', source: 'manual', kind: 'link', section: 'involved', name: 'Friday Coffee Morning', cta: 'Find out more', url: 'https://stmarys-example.org/coffee', opens: plus(-1), closes: plus(60), listed: true },
+    { id: 'communion', source: 'campaigns', kind: 'registration', section: 'registration', name: 'First Holy Communion', blurb: 'Register your child for preparation classes starting in the new year.', cta: 'Register your child', slug: '/register.html', opens: plus(-2), closes: plus(28), done: 32, total: 40, listed: true },
+    { id: 'youth', source: 'campaigns', kind: 'registration', section: 'registration', name: 'Youth Group', blurb: 'Fridays after school for ages 11 to 15.', cta: 'Register', slug: '/register.html', opens: plus(-5), closes: plus(40), done: 30, total: 30, waiting: true, listed: true },
+    { id: 'confirmation', source: 'campaigns', kind: 'registration', section: 'registration', name: 'Confirmation', blurb: 'Register your child for Confirmation preparation.', cta: 'Register your child', slug: '/register.html', opens: plus(14), closes: plus(60), listed: true },
+    { id: 'fete', source: 'campaigns', kind: 'event', section: 'involved', name: 'Christmas Fete', blurb: 'Stalls, tombola and refreshments in the hall.', cta: 'Find out more', slug: '/fete', opens: plus(20), closes: plus(52), listed: false }
+  ];
+  var expanded = { involved: false, registration: false };   // "See all" state per section
+  var custom = { involved: null, registration: null };   // null = automatic (closing soonest); otherwise a list of ids
+  var seq = 1;
+  function openState(c) { return today < c.opens ? 'not_open' : today > c.closes ? 'closed' : 'open'; }
+  function ordered(sec) {
+    var list = items.filter(function (i) { return i.section === sec; });
+    if (custom[sec]) {
+      var pos = {}; custom[sec].forEach(function (id, n) { pos[id] = n; });
+      list.sort(function (a, b) { return (pos[a.id] == null ? 1e9 : pos[a.id]) - (pos[b.id] == null ? 1e9 : pos[b.id]); });
+    } else list.sort(function (a, b) { return a.closes - b.closes; });
+    return list;
+  }
+  function find(id) { return items.filter(function (i) { return i.id === id; })[0]; }
+
+  var ann = { msg: '', link: '', start: null, end: null, urgent: false };
+  function preset(p) {
+    var now = new Date();
+    if (p === 'off') ann = { msg: '', link: '', start: null, end: null, urgent: false };
+    if (p === 'scheduled') ann = { msg: 'The parish office is closed this week. It reopens on Tuesday at 10:00 am.', link: '', start: new Date(now.getTime() + 2 * DAY), end: new Date(now.getTime() + 5 * DAY), urgent: false };
+    if (p === 'live') ann = { msg: 'The parish office is closed this Friday. Mass times are unchanged.', link: 'https://stmarys-example.org/notices', start: new Date(now.getTime() - HOUR), end: new Date(now.getTime() + 6 * DAY), urgent: false };
+    if (p === 'urgent') ann = { msg: 'Mass is cancelled this evening. We are sorry for the short notice.', link: '', start: new Date(now.getTime() - HOUR), end: new Date(now.getTime() + 8 * HOUR), urgent: true };
+  }
+  function annState() {
+    if (!ann.msg.trim()) return 'off';
+    var now = new Date();
+    if (ann.start && ann.start > now) return 'scheduled';
+    if (ann.end && ann.end <= now) return 'ended';
+    return 'live';
+  }
+
+  /* ---------- public page ---------- */
+  function renderDoors() {
+    $('doors').innerHTML = links.map(function (l) {
+      return '<a class="door" href="#' + l.id + '" data-go="' + esc(l.url) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + icons[l.icon] + '</svg></span>' +
+        '<span><h2>' + esc(l.label) + '</h2><p>' + esc(l.sub) + '</p></span>' +
+        '<svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>';
+    }).join('');
+  }
+
+  function renderNotices() {
+    var live = annState() === 'live', bar = $('notices'), count = (live ? 1 : 0) + 1;
+    if (live && ann.urgent) {
+      bar.className = 'notices urgent gutter';
+      bar.innerHTML = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:var(--warn)"><path d="M12 3 2 20h20L12 3ZM12 10v5M12 18v.01"/></svg><span class="txt"><span class="lab">Urgent</span><span class="sub">' + esc(ann.msg) + '</span></span><span class="go">Read ›</span>';
+    } else {
+      bar.className = 'notices gutter';
+      bar.innerHTML = '<span class="badge" aria-hidden="true">' + count + '</span><span class="txt"><span class="lab">Notices and today’s saint</span><span class="sub">' + esc(live ? ann.msg : 'Today: ' + saint.short) + '</span></span><span class="go">Read ›</span>';
+    }
+    bar.setAttribute('aria-label', (live && ann.urgent ? 'Urgent notice: ' + ann.msg : 'Notices, ' + count) + '. Tap to read.');
+    var html = '';
+    if (live) html += '<div class="note' + (ann.urgent ? ' urgent' : '') + '"><b class="k">' + (ann.urgent ? 'Urgent notice' : 'Notice') + '</b><p>' + esc(ann.msg) + '</p>' +
+      (ann.link && okUrl(ann.link) ? '<a class="more" href="#more" data-go="' + esc(ann.link) + '">More information ›</a>' : '') +
+      (ann.end ? '<span class="until">Until ' + esc(fmtDT(ann.end)) + '</span>' : '') + '</div>';
+    html += '<div class="saint"><b class="k">Today in the Church (sample)</b><span class="nm">' + esc(saint.name) + '</span><p>' + esc(saint.text) + '</p></div>';
+    $('sheetBody').innerHTML = html;
+  }
+  var lastFocus = null;
+  function openSheet() { lastFocus = document.activeElement; $('sheet').hidden = false; document.body.style.overflow = 'hidden'; $('sheetCard').focus(); }
+  function closeSheet() { $('sheet').hidden = true; document.body.style.overflow = ''; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+
+  function card(c) {
+    var full = c.total && c.done >= c.total, left = Math.round((c.closes - today) / DAY), age = Math.round((today - c.opens) / DAY), parts = [], hot = false;
+    if (full) { parts.push('Full'); hot = true; }
+    else {
+      var isNew = age >= 0 && age <= 7;
+      parts.push(left <= 14 ? (left <= 0 ? 'Closes today' : left === 1 ? 'Closes tomorrow' : 'Closes in ' + left + ' days') : 'Closes ' + fmt(c.closes));
+      if (left <= 7) hot = true;
+      if (c.total) { var pl = c.total - c.done; parts.push(pl + ' left'); if (pl <= c.total * 0.25) hot = true; }
+    }
+    if (isNew && parts.length === 1) parts.unshift('New');
+    var go = c.source === 'manual' ? c.url : c.slug + '?campaign_id=' + c.id;
+    var btn;
+    if (full && c.waiting) btn = '<a class="cta alt" href="#' + c.id + '" data-go="' + esc(go) + ' (waiting list)">Join waiting list</a>';
+    else if (full) btn = '<span class="cta off" aria-disabled="true">Full</span>';
+    else btn = '<a class="cta" href="#' + c.id + '" data-go="' + esc(go) + '">' + esc(c.cta) + '</a>';
+    return '<li class="card"><h3>' + esc(c.name) + '</h3><p class="sl' + (hot ? ' hot' : '') + '">' + parts.join(' · ') + '</p>' + btn + '</li>';
+  }
+  function fill(listId, sectId, sec) {
+    var live = ordered(sec).filter(function (c) { return c.listed && openState(c) === 'open'; });
+    var shown = expanded[sec] ? live : live.slice(0, 3), more = $('more-' + sec);
+    $(listId).innerHTML = shown.map(card).join(''); $(sectId).hidden = !live.length;
+    more.hidden = live.length <= 3; more.textContent = expanded[sec] ? 'Show fewer' : 'See all (' + live.length + ')';
+    return live.length;
+  }
+  function renderPublic() {
+    var n = fill('involved', 'involvedSect', 'involved') + fill('regs', 'regSect', 'registration');
+    $('nothing').hidden = n > 0;
+    renderNotices(); renderDoors();
+  }
+
+  /* ---------- save to phone ---------- */
+  var stepsBy = {
+    ios: ['Tap the <b>Share</b> button at the bottom of Safari (a square with an arrow).', 'Scroll down and tap <b>Add to Home Screen</b>.', 'Tap <b>Add</b>.'],
+    android: ['Tap the <b>⋮ menu</b> at the top right of Chrome.', 'Tap <b>Add to Home screen</b> (or <b>Install app</b>).', 'Tap <b>Add</b>.'],
+    desktop: ['Press <b>Ctrl + D</b> (<b>⌘ + D</b> on a Mac).', 'Tap <b>Done</b>.']
+  };
+  var phoneOverride = 'auto', deferred = null;
+  function phone() {
+    if (phoneOverride !== 'auto') return phoneOverride;
+    var ua = navigator.userAgent || '';
+    return /iPhone|iPad|iPod/i.test(ua) ? 'ios' : /Android/i.test(ua) ? 'android' : 'desktop';
+  }
+  function standalone() { try { return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true; } catch (e) { return false; } }
+  function saved() { try { return localStorage.getItem('gw_saved') === '1'; } catch (e) { return false; } }
+  function renderSave() {
+    $('save').hidden = standalone() || saved();
+    $('steps').innerHTML = stepsBy[phone()].map(function (s) { return '<li>' + s + '</li>'; }).join('');
+    $('installBtn').hidden = !deferred;
+  }
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferred = e; renderSave(); });
+  function hideSave() { try { localStorage.setItem('gw_saved', '1'); } catch (e) {} renderSave(); }
+
+  /* ---------- admin: links + announcement ---------- */
+  function buildLinks() {
+    $('linkEditor').innerHTML = links.map(function (l, i) {
+      return '<div class="linkrow"><div class="lock">' + (i < 2 ? 'Always ' + (i ? 'second' : 'first') : 'Third') + '</div>' +
+        '<div class="field"><label for="ll' + i + '">Title</label><input type="text" id="ll' + i + '" data-i="' + i + '" data-f="label" value="' + esc(l.label) + '" maxlength="40"></div>' +
+        '<div class="field"><label for="ls' + i + '">One line underneath</label><input type="text" id="ls' + i + '" data-i="' + i + '" data-f="sub" value="' + esc(l.sub) + '" maxlength="60"></div>' +
+        '<div class="field"><label for="lu' + i + '">Web address</label><input type="text" id="lu' + i + '" data-i="' + i + '" data-f="url" inputmode="url" autocomplete="off" value="' + esc(l.url) + '"><div class="msg ok" id="lm' + i + '">Saved</div></div></div>';
+    }).join('');
+  }
+  function syncAnnFields() {
+    $('annMsg').value = ann.msg; $('annLink').value = ann.link; $('annStart').value = toInput(ann.start); $('annEnd').value = toInput(ann.end); $('annUrgent').checked = ann.urgent;
+    annAdminStatus();
+  }
+  function annAdminStatus() {
+    var s = annState(), el = $('annStatus');
+    el.textContent = { off: 'Off', scheduled: 'Scheduled', live: 'Live now', ended: 'Ended' }[s];
+    el.className = 'status' + (s === 'live' ? ' live' : s === 'scheduled' ? ' sched' : '');
+    $('annCount').textContent = '(' + ann.msg.length + '/200)';
+    var w = [];
+    if (ann.msg.trim() && ann.start && ann.end && ann.end <= ann.start) w.push('<li>The end is before the start, so this will never show.</li>');
+    if (ann.msg.trim() && !ann.end) w.push('<li>No end time. It stays up until you remove it. <button class="btn" type="button" data-fix="week">End in 7 days</button></li>');
+    if (s === 'ended') w.push('<li>This ended on ' + esc(fmtDT(ann.end)) + ' and is no longer showing.</li>');
+    if (ann.urgent && ann.msg.length > 120) w.push('<li>Urgent messages sit in a narrow bar and read best when short. Try to keep it under 120 characters.</li>');
+    if (!ann.msg.trim() && (ann.start || ann.end)) w.push('<li>Add a message, or clear the dates.</li>');
+    $('annWarn').innerHTML = w.join('');
+    var linkOk = !ann.link || okUrl(ann.link);
+    $('annLink').className = linkOk ? '' : 'bad';
+    $('annLinkMsg').className = 'msg' + (linkOk ? '' : ' err');
+    $('annLinkMsg').textContent = ann.link ? (linkOk ? 'Link will show as “More information”' : 'Links must start with https:// and be a full web address. This one will not be shown.') : '';
+  }
+
+  /* ---------- admin: ordered groups ---------- */
+  var removeArm = null, removeTimer;
+  var grip = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 8h14M5 12h14M5 16h14"/></svg>';
+  function rowHtml(it, idx, total) {
+    var st = openState(it), status = !it.listed ? 'Not on the page' : st === 'open' ? 'Live now' : st === 'not_open' ? 'Opens ' + fmt(it.opens) : 'Ended ' + fmt(it.closes);
+    var live = it.listed && st === 'open', mine = it.source === 'manual';
+    var kind = it.kind === 'registration' ? 'Registration' : it.kind === 'raffle' ? 'Raffle' : it.kind === 'link' ? 'Link' : 'Event';
+    return '<div class="arow' + (live ? '' : ' dim') + '" data-id="' + it.id + '">' +
+      '<div class="arow-top"><span class="grip" title="Drag to move" aria-hidden="true">' + grip + '</span><div style="min-width:0"><b class="nm">' + esc(it.name) + '</b><span class="tag' + (mine ? ' mine' : '') + '">' + (mine ? 'Added here' : 'From Campaigns') + '</span>' +
+      '<small>' + kind + ' · ' + fmt(it.opens) + ' to ' + fmt(it.closes) + ' · <b style="display:inline;color:' + (live ? 'var(--brand-text)' : 'var(--muted)') + '">' + status + '</b></small></div></div>' +
+      '<div class="arow-act"><label class="onpage"><span class="switch"><input type="checkbox" data-id="' + it.id + '"' + (it.listed ? ' checked' : '') + ' aria-label="Show ' + esc(it.name) + ' on the parish page"><span></span></span>On the page</label>' +
+      '<button class="mini" type="button" data-up aria-label="Move ' + esc(it.name) + ' up"' + (idx === 0 ? ' disabled' : '') + '>↑ Up</button>' +
+      '<button class="mini" type="button" data-down aria-label="Move ' + esc(it.name) + ' down"' + (idx === total - 1 ? ' disabled' : '') + '>↓ Down</button>' +
+      (mine ? '<button class="mini" type="button" data-edit>Edit</button><button class="mini danger" type="button" data-remove>' + (removeArm === it.id ? 'Tap again to remove' : 'Remove') + '</button>' : '') +
+      '</div></div>';
+  }
+  function buildItems() {
+    [['involved', 'gInvolved'], ['registration', 'gReg']].forEach(function (p) {
+      var list = ordered(p[0]);
+      $(p[1]).innerHTML = list.length ? list.map(function (it, i) { return rowHtml(it, i, list.length); }).join('') : '<div class="msg">Nothing here yet.</div>';
+      $('mode' + p[0]).textContent = custom[p[0]] ? 'Custom order' : 'Automatic order: closing soonest';
+      $('mode' + p[0]).className = 'mode' + (custom[p[0]] ? ' custom' : '');
+      $('auto' + p[0]).hidden = !custom[p[0]];
+    });
+  }
+  function setOrder(sec, ids) { custom[sec] = ids; buildItems(); renderPublic(); }
+  function move(id, dir) {
+    var it = find(id), ids = ordered(it.section).map(function (x) { return x.id; }), i = ids.indexOf(id), j = i + dir;
+    if (j < 0 || j >= ids.length) return;
+    var t = ids[i]; ids[i] = ids[j]; ids[j] = t; setOrder(it.section, ids);
+  }
+
+  /* drag by the handle: the dragged row stays put in the page; its neighbours step around it */
+  var drag = null;
+  document.addEventListener('pointerdown', function (e) {
+    var g = e.target.closest('.grip'); if (!g) return;
+    var row = g.closest('.arow'); e.preventDefault();
+    drag = { row: row, list: row.parentNode, sec: row.parentNode.getAttribute('data-sec'), before: ordered(row.parentNode.getAttribute('data-sec')).map(function (x) { return x.id; }).join() };
+    row.classList.add('dragging');
+    try { g.setPointerCapture(e.pointerId); } catch (x) {}
+  });
+  document.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    var y = e.clientY, r = drag.row, guard = 0, s, b;
+    while (guard++ < 30) {
+      s = r.previousElementSibling;
+      if (s && s.classList.contains('arow')) { b = s.getBoundingClientRect(); if (y < b.top + b.height / 2) { drag.list.insertBefore(s, r.nextSibling); continue; } }
+      s = r.nextElementSibling;
+      if (s && s.classList.contains('arow')) { b = s.getBoundingClientRect(); if (y > b.top + b.height / 2) { drag.list.insertBefore(s, r); continue; } }
+      break;
+    }
+    if (y < 90) window.scrollBy(0, -12); else if (y > window.innerHeight - 90) window.scrollBy(0, 12);
+  });
+  function endDrag() {
+    if (!drag) return;
+    var ids = [].slice.call(drag.list.querySelectorAll('.arow')).map(function (n) { return n.getAttribute('data-id'); }), d = drag;
+    drag = null;
+    if (ids.join() !== d.before) { setOrder(d.sec, ids); say('Order saved'); } else buildItems();
+  }
+  document.addEventListener('pointerup', endDrag);
+  document.addEventListener('pointercancel', endDrag);
+
+  /* ---------- admin: add / edit something ---------- */
+  var editing = null, cat = 'involved';
+  function openForm(it) {
+    editing = it ? it.id : null; cat = it ? it.section : 'involved';
+    $('mTitle').textContent = it ? 'Edit ' + it.name : 'Add something';
+    $('mSave').textContent = it ? 'Save changes' : 'Add to the page';
+    $('mLabel').value = it ? it.name : ''; $('mStart').value = toDay(it ? it.opens : today); $('mEnd').value = it ? toDay(it.closes) : '';
+    $('mUrl').value = it ? it.url : ''; $('mCta').value = it ? it.cta : '';
+    setCat(cat); $('manualForm').hidden = false; validate(); $('mLabel').focus();
+    $('manualForm').scrollIntoView({ block: 'nearest' });
+  }
+  function setCat(c) {
+    cat = c;
+    [].forEach.call(document.querySelectorAll('[data-cat]'), function (b) { b.setAttribute('aria-checked', b.getAttribute('data-cat') === c); });
+  }
+  function validate() {
+    var errs = [], warns = [], label = $('mLabel').value.trim(), s = fromDay($('mStart').value), e = fromDay($('mEnd').value), u = $('mUrl').value.trim();
+    if (!label) errs.push('Give it a name.');
+    if (!s) errs.push('Choose a start date.');
+    if (!e) errs.push('Choose an end date. Every item needs one so it comes down by itself.');
+    if (s && e && e < s) errs.push('The end date is before the start date.');
+    if (!u) errs.push('Add the web address people should go to.');
+    else if (!okUrl(u)) errs.push('The web address must start with https:// and be a full address.');
+    if (e && e < today) warns.push('That end date has passed, so it will not show.');
+    if (u && /\/(buy|register)\.html|campaign_id=/i.test(u)) warns.push('This looks like a Parish Campaigns page. It is better to list it from Campaigns, so places left and the dates update by themselves.');
+    if (label && items.some(function (i) { return i.id !== editing && i.name.trim().toLowerCase() === label.toLowerCase(); })) warns.push('Something with this name is already on the list.');
+    $('mIssues').innerHTML = errs.map(function (m) { return '<li class="err">' + esc(m) + '</li>'; }).join('') + warns.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('');
+    $('mUrl').className = u && !okUrl(u) ? 'bad' : '';
+    $('mSave').disabled = errs.length > 0;
+    return errs.length === 0;
+  }
+  function saveForm() {
+    if (!validate()) return;
+    var data = { name: $('mLabel').value.trim(), section: cat, opens: fromDay($('mStart').value), closes: fromDay($('mEnd').value), url: $('mUrl').value.trim(), cta: $('mCta').value.trim() || (cat === 'registration' ? 'Register' : 'Find out more') };
+    if (editing) {
+      var it = find(editing), moved = it.section !== data.section;
+      if (moved && custom[it.section]) custom[it.section] = custom[it.section].filter(function (id) { return id !== it.id; });
+      for (var k in data) it[k] = data[k];
+      if (moved && custom[it.section]) custom[it.section].unshift(it.id);
+      say('Saved');
+    } else {
+      var n = { id: 'm' + (seq++), source: 'manual', kind: 'link', listed: true };
+      for (var k2 in data) n[k2] = data[k2];
+      items.push(n);
+      if (custom[n.section]) custom[n.section].unshift(n.id);   // a new item lands at the top of a custom order
+      say('Added. It shows from ' + fmt(n.opens));
+    }
+    $('manualForm').hidden = true; editing = null; buildItems(); renderPublic();
+  }
+
+  /* ---------- events ---------- */
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var a = t.closest('[data-go]');
+    if (a) { e.preventDefault(); say('Prototype: this would open ' + a.getAttribute('data-go')); return; }
+    var c = t.closest('[data-copy]');
+    if (c) { var text = c.getAttribute('data-copy'); try { navigator.clipboard.writeText(text).then(function () { say('Copied ' + text); }, function () { say('Email: ' + text); }); } catch (x) { say('Email: ' + text); } return; }
+    if (t.closest('#notices')) { openSheet(); return; }
+    if (t.closest('#sheetClose') || t.id === 'sheet') { closeSheet(); return; }
+    if (t.closest('#saveOpen')) { var open = $('saveBody').hidden; $('saveBody').hidden = !open; $('saveOpen').setAttribute('aria-expanded', open); $('saveOpen').textContent = open ? 'Hide the steps' : 'Show me how'; return; }
+    if (t.closest('#saveDone')) { hideSave(); return; }
+    if (t.closest('#copyLink')) { var u = location.href; try { navigator.clipboard.writeText(u).then(function () { say('Link copied'); }, function () { say('Link: ' + u); }); } catch (x2) { say('Link: ' + u); } return; }
+    if (t.closest('#installBtn') && deferred) { deferred.prompt(); return; }
+    if (t.closest('#saveReset')) { try { localStorage.removeItem('gw_saved'); } catch (e3) {} renderSave(); say('Save card is back'); return; }
+    var p = t.closest('#annPresets [data-p]');
+    if (p) { preset(p.getAttribute('data-p')); syncAnnFields(); renderNotices(); say('Announcement: ' + p.textContent); return; }
+    var tp = t.closest('#annTpl [data-t]');
+    if (tp) { ann.msg = tp.getAttribute('data-t'); if (!ann.start) ann.start = new Date(); syncAnnFields(); renderNotices(); return; }
+    if (t.closest('[data-fix="week"]')) { ann.end = new Date((ann.start && ann.start > new Date() ? ann.start : new Date()).getTime() + 7 * DAY); syncAnnFields(); renderNotices(); return; }
+    if (t.closest('#tabPub') || t.closest('#seeLive')) { showTab('pub'); return; }
+    if (t.closest('#tabAdm')) { showTab('adm'); return; }
+    var mo = t.closest('[data-more]'); if (mo) { var k = mo.getAttribute('data-more'); expanded[k] = !expanded[k]; renderPublic(); return; }
+    /* items */
+    if (t.closest('#addBtn')) { openForm(null); return; }
+    if (t.closest('#mCancel')) { $('manualForm').hidden = true; editing = null; return; }
+    if (t.closest('#mSave')) { saveForm(); return; }
+    var ct = t.closest('[data-cat]'); if (ct) { setCat(ct.getAttribute('data-cat')); return; }
+    var au = t.closest('[data-auto]'); if (au) { custom[au.getAttribute('data-auto')] = null; buildItems(); renderPublic(); say('Back to automatic order'); return; }
+    var row = t.closest('.arow'); if (!row) return;
+    var id = row.getAttribute('data-id');
+    if (t.closest('[data-up]')) { move(id, -1); return; }
+    if (t.closest('[data-down]')) { move(id, 1); return; }
+    if (t.closest('[data-edit]')) { openForm(find(id)); return; }
+    if (t.closest('[data-remove]')) {
+      if (removeArm === id) {
+        var it = find(id); items = items.filter(function (x) { return x.id !== id; });
+        if (custom[it.section]) custom[it.section] = custom[it.section].filter(function (x) { return x !== id; });
+        removeArm = null; buildItems(); renderPublic(); say('Removed');
+      } else { removeArm = id; buildItems(); clearTimeout(removeTimer); removeTimer = setTimeout(function () { removeArm = null; buildItems(); }, 4000); }
+    }
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('sheet').hidden) closeSheet(); });
+  function showTab(w) {
+    if (!$('sheet').hidden) closeSheet();
+    $('pubView').hidden = w !== 'pub'; $('adminView').hidden = w !== 'adm';
+    $('tabPub').setAttribute('aria-pressed', w === 'pub'); $('tabAdm').setAttribute('aria-pressed', w === 'adm');
+    window.scrollTo(0, 0);
+  }
+  document.addEventListener('input', function (e) {
+    var el = e.target, id = el.id;
+    if (el.getAttribute('data-f')) {
+      var i = +el.getAttribute('data-i'), f = el.getAttribute('data-f'), v = el.value, m = $('lm' + i);
+      if (f === 'url') {
+        if (okUrl(v.trim())) { links[i].url = v.trim(); el.className = ''; m.className = 'msg ok'; m.textContent = 'Saved'; }
+        else { el.className = 'bad'; m.className = 'msg err'; m.textContent = 'Must start with https:// and be a full web address. The page keeps the last good link.'; }
+      } else if (v.trim()) links[i][f] = v;
+      renderDoors(); return;
+    }
+    if (/^m(Label|Start|End|Url|Cta)$/.test(id)) { validate(); return; }
+    if (id === 'annMsg') ann.msg = el.value;
+    else if (id === 'annLink') ann.link = el.value.trim();
+    else if (id === 'annStart') ann.start = fromInput(el.value);
+    else if (id === 'annEnd') ann.end = fromInput(el.value);
+    else return;
+    annAdminStatus(); renderNotices();
+  });
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (el.id === 'annUrgent') { ann.urgent = el.checked; annAdminStatus(); renderNotices(); return; }
+    if (el.id === 'phoneSel') { phoneOverride = el.value; renderSave(); return; }
+    if (/^m(Start|End)$/.test(el.id)) { validate(); return; }
+    var id = el.getAttribute && el.getAttribute('data-id');
+    if (id) { find(id).listed = el.checked; buildItems(); renderPublic(); }
+  });
+
+  buildLinks(); buildItems(); preset('live'); syncAnnFields(); renderPublic(); renderSave();
+  setInterval(function () { annAdminStatus(); renderNotices(); }, 30000);   // a scheduled notice appears and ends by itself
+})();
+</script>

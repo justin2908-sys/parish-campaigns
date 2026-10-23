@@ -1200,12 +1200,12 @@ function shareMenuHtml(a) {
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
 // Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
-const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
 const ADMIN_TABS_BY_ROLE = {
-  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'users', 'bin', 'privacy'],
-  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention'],
-  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations'],
-  priest: ['registrations'],
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage'],
+  priest: ['registrations', 'parishpage'],
 };
 async function renderAdmin() {
   const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
@@ -1234,7 +1234,7 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -2907,6 +2907,387 @@ function startUpdateWatcher() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });   // phone unlocked / app switched back to
   window.addEventListener('online', () => checkForUpdate());
   setTimeout(() => checkForUpdate(), 15000);   // soon after opening (the very first time, and 7 days after the last)
+}
+
+// ================= PARISH PAGE (the public page at /go/<address>) =================
+// Everything on the public page is managed here: the three permanent links, a notice, and the list of what is open.
+// Superadmin, Admin, Finance and Priest may change what is on the page; only the SuperAdmin changes its address or switches it on.
+// Campaign names and dates are still edited in Campaigns; here a campaign is only switched on or off the page and re-ordered.
+// All wording the organisation's visitors or editors read is in GW_WORDING, one object per kind of organisation.
+const GW_VERTICAL = 'church';
+const GW_WORDING = {
+  church: {
+    sections: { involved: 'Get Involved', registration: 'Registrations' },
+    positions: ['Always first', 'Always second', 'Third'],
+    quick: [['Mass cancelled', 'Mass is cancelled today. We are sorry for the short notice.'], ['Funeral arrangements', 'Funeral arrangements will be posted here as soon as they are confirmed.'], ['Office closed', 'The parish office is closed this week. It reopens on Tuesday at 10:00 am.']],
+  },
+};
+let gw = null;   // { d: what the server sent, draft: what is typed but not saved, removeArm, form }
+function gwWords() { return GW_WORDING[GW_VERTICAL]; }
+function gwOkUrl(u) { u = String(u || '').trim(); return /^https:\/\/[^\s\/$.?#][^\s]*\.[^\s]+$/i.test(u) && !/["'<>]/.test(u) && u.length <= 2000; }
+function gwShort(iso) { const [y, m, d] = String(iso).split('-').map(Number); return `${d} ${MONTHS_SHORT[m - 1]}`; }
+function gwAddDays(naive, n) { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(naive); if (!m) return ''; const t = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + n, +m[4], +m[5])); return t.toISOString().slice(0, 16); }
+function gwStyle() {
+  if (document.getElementById('gwStyle')) return;
+  const st = document.createElement('style'); st.id = 'gwStyle';
+  st.textContent = `
+  .gw-lede { margin:0 0 12px; color:var(--slate); font-size:14.5px; }
+  .gw-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+  .gw-pill { min-height:44px; padding:0 14px; border-radius:999px; border:1.5px solid var(--stone); background:var(--surface); font-size:14.5px; font-weight:600; color:var(--ink); }
+  .gw-pill[aria-checked="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .gw-two { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  @media (max-width:480px) { .gw-two { grid-template-columns:minmax(0,1fr); } }
+  .gw-msg { font-size:14px; color:var(--slate); min-height:1.2em; margin-top:4px; }
+  .gw-msg.err { color:var(--bad); } .gw-msg.ok { color:var(--good); }
+  input.gw-bad, textarea.gw-bad { border-color:var(--bad); }
+  textarea { width:100%; padding:14px; font-size:17px; border:1px solid var(--stone); border-radius:11px; background:#fff; color:var(--ink); font-family:inherit; min-height:96px; resize:vertical; }
+  .gw-status { display:inline-block; font-size:13px; font-weight:700; padding:3px 11px; border-radius:999px; background:var(--line); color:var(--ink); vertical-align:middle; margin-left:6px; }
+  .gw-status.live { background:var(--good-dim); color:var(--good); } .gw-status.sched { background:var(--warn-dim); color:var(--warn); }
+  .gw-warns { display:grid; gap:6px; margin:12px 0 0; padding:0; list-style:none; }
+  .gw-warns li { background:var(--warn-dim); color:var(--ink); border-left:4px solid var(--warn); border-radius:6px; padding:9px 11px; font-size:14.5px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .gw-warns li.err { border-left-color:var(--bad); background:var(--bad-dim); }
+  .gw-warns li button { min-height:44px; }
+  .gw-linkrow { padding-top:14px; margin-top:14px; border-top:1px solid var(--line); }
+  .gw-linkrow:first-of-type { border-top:0; margin-top:0; padding-top:0; }
+  .gw-lock { font-size:13px; color:var(--slate); font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+  .gw-switchrow { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:56px; }
+  .gw-switch { position:relative; width:56px; height:32px; flex:none; display:block; margin:0; }
+  .gw-switch input { position:absolute; inset:0; opacity:0; margin:0; padding:0; width:100%; height:100%; cursor:pointer; border:0; }
+  .gw-switch span { position:absolute; inset:0; background:var(--stone); border-radius:999px; transition:background .15s; }
+  .gw-switch span::after { content:""; position:absolute; left:3px; top:3px; width:26px; height:26px; background:#fff; border-radius:50%; transition:transform .15s; box-shadow:0 1px 3px rgba(0,0,0,.3); }
+  .gw-switch input:checked + span { background:var(--accent); } .gw-switch input:checked + span::after { transform:translateX(24px); }
+  .gw-switch input:disabled { cursor:not-allowed; } .gw-switch input:disabled + span { opacity:.45; }
+  .gw-switch input:focus-visible + span { outline:3px solid var(--brass); outline-offset:2px; }
+  .gw-group { margin-top:18px; }
+  .gw-group-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+  .gw-group-head h4 { margin:0; font-size:16.5px; }
+  .gw-mode { font-size:13px; font-weight:700; padding:3px 11px; border-radius:999px; background:var(--line); color:var(--ink); }
+  .gw-mode.custom { background:var(--warn-dim); color:var(--warn); }
+  .gw-mini { min-height:44px; padding:0 13px; border-radius:10px; border:1.5px solid var(--stone); background:var(--surface); font-weight:600; font-size:14.5px; color:var(--ink); }
+  .gw-mini:disabled { opacity:.4; } .gw-mini.danger { border-color:var(--bad); color:var(--bad); }
+  .gw-arows { display:grid; gap:10px; }
+  .gw-arow { border:1.5px solid var(--line); border-radius:12px; padding:10px 12px; display:grid; gap:8px; background:var(--paper); }
+  .gw-arow.dim { opacity:.78; }
+  .gw-arow.dragging { border-color:var(--accent); box-shadow:0 8px 20px rgba(0,0,0,.25); background:var(--surface); position:relative; z-index:2; }
+  .gw-arow-top { display:grid; grid-template-columns:44px minmax(0,1fr); gap:8px; align-items:center; }
+  .gw-grip { width:44px; height:52px; display:grid; place-items:center; color:var(--slate); cursor:grab; touch-action:none; user-select:none; border-radius:8px; }
+  .gw-arow b.nm { overflow-wrap:anywhere; }
+  .gw-arow small { color:var(--slate); font-size:14px; display:block; }
+  .gw-tag { display:inline-block; font-size:12px; font-weight:700; padding:1px 8px; border-radius:999px; margin-left:6px; vertical-align:middle; background:var(--line); color:var(--ink); }
+  .gw-tag.mine { background:var(--accent-dim); color:var(--accent); }
+  .gw-arow-act { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .gw-onpage { display:inline-flex; align-items:center; gap:8px; font-size:14.5px; font-weight:600; margin:0 auto 0 0; color:var(--ink); }
+  .gw-mform { border:1.5px solid var(--accent); border-radius:12px; padding:14px; background:var(--paper); margin-top:12px; }
+  .gw-mform h4 { margin:0 0 4px; font-size:16.5px; }
+  .gw-addr { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .gw-addr code { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:14.5px; overflow-wrap:anywhere; }
+  .gw-btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  .gw-btns button { min-height:44px; }`;
+  document.head.appendChild(st);
+}
+function gwDraftFrom(d) {
+  const a = d.announcement && (d.announcement.state === 'live' || d.announcement.state === 'scheduled') ? d.announcement : null;
+  return {
+    links: d.links.map(l => ({ position: l.position, label: l.label, sub: l.sub, url: l.url })),
+    ann: a ? { message: a.message, link_url: a.link_url, urgent: a.urgent, starts_at: a.starts_at, ends_at: a.ends_at } : { message: '', link_url: '', urgent: false, starts_at: '', ends_at: '' },
+    details: { phone: d.org.phone, hours: d.org.hours },
+    address: { slug: d.org.slug, display_name: d.org.display_name },
+  };
+}
+async function renderParishPageTab() {
+  const seq = adminSeq;
+  let d;
+  try { d = await call('gateway_get'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
+  gwStyle();
+  gw = { d, draft: gwDraftFrom(d), removeArm: null, form: null, slugConfirm: false };
+  gwPaint();
+}
+async function gwReload(parts) {   // refetch; only the parts that were just saved take the server's version, so nothing typed elsewhere is lost
+  gw.d = await call('gateway_get');
+  const fresh = gwDraftFrom(gw.d);
+  for (const p of parts || []) gw.draft[p] = fresh[p];
+  gwPaint();
+}
+function gwPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'parishpage' || !gw) return;
+  el.innerHTML = gwHeadHtml() + gwLinksHtml() + gwAnnHtml() + gwItemsHtml();
+  gwAnnRefresh();
+  if (gw.form) gwFormCheck();
+}
+
+// ---- the page itself: address, on/off, name, office details
+function gwHeadHtml() {
+  const { d, draft } = gw, o = d.org, sa = d.can_manage, url = o.page_path ? location.origin + o.page_path : '';
+  return `<div class="card"><h3 style="margin-top:0">Parish page ${o.enabled ? '<span class="gw-status live">On</span>' : '<span class="gw-status">Off</span>'}</h3>
+    <p class="gw-lede">One page for everything ${esc(o.name)} offers, reached from a single link or QR code. Nothing here changes how Campaigns work.</p>
+    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="gwCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="gwSeeLive()">See the public page</button></div>
+      ${o.enabled ? '' : '<div class="hint">The page is switched off, so people who open it see “not available”. The SuperAdmin switches it on below.</div>'}`
+      : '<div class="hint">The page has no address yet. The SuperAdmin gives it one below.</div>'}
+    ${sa ? `<div class="gw-switchrow" style="margin-top:8px"><div><b>Page is on</b><div class="muted">Switch off to take the whole page down at once.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${o.enabled ? 'checked' : ''} aria-label="Page is on" onchange="gwSetEnabled(this)"><span></span></label></div>
+      <label for="gwSlug">Page address</label>
+      <div class="muted" style="margin:-2px 0 4px">${esc(location.origin)}/go/…  (3 to 40 lowercase letters, numbers and hyphens)</div>
+      <input id="gwSlug" value="${esc(draft.address.slug)}" autocomplete="off" autocapitalize="off" oninput="gw.draft.address.slug=this.value.trim().toLowerCase();gw.slugConfirm=false;document.getElementById('gwSlugWarn').innerHTML=''">
+      <label for="gwDisp">Name shown at the top of the page</label>
+      <input id="gwDisp" value="${esc(draft.address.display_name)}" maxlength="80" placeholder="${esc(o.name)}" autocomplete="off" oninput="gw.draft.address.display_name=this.value">
+      <div id="gwSlugWarn"></div>
+      <div class="gw-btns"><button class="primary" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwSaveAddress()">Save address and name</button></div>`
+      : `<p class="muted" style="margin:10px 0 0">Only the SuperAdmin can change the address or switch the page on or off.</p>`}
+    <h4 style="margin:18px 0 0;font-size:16px">Parish office details</h4>
+    <p class="muted" style="margin:2px 0 0">The address and email on the page come from Church details. These two are shown under “Parish office”.</p>
+    <label for="gwPhone">Phone</label><input id="gwPhone" value="${esc(draft.details.phone)}" maxlength="40" autocomplete="off" inputmode="tel" oninput="gw.draft.details.phone=this.value">
+    <label for="gwHours">Opening hours</label><input id="gwHours" value="${esc(draft.details.hours)}" maxlength="120" autocomplete="off" placeholder="Tue to Fri, 10:00 am to 1:00 pm" oninput="gw.draft.details.hours=this.value">
+    <div class="gw-btns"><button class="small" onclick="gwSaveDetails()">Save office details</button></div></div>`;
+}
+function gwCopyLink() {
+  const url = location.origin + gw.d.org.page_path;
+  try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); }
+}
+function gwSeeLive() {
+  if (!gw.d.org.enabled) { toast('The page is switched off, so visitors would see “not available”.', 'error'); }
+  window.open(gw.d.org.page_path, '_blank', 'noopener');
+}
+async function gwSetEnabled(box) {
+  const want = box.checked;
+  try { await call('gateway_set_enabled', { enabled: want }); toast(want ? '✓ The page is now on' : '✓ The page is now off'); await gwReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+async function gwSaveAddress() {
+  const a = gw.draft.address;
+  try {
+    const body = { display_name: a.display_name };
+    if (a.slug !== gw.d.org.slug) body.slug = a.slug;
+    if (a.slug !== gw.d.org.slug && gw.slugConfirm) body.confirm = true;
+    await call('gateway_set_address', body);
+    toast('✓ Saved'); gw.slugConfirm = false; await gwReload(['address']);
+  } catch (e) {
+    if (e.code === 'confirm_slug_change') {
+      gw.slugConfirm = true;
+      document.getElementById('gwSlugWarn').innerHTML = `<div class="hint"><b>Careful.</b> ${esc(e.message)}<div class="gw-btns"><button class="primary" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwSaveAddress()">Yes, change the address</button><button class="small" onclick="gw.slugConfirm=false;gw.draft.address.slug=gw.d.org.slug;gwPaint()">Keep the old address</button></div></div>`;
+      return;
+    }
+    toast(e.message, 'error');
+  }
+}
+async function gwSaveDetails() {
+  try { await call('gateway_set_details', gw.draft.details); toast('✓ Office details saved'); await gwReload(['details']); } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- the three permanent links
+function gwLinksHtml() {
+  const w = gwWords();
+  return `<div class="card"><h3 style="margin-top:0">Permanent links</h3>
+    <p class="gw-lede">The three big buttons at the top of the page. They stay in this order. Links must start with https://. A link left blank is not shown.</p>
+    ${gw.draft.links.map((l, i) => `<div class="gw-linkrow"><div class="gw-lock">${esc(w.positions[i])}</div>
+      <label for="gwL${i}">Title</label><input id="gwL${i}" value="${esc(l.label)}" maxlength="60" autocomplete="off" oninput="gwLinkInput(${i},'label',this.value)">
+      <label for="gwS${i}">One line underneath</label><input id="gwS${i}" value="${esc(l.sub)}" maxlength="60" autocomplete="off" oninput="gwLinkInput(${i},'sub',this.value)">
+      <label for="gwU${i}">Web address</label><input id="gwU${i}" value="${esc(l.url)}" inputmode="url" autocomplete="off" placeholder="https://" oninput="gwLinkInput(${i},'url',this.value)">
+      <div class="gw-msg" id="gwLm${i}"></div>
+      <div class="gw-btns" style="margin-top:6px"><button class="small" onclick="gwSaveLink(${i})">Save link ${i + 1}</button></div></div>`).join('')}</div>`;
+}
+function gwLinkInput(i, f, v) {
+  gw.draft.links[i][f] = v;
+  const m = document.getElementById('gwLm' + i), u = document.getElementById('gwU' + i), url = gw.draft.links[i].url.trim();
+  if (f !== 'url' && !url) { return; }
+  if (!url) { m.className = 'gw-msg'; m.textContent = ''; u.classList.remove('gw-bad'); return; }
+  if (gwOkUrl(url)) { u.classList.remove('gw-bad'); m.className = 'gw-msg ok'; m.textContent = 'Looks good. Press Save to put it on the page.'; }
+  else { u.classList.add('gw-bad'); m.className = 'gw-msg err'; m.textContent = 'Must start with https:// and be a full web address. The page keeps the last good link until this is fixed.'; }
+}
+async function gwSaveLink(i) {
+  const l = gw.draft.links[i];
+  if (l.url.trim() && !gwOkUrl(l.url)) { gwLinkInput(i, 'url', l.url); toast('That web address is not valid yet.', 'error'); return; }
+  try { await call('gateway_save_links', { links: [l] }); toast(l.label.trim() || l.url.trim() ? `✓ Link ${i + 1} saved` : `✓ Link ${i + 1} cleared`); await gwReload(['links']); } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- the notice
+function gwAnnHtml() {
+  const w = gwWords(), a = gw.draft.ann, st = gw.d.announcement ? gw.d.announcement.state : 'off', tz = gw.d.org.timezone;
+  const label = { off: 'Off', scheduled: 'Scheduled', live: 'Live now', ended: 'Ended' }[st];
+  return `<div class="card"><h3 style="margin-top:0">Notice <span class="gw-status ${st === 'live' ? 'live' : st === 'scheduled' ? 'sched' : ''}" id="gwAnnStatus">${label}</span></h3>
+    <p class="gw-lede">Optional. Shows in a bar under the page heading between the times you choose, and comes down by itself. An urgent notice puts its message in the bar so nobody misses it. Times are ${esc(tz)} time.</p>
+    <label for="gwAnnMsg">Message <span class="muted" id="gwAnnCount"></span></label>
+    <textarea id="gwAnnMsg" maxlength="200" placeholder="Tap the microphone on your keyboard to speak it" oninput="gwAnnInput('message',this.value)">${esc(a.message)}</textarea>
+    <div class="gw-pills">${w.quick.map((q, i) => `<button class="gw-pill" type="button" onclick="gwAnnQuick(${i})">${esc(q[0])}</button>`).join('')}</div>
+    <label for="gwAnnLink">Link (optional)</label><input id="gwAnnLink" value="${esc(a.link_url)}" inputmode="url" autocomplete="off" placeholder="https://" oninput="gwAnnInput('link_url',this.value.trim())">
+    <div class="gw-msg" id="gwAnnLinkMsg"></div>
+    <div class="gw-two"><div><label for="gwAnnStart">Shows from</label><input type="datetime-local" id="gwAnnStart" value="${esc(a.starts_at)}" onchange="gwAnnInput('starts_at',this.value)"></div>
+      <div><label for="gwAnnEnd">Hides at</label><input type="datetime-local" id="gwAnnEnd" value="${esc(a.ends_at)}" onchange="gwAnnInput('ends_at',this.value)"></div></div>
+    <div class="gw-switchrow"><div><b>Urgent</b><div class="muted">Shows the message in the bar itself.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" id="gwAnnUrgent" ${a.urgent ? 'checked' : ''} aria-label="Urgent" onchange="gwAnnInput('urgent',this.checked)"><span></span></label></div>
+    <ul class="gw-warns" id="gwAnnWarn" aria-live="polite"></ul>
+    <div class="gw-btns"><button class="primary" id="gwAnnPublish" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwAnnPublish()">${st === 'live' || st === 'scheduled' ? 'Update the notice' : 'Publish the notice'}</button>
+      ${st === 'live' || st === 'scheduled' ? '<button class="small" onclick="gwAnnClear()">Take it down</button>' : ''}</div></div>`;
+}
+function gwAnnInput(f, v) {
+  gw.draft.ann[f] = v;
+  gwAnnRefresh();
+}
+function gwAnnQuick(i) {
+  gw.draft.ann.message = gwWords().quick[i][1];
+  const t = document.getElementById('gwAnnMsg'); if (t) t.value = gw.draft.ann.message;
+  gwAnnRefresh();
+}
+function gwAnnRefresh() {
+  const a = gw.draft.ann, d = gw.d, w = [];
+  const msg = a.message.trim(), now = d.now_local, set = (id, fn) => { const e = document.getElementById(id); if (e) fn(e); };
+  set('gwAnnCount', e => { e.textContent = `(${a.message.length}/200)`; });
+  let blocked = !msg;
+  if (msg && a.starts_at && a.ends_at && a.ends_at <= a.starts_at) { w.push('<li class="err">The end is before the start, so this would never show.</li>'); blocked = true; }
+  else if (msg && a.ends_at && a.ends_at <= now) { w.push('<li class="err">That end time has already passed.</li>'); blocked = true; }
+  if (msg && !a.ends_at) w.push('<li>No end time. It stays up until you take it down. <button class="small" type="button" onclick="gwAnnWeek()">End in 7 days</button></li>');
+  if (msg && a.urgent && a.message.length > 120) w.push('<li>Urgent messages sit in a narrow bar and read best when short. Try to keep it under 120 characters.</li>');
+  if (!msg && (a.starts_at || a.ends_at)) w.push('<li>Add a message, or clear the times.</li>');
+  if (d.announcement && d.announcement.state === 'ended' && !msg) w.push(`<li>The last notice ended on ${esc(d.announcement.ends_at.replace('T', ' at '))} and is no longer showing.</li>`);
+  const linkOk = !a.link_url || gwOkUrl(a.link_url);
+  if (!linkOk) blocked = true;
+  set('gwAnnLink', e => e.classList.toggle('gw-bad', !linkOk));
+  set('gwAnnLinkMsg', e => { e.className = 'gw-msg' + (linkOk ? '' : ' err'); e.textContent = a.link_url ? (linkOk ? 'Shows as “More information”.' : 'Links must start with https:// and be a full web address.') : ''; });
+  set('gwAnnWarn', e => { e.innerHTML = w.join(''); });
+  set('gwAnnPublish', e => { e.disabled = blocked; });
+}
+function gwAnnWeek() {
+  const a = gw.draft.ann, from = a.starts_at && a.starts_at > gw.d.now_local ? a.starts_at : gw.d.now_local;
+  a.ends_at = gwAddDays(from, 7); const e = document.getElementById('gwAnnEnd'); if (e) e.value = a.ends_at; gwAnnRefresh();
+}
+async function gwAnnPublish() {
+  const a = gw.draft.ann;
+  try { await call('gateway_save_announcement', { message: a.message, link_url: a.link_url, urgent: a.urgent, starts_at: a.starts_at, ends_at: a.ends_at }); toast(a.starts_at && a.starts_at > gw.d.now_local ? '✓ Notice scheduled' : '✓ Notice is on the page'); await gwReload(['ann']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function gwAnnClear() {
+  try { await call('gateway_clear_announcement'); toast('✓ Notice taken down'); gw.draft.ann = { message: '', link_url: '', urgent: false, starts_at: '', ends_at: '' }; await gwReload(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- what is on the page: two ordered groups
+const GW_GRIP = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 8h14M5 12h14M5 16h14"/></svg>';
+function gwItemsHtml() {
+  const w = gwWords(), s = gw.d.sections;
+  return `<div class="card"><h3 style="margin-top:0">What’s on the page</h3>
+    <p class="gw-lede">Campaigns and registrations come from Parish Campaigns, and only ones with a working public page can be put on. You can also add something that isn’t there. Each group is ordered by closing date unless you change it. Drag the handle, or use Up and Down.</p>
+    <button class="primary" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwOpenForm()">Add something</button>
+    <div id="gwForm">${gw.form ? gwFormHtml() : ''}</div>
+    ${['involved', 'registration'].map(sec => `<div class="gw-group"><div class="gw-group-head"><h4>${esc(w.sections[sec])}</h4><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="gw-mode ${s[sec].mode === 'custom' ? 'custom' : ''}">${s[sec].mode === 'custom' ? 'Custom order' : 'Automatic order: closing soonest'}</span>${s[sec].mode === 'custom' ? `<button class="gw-mini" type="button" onclick="gwBackToAuto('${sec}')">Back to automatic</button>` : ''}</span></div>
+      <div class="gw-arows" data-sec="${sec}">${s[sec].items.length ? s[sec].items.map((it, i) => gwRowHtml(it, i, s[sec].items.length)).join('') : '<div class="gw-msg">Nothing here yet.</div>'}</div></div>`).join('')}</div>`;
+}
+function gwRowHtml(it, idx, total) {
+  const mine = it.source === 'manual', live = it.listed && it.state === 'open';
+  const status = !it.listed ? 'Not on the page' : it.state === 'open' ? 'Live now' : it.state === 'not_open' ? 'Opens ' + gwShort(it.opens_on) : it.state === 'draft' ? 'Draft: not open yet' : it.state === 'inactive' ? 'Paused' : 'Ended ' + gwShort(it.closes_on);
+  const kind = it.kind === 'registration' ? 'Registration' : it.kind === 'raffle' ? 'Raffle' : it.kind === 'link' ? 'Link' : 'Event';
+  const dates = it.opens_on || it.closes_on ? `${it.opens_on ? gwShort(it.opens_on) : ''} to ${it.closes_on ? gwShort(it.closes_on) : 'no end date'}` : 'no dates';
+  const lock = !it.eligible && !it.listed;
+  return `<div class="gw-arow ${live ? '' : 'dim'}" data-id="${esc(it.id)}">
+    <div class="gw-arow-top"><span class="gw-grip" title="Drag to move" aria-hidden="true">${GW_GRIP}</span><div style="min-width:0"><b class="nm">${esc(it.name)}</b><span class="gw-tag ${mine ? 'mine' : ''}">${mine ? 'Added here' : 'From Campaigns'}</span>
+      <small>${kind} · ${esc(dates)} · <b style="display:inline;color:${live ? 'var(--good)' : 'var(--slate)'}">${esc(status)}</b></small>${lock ? `<small style="color:var(--warn)">Can’t be put on the page: ${esc(it.reason)}.</small>` : ''}</div></div>
+    <div class="gw-arow-act"><label class="gw-onpage" style="margin:0 auto 0 0;font-size:14.5px"><span class="gw-switch"><input type="checkbox" ${it.listed ? 'checked' : ''} ${lock ? 'disabled' : ''} aria-label="Show ${esc(it.name)} on the parish page" onchange="gwToggleListed('${esc(it.id)}','${it.source}',this)"><span></span></span>On the page</label>
+      <button class="gw-mini" type="button" onclick="gwMove('${esc(it.id)}','${it.section}',-1)" aria-label="Move ${esc(it.name)} up" ${idx === 0 ? 'disabled' : ''}>↑ Up</button>
+      <button class="gw-mini" type="button" onclick="gwMove('${esc(it.id)}','${it.section}',1)" aria-label="Move ${esc(it.name)} down" ${idx === total - 1 ? 'disabled' : ''}>↓ Down</button>
+      ${mine ? `<button class="gw-mini" type="button" onclick="gwEditItem('${esc(it.id)}')">Edit</button><button class="gw-mini danger" type="button" onclick="gwRemoveItem('${esc(it.id)}')">${gw.removeArm === it.id ? 'Tap again to remove' : 'Remove'}</button>` : ''}</div></div>`;
+}
+function gwFindItem(id) { for (const sec of ['involved', 'registration']) { const it = gw.d.sections[sec].items.find(x => x.id === id); if (it) return it; } return null; }
+async function gwToggleListed(id, source, box) {
+  const want = box.checked, it = gwFindItem(id);
+  try {
+    if (source === 'manual') await call('gateway_item_set_listed', { id, listed: want });
+    else await call('campaign_set_listed', { campaign_id: id, listed: want });
+    toast(want ? `✓ ${it.name} is on the page` : `✓ ${it.name} is off the page`); await gwReload();
+  } catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+async function gwMove(id, sec, dir) {
+  const ids = gw.d.sections[sec].items.map(x => x.id), i = ids.indexOf(id), j = i + dir;
+  if (j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  await gwSaveOrder(sec, ids);
+}
+async function gwSaveOrder(sec, ids) {
+  try { await call('gateway_set_order', { section: sec, ids }); toast('✓ Order saved'); await gwReload(); } catch (e) { toast(e.message, 'error'); await gwReload(); }
+}
+async function gwBackToAuto(sec) {
+  try { await call('gateway_set_order', { section: sec, ids: null }); toast('✓ Back to automatic order'); await gwReload(); } catch (e) { toast(e.message, 'error'); }
+}
+// drag by the handle: the dragged row stays put in the page; its neighbours step around it
+let gwDrag = null;
+document.addEventListener('pointerdown', (e) => {
+  const g = e.target.closest && e.target.closest('.gw-grip'); if (!g) return;
+  const row = g.closest('.gw-arow'); e.preventDefault();
+  gwDrag = { row, list: row.parentNode, sec: row.parentNode.getAttribute('data-sec'), before: [...row.parentNode.querySelectorAll('.gw-arow')].map(n => n.dataset.id).join() };
+  row.classList.add('dragging');
+  try { g.setPointerCapture(e.pointerId); } catch { /* fine */ }
+});
+document.addEventListener('pointermove', (e) => {
+  if (!gwDrag) return;
+  const y = e.clientY, r = gwDrag.row; let guard = 0, s, b;
+  while (guard++ < 30) {
+    s = r.previousElementSibling;
+    if (s && s.classList.contains('gw-arow')) { b = s.getBoundingClientRect(); if (y < b.top + b.height / 2) { gwDrag.list.insertBefore(s, r.nextSibling); continue; } }
+    s = r.nextElementSibling;
+    if (s && s.classList.contains('gw-arow')) { b = s.getBoundingClientRect(); if (y > b.top + b.height / 2) { gwDrag.list.insertBefore(s, r); continue; } }
+    break;
+  }
+  if (y < 90) window.scrollBy(0, -12); else if (y > window.innerHeight - 90) window.scrollBy(0, 12);
+});
+function gwEndDrag() {
+  if (!gwDrag) return;
+  const d = gwDrag; gwDrag = null;
+  const ids = [...d.list.querySelectorAll('.gw-arow')].map(n => n.dataset.id);
+  if (ids.join() !== d.before) gwSaveOrder(d.sec, ids); else d.row.classList.remove('dragging');
+}
+document.addEventListener('pointerup', gwEndDrag);
+document.addEventListener('pointercancel', gwEndDrag);
+
+// ---- add / edit something by hand
+function gwOpenForm(it) {
+  const today = gw.d.today;
+  gw.form = it ? { id: it.id, section: it.section, label: it.name, url: it.url || '', cta: it.cta || '', starts_on: it.opens_on, ends_on: it.closes_on } : { id: null, section: 'involved', label: '', url: '', cta: '', starts_on: today, ends_on: '' };
+  document.getElementById('gwForm').innerHTML = gwFormHtml(); gwFormCheck();
+  const f = document.getElementById('gwF_label'); if (f) { f.focus(); f.scrollIntoView({ block: 'center' }); }
+}
+function gwEditItem(id) { const it = gwFindItem(id); if (it) gwOpenForm(it); }
+function gwFormHtml() {
+  const f = gw.form, w = gwWords();
+  return `<div class="gw-mform"><h4>${f.id ? 'Edit this item' : 'Add something'}</h4>
+    <label for="gwF_label">What is it called?</label><input id="gwF_label" value="${esc(f.label)}" maxlength="60" autocomplete="off" placeholder="Tap the microphone on your keyboard to speak it" oninput="gwFormSet('label',this.value)">
+    <label>Where should it appear?</label><div class="gw-pills" role="radiogroup">${['involved', 'registration'].map(s => `<button class="gw-pill" type="button" role="radio" aria-checked="${f.section === s}" onclick="gwFormSet('section','${s}',true)">${esc(w.sections[s])}</button>`).join('')}</div>
+    <div class="gw-two"><div><label for="gwF_start">Starts</label><input type="date" id="gwF_start" value="${esc(f.starts_on)}" onchange="gwFormSet('starts_on',this.value)"></div><div><label for="gwF_end">Ends (required)</label><input type="date" id="gwF_end" value="${esc(f.ends_on)}" onchange="gwFormSet('ends_on',this.value)"></div></div>
+    <label for="gwF_url">Web address</label><input id="gwF_url" value="${esc(f.url)}" inputmode="url" autocomplete="off" placeholder="https://" oninput="gwFormSet('url',this.value)">
+    <label for="gwF_cta">Button words (optional)</label><input id="gwF_cta" value="${esc(f.cta)}" maxlength="24" autocomplete="off" placeholder="Find out more" oninput="gwFormSet('cta',this.value)">
+    <ul class="gw-warns" id="gwF_issues" aria-live="polite"></ul>
+    <div class="gw-btns"><button class="primary" id="gwF_save" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwFormSave()">${f.id ? 'Save changes' : 'Add to the page'}</button><button class="small" onclick="gwFormCancel()">Cancel</button></div></div>`;
+}
+function gwFormSet(k, v, repaint) {
+  gw.form[k] = v;
+  if (repaint) { document.getElementById('gwForm').innerHTML = gwFormHtml(); }
+  gwFormCheck();
+}
+function gwFormCheck() {
+  const f = gw.form, errs = [], warns = [], today = gw.d.today;
+  if (!f.label.trim()) errs.push('Give it a name.');
+  if (!f.starts_on) errs.push('Choose a start date.');
+  if (!f.ends_on) errs.push('Choose an end date. Every item needs one so it comes down by itself.');
+  if (f.starts_on && f.ends_on && f.ends_on < f.starts_on) errs.push('The end date is before the start date.');
+  if (!f.url.trim()) errs.push('Add the web address people should go to.');
+  else if (!gwOkUrl(f.url)) errs.push('The web address must start with https:// and be a full address.');
+  if (f.ends_on && f.ends_on < today) warns.push('That end date has passed, so it will not show.');
+  if (f.url && /\/(buy|register)\.html|campaign_id=/i.test(f.url)) warns.push('This looks like a Parish Campaigns page. It is better to list it from Campaigns, so places left and the dates update by themselves.');
+  const all = [...gw.d.sections.involved.items, ...gw.d.sections.registration.items];
+  if (f.label.trim() && all.some(i => i.id !== f.id && i.name.trim().toLowerCase() === f.label.trim().toLowerCase())) warns.push('Something with this name is already on the list.');
+  const el = document.getElementById('gwF_issues'); if (el) el.innerHTML = errs.map(m => `<li class="err">${esc(m)}</li>`).join('') + warns.map(m => `<li>${esc(m)}</li>`).join('');
+  const u = document.getElementById('gwF_url'); if (u) u.classList.toggle('gw-bad', !!f.url.trim() && !gwOkUrl(f.url));
+  const b = document.getElementById('gwF_save'); if (b) b.disabled = errs.length > 0;
+  return errs.length === 0;
+}
+function gwFormCancel() { gw.form = null; document.getElementById('gwForm').innerHTML = ''; toast('Nothing was changed'); }
+async function gwFormSave() {
+  if (!gwFormCheck()) return;
+  const f = gw.form;
+  try {
+    await call('gateway_item_save', { id: f.id, section: f.section, label: f.label, url: f.url, cta: f.cta, starts_on: f.starts_on, ends_on: f.ends_on });
+    toast(f.id ? '✓ Saved' : `✓ Added. It shows from ${gwShort(f.starts_on)}`); gw.form = null; await gwReload();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function gwRemoveItem(id) {
+  if (gw.removeArm !== id) { gw.removeArm = id; gwPaint(); setTimeout(() => { if (gw && gw.removeArm === id) { gw.removeArm = null; gwPaint(); } }, 4000); return; }
+  try { await call('gateway_item_delete', { id }); gw.removeArm = null; toast('✓ Removed'); await gwReload(); } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---------- boot ----------
