@@ -31,3 +31,10 @@
   for = "/fonts/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# The Parish Gateway: one page for every organisation, at /go/<address>. A real file (such as /go/sw.js) is served as itself;
+# only an address that is not a file is answered with the page, which then reads its address from the URL.
+[[redirects]]
+  from = "/go/*"
+  to = "/go.html"
+  status = 200

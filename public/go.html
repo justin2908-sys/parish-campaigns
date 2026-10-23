@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#225840">
+<title>Parish page</title>
+<script>
+// Ask for the page's data at once, while the styles and fonts are still downloading. render() picks up the answer.
+window.__gwP = (function () {
+  var m = /^\/go\/([^\/?#]+)\/?$/.exec(location.pathname), slug = m ? decodeURIComponent(m[1]).toLowerCase() : '';
+  if (!slug || !window.fetch) return { slug: slug, p: null };
+  var ctl = window.AbortController ? new AbortController() : null;
+  if (ctl) setTimeout(function () { ctl.abort(); }, 25000);   // never hang on a weak signal
+  var p = fetch('/api/public_gateway', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug }), signal: ctl ? ctl.signal : undefined })
+    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, d: d, saved: r.headers.get('X-Gateway-Saved') === '1' }; }); })
+    .catch(function () { return null; });
+  return { slug: slug, p: p };
+})();
+</script>
+<style>
+/* The gateway has its own look (nothing is shared with theme.css, so nothing else in the app can move). Sizes are in rem: base text 17px,
+   nothing under 15px, tap targets 44px or more. Colours are variables so a later phase can restyle one organisation at a time. */
+@font-face { font-family:'Hanken Grotesk'; font-style:normal; font-weight:400 700; font-display:swap; src:url('/fonts/HankenGrotesk-400-700.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:500; font-display:swap; src:url('/fonts/Spectral-500.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:600; font-display:swap; src:url('/fonts/Spectral-600.woff2') format('woff2'); }
+:root {
+  --bg:#f3f4f1; --surface:#ffffff; --fg:#151c18; --muted:#3d4843; --line:#c9d0cb;
+  --brand:#225840; --brand-text:#225840; --brand-tint:#e0eee6;
+  --warn:#7a3f00; --warn-tint:#fbeccd; --bad:#a31f1f;
+  --font-display:"Spectral", Georgia, "Times New Roman", serif;
+  --font-body:"Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#101512; --surface:#1b2220; --fg:#f1f4f0; --muted:#c0cbc4; --line:#3a4640;
+    --brand:#2f7a58; --brand-text:#9fdcbd; --brand-tint:#1f3329;
+    --warn:#f5c070; --warn-tint:#3a2a10; --bad:#ff9a9a;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#101512; --surface:#1b2220; --fg:#f1f4f0; --muted:#c0cbc4; --line:#3a4640;
+  --brand:#2f7a58; --brand-text:#9fdcbd; --brand-tint:#1f3329;
+  --warn:#f5c070; --warn-tint:#3a2a10; --bad:#ff9a9a;
+  color-scheme:dark;
+}
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-body); font-size:1.0625rem; line-height:1.4; overflow-wrap:break-word; }
+a { color:inherit; text-decoration:none; }
+button { font:inherit; color:inherit; cursor:pointer; }
+:focus-visible { outline:4px solid var(--brand-text); outline-offset:2px; border-radius:6px; }
+.gutter { padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width:560px; margin:0 auto; }
+[hidden] { display:none !important; }
+
+/* masthead */
+.mast { background:var(--brand); color:#fff; padding-top:max(12px, env(safe-area-inset-top, 0px)); padding-bottom:10px; }
+.mast .id { display:flex; align-items:center; gap:10px; }
+.crest { width:28px; height:28px; flex:none; color:#fff; opacity:.95; }
+.mast h1 { flex:1; min-width:0; font-family:var(--font-display); font-weight:600; font-size:1.6rem; line-height:1.1; margin:0; text-wrap:balance; }
+.mail { display:inline-flex; align-items:center; gap:6px; flex:none; min-height:44px; padding:0 14px; border:2px solid rgba(255,255,255,.55); border-radius:999px; background:transparent; color:#fff; font-size:.95rem; font-weight:600; }
+
+/* notices bar */
+.notices { display:flex; align-items:center; gap:10px; width:100%; min-height:48px; padding-top:6px; padding-bottom:6px; background:var(--surface); border:0; border-bottom:2px solid var(--line); text-align:left; }
+.notices .lab { font-weight:700; }
+.notices .txt { min-width:0; flex:1; display:grid; line-height:1.25; }
+.notices .sub { color:var(--muted); font-size:.9375rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.notices .go { flex:none; font-weight:600; color:var(--brand-text); }
+.notices.urgent { background:var(--warn-tint); border-bottom:3px solid var(--warn); }
+.notices.urgent .lab { color:var(--warn); }
+.notices.urgent .sub { color:var(--fg); white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-weight:600; }
+.notices.urgent .go { color:var(--warn); }
+
+/* the notice, opened */
+.sheet { position:fixed; inset:0; z-index:30; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center; }
+.sheet-card { background:var(--surface); width:100%; max-width:560px; max-height:88%; overflow:auto; border-radius:20px 20px 0 0; padding:20px max(16px, env(safe-area-inset-left, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)); display:grid; gap:18px; }
+.sheet-card:focus { outline:none; }
+.sheet-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.sheet-head h2 { margin:0; font-family:var(--font-display); font-size:1.6rem; }
+.note { border:2px solid var(--brand-text); background:var(--brand-tint); border-radius:14px; padding:14px 16px; display:grid; gap:6px; }
+.note.urgent { border-color:var(--warn); background:var(--warn-tint); }
+.note b.k { font-size:.9375rem; letter-spacing:.04em; text-transform:uppercase; color:var(--brand-text); }
+.note.urgent b.k { color:var(--warn); }
+.note p { margin:0; font-weight:500; overflow-wrap:anywhere; }
+.note .until { color:var(--muted); font-size:1rem; }
+.note a.more { font-weight:700; text-decoration:underline; text-underline-offset:3px; min-height:44px; display:inline-flex; align-items:center; }
+
+main { padding-bottom:32px; }
+.offline { margin:12px 0 0; padding:10px 14px; border-radius:12px; background:var(--warn-tint); color:var(--fg); border-left:5px solid var(--warn); font-size:.9375rem; }
+
+/* the services (the hero) */
+.doors { display:grid; gap:10px; margin-top:12px; }
+.door { display:grid; grid-template-columns:40px minmax(0,1fr) auto; align-items:center; gap:10px; min-height:66px; padding:10px 14px; background:var(--surface); border:2px solid var(--brand-text); border-radius:16px; }
+.door:active { background:var(--brand-tint); }
+.door .ico { width:40px; height:40px; border-radius:10px; background:var(--brand); color:#fff; display:grid; place-items:center; }
+.door h2 { margin:0; font-size:1.15rem; line-height:1.15; overflow-wrap:anywhere; }
+.door p { margin:1px 0 0; color:var(--muted); font-size:.9375rem; line-height:1.25; overflow-wrap:anywhere; }
+.chev { color:var(--brand-text); }
+
+/* Get Involved and Registrations */
+.sect { margin-top:20px; }
+.sect h2.title { font-family:var(--font-display); font-size:1.35rem; margin:0 0 8px; font-weight:600; }
+.list { display:grid; gap:10px; padding:0; margin:0; list-style:none; }
+.card { background:var(--surface); border:2px solid var(--line); border-radius:14px; padding:10px 12px 10px 14px; display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:12px; row-gap:1px; align-items:center; }
+.card h3 { margin:0; font-size:1.15rem; line-height:1.2; overflow-wrap:anywhere; }
+.card p.sl { margin:0; color:var(--fg); font-weight:700; font-size:.9375rem; line-height:1.25; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.card > h3, .card > p.sl { grid-column:1; }
+.card > .cta { grid-column:2; grid-row:1 / span 2; align-self:center; justify-self:end; }
+.card p.sl.hot { color:var(--warn); }
+.cta { display:flex; align-items:center; justify-content:center; text-align:center; min-height:48px; padding:4px 8px; border-radius:12px; background:var(--brand); color:#fff; font-weight:700; font-size:.9375rem; line-height:1.15; flex:none; width:7rem; }
+.cta.alt { background:transparent; color:var(--brand-text); border:2px solid var(--brand-text); }
+.cta.off { background:var(--line); color:var(--fg); }
+.cta:active { filter:brightness(.9); }
+.btn { min-height:48px; padding:0 16px; border-radius:12px; border:2px solid var(--brand-text); background:transparent; color:var(--brand-text); font-weight:700; font-size:1rem; }
+.btn.solid { background:var(--brand); border-color:var(--brand); color:#fff; }
+.more { width:100%; margin-top:10px; }
+.empty { border:2px dashed var(--line); border-radius:14px; padding:16px; text-align:center; color:var(--muted); }
+
+/* keep this on your phone */
+.save { margin-top:20px; background:var(--brand-tint); border:2px solid var(--brand-text); border-radius:14px; padding:12px 14px; display:grid; gap:10px; }
+.save .hd { display:grid; grid-template-columns:auto minmax(0,1fr); gap:14px; align-items:center; }
+.save .hd svg { color:var(--brand-text); }
+.save b { display:block; font-size:1.05rem; line-height:1.2; }
+.save .hd span { color:var(--muted); }
+.save ol { margin:0; padding-left:26px; display:grid; gap:10px; }
+.save li::marker { font-weight:700; color:var(--brand-text); }
+.save-actions { display:flex; flex-wrap:wrap; gap:10px; }
+
+.info { margin-top:20px; display:grid; gap:6px; color:var(--muted); }
+.info strong { color:var(--fg); }
+.foot { margin-top:14px; font-size:.9375rem; color:var(--muted); }
+.toast { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom, 0px)); transform:translate(-50%,20px); opacity:0; pointer-events:none; background:var(--fg); color:var(--bg); padding:14px 20px; border-radius:12px; font-size:1rem; max-width:calc(100% - 32px); transition:opacity .2s, transform .2s; z-index:40; }
+.toast.on { opacity:1; transform:translate(-50%,0); }
+.status { padding:48px 0 24px; display:grid; gap:14px; justify-items:start; }
+.status h1 { margin:0; font-family:var(--font-display); font-size:1.6rem; line-height:1.15; }
+.status p { margin:0; color:var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+(function () {
+  'use strict';
+  // ---- everything the visitor reads that is not the organisation's own text, in one place per kind of organisation
+  var VERTICAL = 'church';
+  var WORDING = {
+    church: {
+      involved: 'Get Involved', registration: 'Registrations',
+      nothing: 'Nothing is open right now. Please check back soon, or ask at the parish office.',
+      office: 'Parish office', phone: 'Phone', email: 'Email', emailChip: 'Email us',
+      noticeLabel: 'Notice', urgentLabel: 'Urgent', read: 'Read ›', notices: 'Notices', urgentNotice: 'Urgent notice', notice: 'Notice', more: 'More information ›',
+      saveTitle: 'Keep this on your phone', saveSub: 'Then you can open it next time. No need to scan.', saveShow: 'Show me how', saveHide: 'Hide the steps', saveCopy: 'Copy link', saveDone: 'Done, don’t show again', saveInstall: 'Add to Home Screen',
+      steps: {
+        ios: ['Tap the <b>Share</b> button at the bottom of Safari (a square with an arrow).', 'Scroll down and tap <b>Add to Home Screen</b>.', 'Tap <b>Add</b>.'],
+        android: ['Tap the <b>⋮ menu</b> at the top right of Chrome.', 'Tap <b>Add to Home screen</b> (or <b>Install app</b>).', 'Tap <b>Add</b>.'],
+        desktop: ['Press <b>Ctrl + D</b> (<b>⌘ + D</b> on a Mac).', 'Tap <b>Done</b>.']
+      },
+      offline: 'You are offline. This is the page as it was last saved.',
+      unavailable: 'This page is not available.', unavailableHelp: 'Please check the address, or ask at the parish office.',
+      failed: 'We could not load this page.', failedHelp: 'Please check your connection and try again.', retry: 'Try again',
+      loading: 'Loading…', copied: 'Copied ', copiedLink: 'Link copied', seeAll: 'See all', showFewer: 'Show fewer',
+      full: 'Full', waiting: 'Join waiting list', isNew: 'New',
+      icons: ['hall', 'mass', 'news']   // the three permanent links are drawn in this order
+    }
+  };
+  var W = WORDING[VERTICAL];
+  var ICONS = {
+    hall: '<path d="M3 21h18M5 21V10l7-6 7 6v11M9 21v-6h6v6"/>',
+    mass: '<path d="M12 2c1.6 2 2.2 3.4 2.2 4.6a2.2 2.2 0 0 1-4.4 0C9.8 5.4 10.4 4 12 2ZM8 12h8v9H8zM6 21h12"/>',
+    news: '<path d="M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V4ZM18 9h2v9a2 2 0 0 1-2 2M8 8h7M8 12h7M8 16h4"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'
+  };
+  var DAY = 864e5;
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  // A web address the page is willing to open: a full https address, or one of this site's own pages.
+  function safeHref(u) { u = String(u == null ? '' : u).trim(); if (/^https:\/\/[^\s]+$/i.test(u)) return u; if (/^\/(buy|register)\.html\?campaign_id=[A-Za-z0-9-]+$/.test(u)) return u; return ''; }
+
+  // ---- "today" in the organisation's own time zone (this page keeps its own helper; it shares nothing with the app's)
+  function todayIn(tz, at) { try { return (at || new Date()).toLocaleDateString('en-CA', { timeZone: tz }); } catch (e) { return (at || new Date()).toLocaleDateString('en-CA'); } }
+  function dayNum(s) { var p = String(s).split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]) / DAY; }
+  function fmtDay(s) { var p = String(s).split('-'); return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }); }
+  function fmtWhen(iso, tz) { try { return new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz }); } catch (e) { return ''; } }
+
+  var toastEl = $('toast'), tt;
+  function say(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(tt); tt = setTimeout(function () { toastEl.classList.remove('on'); }, 2600); }
+
+  var slug = window.__gwP.slug, data = null, saved = false, expanded = { involved: false, registration: false }, deferred = null, saveShown = false, lastNoticeKey = '';
+
+  // ---- the page
+  function statusLine(c, today) {
+    var left = c.closes_on ? Math.round(dayNum(c.closes_on) - dayNum(today)) : null, age = c.opens_on ? Math.round(dayNum(today) - dayNum(c.opens_on)) : 99, parts = [], hot = false;
+    if (c.full) { parts.push(W.full); hot = true; }
+    else {
+      if (left !== null) {
+        parts.push(left <= 14 ? (left <= 0 ? 'Closes today' : left === 1 ? 'Closes tomorrow' : 'Closes in ' + left + ' days') : 'Closes ' + fmtDay(c.closes_on));
+        if (left <= 7) hot = true;
+      } else parts.push('Open now');
+      if (c.places_left != null) { parts.push(c.places_left + ' left'); if (c.places_total && c.places_left <= c.places_total * 0.25) hot = true; }
+    }
+    if (age >= 0 && age <= 7 && parts.length === 1 && !c.full) parts.unshift(W.isNew);
+    return { text: parts.join(' · '), hot: hot };
+  }
+  function card(c, today) {
+    var s = statusLine(c, today), href = safeHref(c.href), btn;
+    if (c.full && c.waiting_list && href) btn = '<a class="cta alt" href="' + esc(href) + '">' + esc(W.waiting) + '</a>';
+    else if (c.full || !href) btn = '<span class="cta off" aria-disabled="true">' + esc(W.full) + '</span>';
+    else btn = '<a class="cta" href="' + esc(href) + '">' + esc(c.cta) + '</a>';
+    return '<li class="card"><h3>' + esc(c.name) + '</h3><p class="sl' + (s.hot ? ' hot' : '') + '">' + esc(s.text) + '</p>' + btn + '</li>';
+  }
+  function section(sec, today) {
+    var list = (data.sections && data.sections[sec]) || [];
+    if (!list.length) return '';
+    var shown = expanded[sec] ? list : list.slice(0, 3);
+    return '<section class="sect" aria-labelledby="t-' + sec + '"><h2 class="title" id="t-' + sec + '">' + esc(W[sec]) + '</h2><ul class="list">' + shown.map(function (c) { return card(c, today); }).join('') + '</ul>' +
+      (list.length > 3 ? '<button class="btn more" type="button" data-more="' + sec + '">' + esc(expanded[sec] ? W.showFewer : W.seeAll + ' (' + list.length + ')') + '</button>' : '') + '</section>';
+  }
+  function liveNotice(tz) {
+    var a = data.announcement; if (!a) return null;
+    if (a.ends_at && new Date(a.ends_at) <= new Date()) return null;   // it ends by itself, even if the page stays open
+    return a;
+  }
+  function noticeKey(n) { return n ? n.message + '|' + n.urgent + '|' + n.ends_at : ''; }
+  function crest() { return '<svg class="crest" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 4v32M11 14h18"/><circle cx="20" cy="20" r="17" stroke-width="1.4" opacity=".6"/></svg>'; }
+  function render() {
+    var o = data.org, tz = o.timezone || 'Europe/London', today = todayIn(tz), n = liveNotice(tz);
+    lastNoticeKey = noticeKey(n);
+    document.title = o.name;
+    var html = '<header class="mast gutter"><div class="wrap"><div class="id">' + crest() + '<h1>' + esc(o.name) + '</h1>' +
+      (o.contact_email ? '<button class="mail" type="button" data-copy="' + esc(o.contact_email) + '" aria-label="Copy email address ' + esc(o.contact_email) + '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg><span>' + esc(W.emailChip) + '</span></button>' : '') +
+      '</div></div></header>';
+    if (n) {
+      html += n.urgent
+        ? '<button class="notices urgent gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.urgentNotice + ': ' + n.message + '. Tap to read.') + '"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:var(--warn)"><path d="M12 3 2 20h20L12 3ZM12 10v5M12 18v.01"/></svg><span class="txt"><span class="lab">' + esc(W.urgentLabel) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>'
+        : '<button class="notices gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.notice + ': ' + n.message + '. Tap to read.') + '"><span class="txt"><span class="lab">' + esc(W.notices) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>';
+    }
+    html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '');
+    var doors = (data.links || []).map(function (l, i) {
+      var h = safeHref(l.url); if (!h) return '';
+      return '<a class="door" href="' + esc(h) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[W.icons[i] || 'link'] + '</svg></span><span><h2>' + esc(l.label) + '</h2>' + (l.sub ? '<p>' + esc(l.sub) + '</p>' : '') + '</span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>';
+    }).join('');
+    if (doors) html += '<nav class="doors" aria-label="Services">' + doors + '</nav>';
+    var s1 = section('involved', today), s2 = section('registration', today);
+    html += s1 + s2;
+    if (!s1 && !s2) html += '<div class="empty sect">' + esc(W.nothing) + '</div>';
+    html += saveCard();
+    var info = '<strong>' + esc(o.name) + '</strong>' + (o.address ? ' · ' + esc(o.address) : '');
+    html += '<section class="info" aria-label="' + esc(W.office) + '"><div>' + info + '</div>' +
+      (o.hours ? '<div><strong>' + esc(W.office) + '</strong> · ' + esc(o.hours) + '</div>' : '') +
+      (o.phone ? '<div>' + esc(W.phone) + ' <span style="user-select:all">' + esc(o.phone) + '</span></div>' : '') +
+      (o.contact_email ? '<div>' + esc(W.email) + ' <span style="user-select:all">' + esc(o.contact_email) + '</span></div>' : '') + '</section></div></main>';
+    html += '<div class="sheet" id="sheet" hidden><div class="sheet-card" id="sheetCard" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1"><div class="sheet-head"><h2 id="sheetTitle">' + esc(n && n.urgent ? W.urgentNotice : W.notices) + '</h2><button class="btn" type="button" id="sheetClose">Close</button></div><div id="sheetBody" style="display:grid;gap:18px">' + (n ? noticeHtml(n, tz) : '') + '</div></div></div>';
+    var openSheet = !$('sheet') ? false : !$('sheet').hidden;   // a refresh must not close a notice somebody is reading
+    $('app').innerHTML = html;
+    if (openSheet && n) openSheetNow();
+    afterRender();
+  }
+  function noticeHtml(a, tz) {
+    var link = a.link_url ? safeHref(a.link_url) : '';
+    return '<div class="note' + (a.urgent ? ' urgent' : '') + '"><b class="k">' + esc(a.urgent ? W.urgentNotice : W.notice) + '</b><p>' + esc(a.message) + '</p>' +
+      (link ? '<a class="more" href="' + esc(link) + '">' + esc(W.more) + '</a>' : '') + (a.ends_at ? '<span class="until">Until ' + esc(fmtWhen(a.ends_at, tz)) + '</span>' : '') + '</div>';
+  }
+
+  // ---- keep this on your phone
+  function phone() { var ua = navigator.userAgent || ''; return /iPhone|iPad|iPod/i.test(ua) ? 'ios' : /Android/i.test(ua) ? 'android' : 'desktop'; }
+  function standalone() { try { return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true; } catch (e) { return false; } }
+  function savedFlag() { try { return localStorage.getItem('gw_saved_' + slug) === '1'; } catch (e) { return false; } }
+  function saveCard() {
+    if (standalone() || savedFlag()) return '';
+    return '<section class="save" aria-label="' + esc(W.saveTitle) + '"><div class="hd"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 8v6m-3-3 3 3 3-3"/></svg><div><b>' + esc(W.saveTitle) + '</b><span>' + esc(W.saveSub) + '</span></div></div>' +
+      '<button class="btn solid" type="button" id="saveOpen" aria-expanded="' + saveShown + '" aria-controls="saveBody">' + esc(saveShown ? W.saveHide : W.saveShow) + '</button>' +
+      '<div id="saveBody"' + (saveShown ? '' : ' hidden') + ' style="display:' + (saveShown ? 'grid' : 'none') + ';gap:14px"><ol>' + W.steps[phone()].map(function (s) { return '<li>' + s + '</li>'; }).join('') + '</ol><div class="save-actions">' +
+      (deferred ? '<button class="btn solid" type="button" id="installBtn">' + esc(W.saveInstall) + '</button>' : '') +
+      '<button class="btn" type="button" id="copyLink">' + esc(W.saveCopy) + '</button><button class="btn" type="button" id="saveDone">' + esc(W.saveDone) + '</button></div></div></section>';
+  }
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferred = e; if (data) render(); });
+
+  // ---- the notice, opened
+  var lastFocus = null;
+  function openSheetNow() { var s = $('sheet'); if (!s) return; s.hidden = false; document.body.style.overflow = 'hidden'; $('sheetCard').focus(); }
+  function closeSheet() { var s = $('sheet'); if (!s) return; s.hidden = true; document.body.style.overflow = ''; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+
+  function afterRender() { /* nothing to wire: one delegated click handler below handles everything */ }
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var c = t.closest('[data-copy]');
+    if (c) { var text = c.getAttribute('data-copy'); try { navigator.clipboard.writeText(text).then(function () { say(W.copied + text); }, function () { say(W.email + ': ' + text); }); } catch (x) { say(W.email + ': ' + text); } return; }
+    if (t.closest('#notices')) { lastFocus = document.activeElement; openSheetNow(); return; }
+    if (t.closest('#sheetClose') || t.id === 'sheet') { closeSheet(); return; }
+    var mo = t.closest('[data-more]'); if (mo) { var k = mo.getAttribute('data-more'); expanded[k] = !expanded[k]; render(); return; }
+    if (t.closest('#saveOpen')) { var b = $('saveBody'), open = b.hidden; saveShown = open; b.hidden = !open; b.style.display = open ? 'grid' : 'none'; $('saveOpen').setAttribute('aria-expanded', open); $('saveOpen').textContent = open ? W.saveHide : W.saveShow; return; }
+    if (t.closest('#saveDone')) { try { localStorage.setItem('gw_saved_' + slug, '1'); } catch (e2) { /* private window: it simply stays */ } render(); return; }
+    if (t.closest('#copyLink')) { var u = location.href; try { navigator.clipboard.writeText(u).then(function () { say(W.copiedLink); }, function () { say('Link: ' + u); }); } catch (x2) { say('Link: ' + u); } return; }
+    if (t.closest('#installBtn') && deferred) { deferred.prompt(); return; }
+    if (t.closest('#retry')) { load(); return; }
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('sheet') && !$('sheet').hidden) closeSheet(); });
+
+  // ---- loading, and keeping the page current while it stays open
+  function status(title, help, retry) {
+    $('app').innerHTML = '<main class="gutter"><div class="wrap"><div class="status"><h1>' + esc(title) + '</h1><p>' + esc(help) + '</p>' + (retry ? '<button class="btn solid" type="button" id="retry">' + esc(W.retry) + '</button>' : '') + '</div></div></main>';
+  }
+  function take(r) {
+    if (!r) { if (!data) status(W.failed, W.failedHelp, true); return; }
+    if (r.ok && r.d && r.d.sections) { data = r.d; saved = !!r.saved; render(); return; }
+    if (r.status === 404) { data = null; status(W.unavailable, W.unavailableHelp, false); return; }
+    if (!data) status(W.failed, W.failedHelp, true);
+  }
+  function load() {
+    if (!slug) { status(W.unavailable, W.unavailableHelp, false); return Promise.resolve(); }
+    var p = window.__gwP.p; window.__gwP.p = null;
+    if (!p) {
+      p = fetch('/api/public_gateway', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug }) })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, d: d, saved: r.headers.get('X-Gateway-Saved') === '1' }; }); })
+        .catch(function () { return null; });
+    }
+    return p.then(take);
+  }
+  if (!data && $('app')) status(W.loading, '', false);
+  load();
+  // The page re-reads itself now and then, so a new notice appears and an old one goes without anybody touching it.
+  setInterval(function () { if (data && !document.hidden && noticeKey(liveNotice()) !== lastNoticeKey) render(); }, 30000);   // a notice reaching its end time comes down on its own
+  setInterval(function () { if (!document.hidden && data) load(); }, 120000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && data) load(); });
+
+  // ---- a service worker of its own, for this part of the site only, so the page opens with no signal
+  if ('serviceWorker' in navigator) { window.addEventListener('load', function () { navigator.serviceWorker.register('/go/sw.js', { scope: '/go/' }).catch(function () { /* optional */ }); }); }
+})();
+</script>
+</body>
+</html>

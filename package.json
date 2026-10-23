@@ -5,5 +5,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "bcryptjs": "^2.4.3"
+  },
+  "scripts": {
+    "test": "node --test \"test/gateway/*.test.js\""
   }
 }

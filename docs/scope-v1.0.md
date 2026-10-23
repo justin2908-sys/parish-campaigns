@@ -1304,3 +1304,39 @@ where **the person gives their details first**. Replaces Jotform (the person and
   `public_find_registrations`, `registration_forms`, `registration_list`, `registration_get`, `registration_file`,
   `registration_decide`, `registrations_export`, `set_registration_form`, `set_registration_places`. Tables `registrations`,
   `registration_files`; function `register_claim` (takes the number and a place atomically); `campaigns.form_def`, `campaigns.places`.
+
+## 56. Parish Gateway, Phase 1: one public page per organisation — 2026-10-23 (on dev; preview only; OFF until switched on)
+
+Specification: `docs/parish-gateway-spec-v1.1.md`; reference design `docs/prototype/parish-gateway-v1.9.html`.
+
+- **What it is.** `/go/<address>`: three permanent links (large buttons), **Get Involved** and **Registrations** (live lists filled from
+  Campaigns plus items added by hand, three cards then "See all (n)"), and a **Notices bar** for one timed notice. Same site, same login.
+- **Off by default, additive only.** `organizations.gateway_enabled` is false for everyone and `campaigns.listed_on_gateway` is false for
+  every campaign until someone switches them on. Migration `20261023000000_gateway.sql` only adds (6 columns on `organizations`/`campaigns`,
+  4 tables: `gateway_links`, `gateway_announcements`, `gateway_items`, `gateway_order`) and is safe to run twice. No personal data is held,
+  so the nightly retention job ignores these tables. St. Vincent De Paul is given the address `svp-osterley`; its page stays off and its
+  three links are typed in by the admin.
+- **What is listed.** Only a campaign with a working public page: a registration form, or tickets sold online (a raffle with an online
+  page counts; a campaign whose tickets are only sold in person never does). It must be switched on, active, not draft, not in the Recycle
+  Bin and between its opening and closing days **in the organisation's time zone** (`organizations.timezone`, default Europe/London;
+  the gateway has its own date helper, `ukToday()` and `campaignOpenState()` are untouched). A raffle never shows tickets sold, or left.
+  A full registration or event shows "Full"; with a waiting list it shows "Join waiting list" (and stays that way while anyone is queuing).
+- **Who may do what.** SuperAdmin, Admin, Finance and Priest change the page's content (links, notice, office phone and hours, what is on
+  the page and in what order, and switching a campaign on or off the page). Only the SuperAdmin changes the page address (confirmation
+  needed when an address is already in use) or the name shown on it, or switches the page on or off.
+- **Order.** Automatic = closing soonest. Drag or Up/Down puts one section into Custom order (never moves an item to the other section);
+  "Back to automatic" clears it; a new manual item lands at the top of a custom order; expired items drop out by themselves.
+- **Notice.** One message (200 characters), optional https link, start and end in the organisation's time zone, urgent flag. It appears
+  and ends by itself, and the newest wins. A notice with no end warns. Urgent shows its message in the bar.
+- **Checks on what is typed** (server-side): web addresses must be https with a real host; control characters are stripped; lengths are
+  enforced; manual items need an end date; the page address is 3 to 40 lowercase letters, digits, hyphens, and not `api`, `admin`, `go`,
+  `assets` or `fonts`. The page shows every piece of text as text, never as HTML.
+- **Offline.** `public/go/sw.js` (scope `/go/` only; `public/sw.js` is untouched) keeps the last good page and the last good answer, and
+  says plainly that it is showing a saved copy.
+- **Left for later phases:** branding and logos, the vertical setting, the daily "today" line, link icons, a Next Mass line (the times
+  live in the Hall Booking build), custom domains, an Office role, a platform-owner onboarding screen.
+- **API.** Public: `public_gateway` (takes only the address). Admin: `gateway_get`, `gateway_save_links`, `gateway_save_announcement`,
+  `gateway_clear_announcement`, `gateway_item_save`, `gateway_item_delete`, `gateway_item_set_listed`, `gateway_set_order`,
+  `campaign_set_listed`, `gateway_set_details`, `gateway_set_address`, `gateway_set_enabled`.
+- **Tests.** `node --test "test/gateway/*.test.js"` (server checks against an in-memory stand-in database, no installs) and
+  `node test/gateway/ui-check.js` (real browser checks and screenshots, needs Edge or Chrome).
