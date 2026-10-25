@@ -10,6 +10,7 @@ function createFakeDb(clock) {
   const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']] };
   const defaults = { gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }) };
   let seq = 0;
+  const faults = [];   // { table, op, when? }: the next matching write fails once, so tests can see what the code does when the database refuses
   const clone = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x)));
 
   const get = (row, col) => {
@@ -50,13 +51,17 @@ function createFakeDb(clock) {
     const project = (row) => {
       if (st.cols === '*') return clone(row);
       const names = st.cols.split(',').map(s => s.trim()).filter(s => s && !s.includes('('));
-      const out = {}; for (const n of names) out[n] = clone(row[n]);
-      if (st.cols.includes('campaigns!inner(org_id)')) { const c = T('campaigns').find(x => x.id === row.campaign_id); out.campaigns = c ? { org_id: c.org_id } : null; }   // the one embedded join the payment code uses
+      const out = st.cols.trim().startsWith('*') ? clone(row) : {};   // "*, campaigns!inner(...)" means every column plus the join
+      for (const n of names) if (n !== '*') out[n] = clone(row[n]);
+      const em = /campaigns!inner\(([^)]*)\)/.exec(st.cols);   // the embedded join the payment code uses: campaigns!inner(org_id, name, ...)
+      if (em) { const c = T('campaigns').find(x => x.id === row.campaign_id); out.campaigns = c ? Object.fromEntries(em[1].split(',').map(s => s.trim()).filter(Boolean).map(k => [k, c[k]])) : null; }
       if (st.cols.includes('ticket_blocks!inner(type)')) { const b = T('ticket_blocks').find(x => x.id === row.block_id); out.ticket_blocks = b ? { type: b.type } : null; }
       return out;
     };
     function exec() {
       const rows = T(table);
+      const fi = faults.findIndex(x => x.table === table && x.op === st.op && (!x.when || x.when(st.patch || st.rows)));
+      if (fi >= 0) { faults.splice(fi, 1); return { data: null, error: { code: 'XX000', message: 'injected failure' } }; }
       if (st.op === 'insert') {
         const made = [];
         for (const r of st.rows) {
@@ -141,10 +146,22 @@ function createFakeDb(clock) {
       e.n += 1; return { data: e.n, error: null };
     }
     if (name === 'rate_peek') { const e = hits.get(a.p_key); return { data: e ? e.n : 0, error: null }; }
+    if (name === 'claim_lowest_available_tickets') {
+      const free = T('tickets').filter(t => t.block_id === a.p_block_id && t.status === 'unsold').sort((x, y) => x.ticket_number - y.ticket_number).slice(0, a.p_tier_ids.length);
+      if (free.length !== a.p_tier_ids.length) return { data: null, error: { message: 'CLAIM_FAILED: not enough' } };
+      free.forEach((t, i) => Object.assign(t, { tier_id: a.p_tier_ids[i], status: a.p_status, payment_id: a.p_payment_id, sold_by: a.p_sold_by, sold_at: new Date(clock.now()).toISOString() }));
+      return { data: free.map(t => ({ ticket_number: t.ticket_number })), error: null };
+    }
+    if (name === 'claim_specific_tickets') {
+      const rows = a.p_items.map(it => T('tickets').find(t => t.campaign_id === a.p_campaign_id && t.ticket_number === it.ticket_number && t.status === 'unsold'));
+      if (rows.some(r => !r)) return { data: null, error: { message: 'CLAIM_FAILED' } };
+      rows.forEach((t, i) => Object.assign(t, { tier_id: a.p_items[i].tier_id, status: a.p_status, payment_id: a.p_payment_id, sold_by: a.p_sold_by, sold_at: new Date(clock.now()).toISOString() }));
+      return { data: null, error: null };
+    }
     return { data: null, error: null };   // rate_reset, rate_prune
   };
 
-  return { client: { from: builder, rpc }, tables, T };
+  return { client: { from: builder, rpc }, tables, T, faults };
 }
 
 module.exports = { createFakeDb };
