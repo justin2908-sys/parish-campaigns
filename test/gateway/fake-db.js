@@ -43,13 +43,17 @@ function createFakeDb(clock) {
         case 'lt': return v !== null && v !== undefined && v < f.val;
         case 'gt': return v !== null && v !== undefined && v > f.val;
         case 'is': return f.val === null ? (v === null || v === undefined) : v === f.val;
+        case 'notnull': return v !== null && v !== undefined;
         default: throw new Error('fake db: unsupported filter ' + f.op);
       }
     });
     const project = (row) => {
       if (st.cols === '*') return clone(row);
       const names = st.cols.split(',').map(s => s.trim()).filter(s => s && !s.includes('('));
-      const out = {}; for (const n of names) out[n] = clone(row[n]); return out;
+      const out = {}; for (const n of names) out[n] = clone(row[n]);
+      if (st.cols.includes('campaigns!inner(org_id)')) { const c = T('campaigns').find(x => x.id === row.campaign_id); out.campaigns = c ? { org_id: c.org_id } : null; }   // the one embedded join the payment code uses
+      if (st.cols.includes('ticket_blocks!inner(type)')) { const b = T('ticket_blocks').find(x => x.id === row.block_id); out.ticket_blocks = b ? { type: b.type } : null; }
+      return out;
     };
     function exec() {
       const rows = T(table);
@@ -91,6 +95,7 @@ function createFakeDb(clock) {
       for (const o of st.orders.slice().reverse()) {
         out.sort((a, b) => { const x = get(a, o.col), y = get(b, o.col); const c = x === y ? 0 : (x === undefined || x === null) ? -1 : (y === undefined || y === null) ? 1 : x < y ? -1 : 1; return o.asc ? c : -c; });
       }
+      if (st.range) out = out.slice(st.range[0], st.range[1] + 1);
       if (st.limit !== null) out = out.slice(0, st.limit);
       if (st.opts.count) return { data: st.opts.head ? null : out.map(project), count: hit.length, error: null };
       return finish(out, true);
@@ -117,8 +122,10 @@ function createFakeDb(clock) {
       lt: (col, val) => (st.filters.push({ op: 'lt', col, val }), api),
       gt: (col, val) => (st.filters.push({ op: 'gt', col, val }), api),
       is: (col, val) => (st.filters.push({ op: 'is', col, val }), api),
+      not: (col, op, val) => { if (op === 'is' && val === null) st.filters.push({ op: 'notnull', col }); else throw new Error('fake db: unsupported not()'); return api; },
       order: (col, o) => (st.orders.push({ col, asc: !(o && o.ascending === false) }), api),
       limit: (n) => ((st.limit = n), api),
+      range: (a, b) => ((st.range = [a, b]), api),
       maybeSingle: () => ((st.single = 'maybe'), api),
       single: () => ((st.single = 'one'), api),
       then(onF, onR) { try { return Promise.resolve(exec()).then(onF, onR); } catch (e) { return Promise.reject(e).then(onF, onR); } },

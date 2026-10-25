@@ -1340,3 +1340,26 @@ Specification: `docs/parish-gateway-spec-v1.1.md`; reference design `docs/protot
   `campaign_set_listed`, `gateway_set_details`, `gateway_set_address`, `gateway_set_enabled`.
 - **Tests.** `node --test "test/gateway/*.test.js"` (server checks against an in-memory stand-in database, no installs) and
   `node test/gateway/ui-check.js` (real browser checks and screenshots, needs Edge or Chrome).
+
+## 57. A payment link that is paid after it looked dead — found 2026-10-25 (Walsingham W10/W11); on dev; preview only
+
+**What happened.** Two people paid real money (SumUp TAAA6RM3KPB £44 at 06:54 and TAAA6RRECK6 £32 at 12:28 on 5 Oct) for the same tickets W10
+and W11. The first link was made at 06:49. A declined or abandoned first card attempt made SumUp report the checkout as FAILED; we took
+that as final, marked the payment failed and released the tickets — but the same link can still be paid by a retry, and was, at 06:54.
+Our code then turned the failed payment into "paid" without checking that its tickets still existed, and the second buyer was sold the
+same numbers. A £2 raffle payment (ticket 15186, 11 Oct) went the same way; it was put right by hand. A sweep of all payments found only these two.
+
+**The fixes (`syncCheckout`).**
+1. A FAILED report no longer ends a link that is still inside its 35 minutes: the tickets stay held and the buyer can retry. After 35
+   minutes the link is cancelled at SumUp first (so it can never be paid afterwards) and only then written off. EXPIRED still releases at once.
+2. If a payment turns out to be paid after its tickets were released, the same numbers are put back if still unsold. If somebody else now
+   holds any of them the payment stays "paid" (the money is real), the other buyer is not disturbed, and the payment is flagged.
+3. **Needs Attention** has a red card at the top, "Paid, but the tickets are gone", with the buyer, amount, SumUp code and the numbers
+   wanted. An Admin refunds it in SumUp (then records it under Sales) or gives the buyer new numbers, then presses **Sorted**.
+   Stored in `payments.attention_note` (migration `20261025000000_payment_attention_note.sql`: one nullable column). API:
+   `list_incomplete_payments` now also returns `paid_without_tickets`; new action `payment_attention_done`.
+
+**Seen on screen while a link is waiting:** a seller whose buyer's card is declined now sees "awaiting payment" for up to 35 minutes rather
+than "expired" straight away, because the buyer may still retry.
+
+Tests: `test/gateway/payment-sync.test.js` replays the W10/W11 sequence against stood-in SumUp replies.

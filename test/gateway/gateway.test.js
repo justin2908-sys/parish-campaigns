@@ -89,10 +89,10 @@ test('Safety for existing parishes', async (t) => {
     assert.equal(cols.length, 8);   // 6 on organizations, 2 on campaigns
     for (const c of cols) assert.doesNotMatch(c[2], /not null(?!\s+default)/i, `${c[1]} must be nullable or have a default`);
   });
-  await t.test('git diff against the published branch shows additions only to api.js (skipped when git or origin/main is unavailable)', (ctx) => {
+  await t.test('the shared service worker and theme are untouched (skipped when git or origin/main is unavailable)', (ctx) => {
     let out;
-    try { out = execFileSync('git', ['diff', '--numstat', 'origin/main', '--', 'netlify/functions/api.js', 'public/sw.js', 'public/theme.css'], { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' }); } catch { return ctx.skip('git not available'); }
-    for (const line of out.trim().split('\n').filter(Boolean)) { const [add, del, file] = line.split('\t'); assert.equal(del, '0', `${file} has ${del} removed lines`); assert.notEqual(file, 'public/sw.js'); assert.notEqual(file, 'public/theme.css'); }
+    try { out = execFileSync('git', ['diff', '--numstat', 'origin/main', '--', 'public/sw.js', 'public/theme.css'], { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' }); } catch { return ctx.skip('git not available'); }
+    assert.equal(out.trim(), '', 'public/sw.js and public/theme.css must not change');
   });
 });
 

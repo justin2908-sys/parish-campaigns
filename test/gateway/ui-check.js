@@ -241,6 +241,15 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   await ev(`${quizBtn}.click()`); await waitFor(`document.getElementById('toast').textContent === '✓ Removed'`);
   check('the second tap removes it, with a visible message', (await toastText()) === '✓ Removed' && !T('gateway_items').some(i => i.label === 'Parish Quiz Night'));
 
+  // Needs Attention: a payment that is paid but whose tickets were given away
+  T('payments').push({ id: 'flag1', campaign_id: 'walsingham-pilgrimage', method: 'link', status: 'paid', amount: 44, created_at: new Date().toISOString(), sold_at: new Date().toISOString(), payer_name: 'J Example', contact_value: 'j@example.org', sumup_transaction_code: 'TAAA6RM3KPB',
+    ticket_snapshot: [{ tier_id: 'x', block_id: 'b-walsingham-pilgrimage', ticket_number: 10 }, { tier_id: 'x', block_id: 'b-walsingham-pilgrimage', ticket_number: 11 }], attention_note: 'Paid at SumUp (TAAA6RM3KPB), but W10, W11 had already been given to someone else. Refund this payment, or give the buyer new ticket numbers.' });
+  await ev(`setAdminTab('attention'); 'ok'`);
+  check('Needs Attention shows a red "Paid, but the tickets are gone" card with the payer, amount, SumUp code and what to do', await waitFor(`document.getElementById('adminContent').textContent.includes('Paid, but the tickets are gone') && document.getElementById('adminContent').textContent.includes('TAAA6RM3KPB') && document.getElementById('adminContent').textContent.includes('Refund this payment')`));
+  await shot('attention-390-light-admin', true);
+  await click('#adminContent button', 'Sorted'); await waitFor(`document.getElementById('toast').textContent.includes('sorted')`);
+  check('"Sorted" says "✓ Marked as sorted" and the card goes', (await toastText()) === '✓ Marked as sorted' && (await waitFor(`!document.getElementById('adminContent').textContent.includes('Paid, but the tickets are gone')`)) && T('payments').find(p => p.id === 'flag1').attention_note === null);
+
   // the SuperAdmin
   await loginAs(sessions.sa, { id: 'uA-sa', name: 'superadmin', role: 'superadmin', org_id: 'org-A', mobile: '07000000001' });
   await ev(`setAdminTab('parishpage'); 'ok'`);
