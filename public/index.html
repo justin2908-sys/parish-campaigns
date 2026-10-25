@@ -2655,9 +2655,17 @@ async function doCashRecon() {
 async function renderAttentionTab() {
   const seq = adminSeq;
   if (!state.org) { try { state.org = (await call('get_org_settings')).organization; } catch {} } // for the church name + thank-you in reminders
-  const { payments } = await call('list_incomplete_payments', { campaign_id: campaignFilter || undefined });
+  const { payments, paid_without_tickets: paidNoTickets = [] } = await call('list_incomplete_payments', { campaign_id: campaignFilter || undefined });
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
-  el.innerHTML = `<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
+  // Money that has arrived for tickets somebody else now holds: the most important thing on this screen.
+  const lostHtml = paidNoTickets.length ? `<div class="card" style="border:2px solid var(--bad)"><h3 style="margin-top:0;color:var(--bad)">Paid, but the tickets are gone</h3>
+    <p class="muted">These buyers have paid, but their tickets had already been given to someone else. Refund them in SumUp (then record it under Sales), or give them new numbers — then press “Sorted”.</p>
+    ${paidNoTickets.map(p => `<div style="border-top:1px solid var(--line);padding:12px 0">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.payer_name||'(name removed)')}</b><span class="badge bad">paid · no tickets</span></div>
+      <div class="muted">${esc(p.contact_value||'(contact removed)')} · £${Number(p.amount).toFixed(2)} · ${esc(p.sumup_transaction_code||'')} · wanted ${p.tickets.map(esc).join(' · ')}</div>
+      <div class="hint">${esc(p.note)}</div>
+      <button class="small" onclick="doAttentionDone('${p.id}')">Sorted</button></div>`).join('')}</div>` : '';
+  el.innerHTML = `${lostHtml}<div class="card"><h3 style="margin-top:0">Needs Attention</h3>
     <p class="muted">Pay-by-Link sales that haven't been paid. The ticket is with the buyer — chase them on the contact below, or issue a fresh link if it expired.</p>
     ${!payments.length ? '<p class="muted">Nothing needs attention.</p>' : payments.map(p => {
       const msg = `Hello from ${churchName()} — a reminder to please pay £${Number(p.amount).toFixed(2)} for your tickets (${p.tickets.join(' · ')}):\n${p.link_url}\nThis link is valid for 30 minutes from when it was sent — if it has expired, just ask us for a fresh one.\n\n${thankYou()}`;
@@ -2673,6 +2681,10 @@ async function renderAttentionTab() {
       </div>`;
     }).join('')}
   </div>`;
+}
+async function doAttentionDone(paymentId) {
+  try { await call('payment_attention_done', { payment_id: paymentId }); toast('✓ Marked as sorted'); renderAttentionTab(); }
+  catch (e) { toast(e.message, 'error'); }
 }
 async function doAdminChangeContact(paymentId, current) {
   const v = prompt('Type the correct mobile number or email:', current || '');

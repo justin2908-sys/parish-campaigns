@@ -804,6 +804,19 @@ async function syncCheckout(payment) {
   // never be paid afterwards. If SumUp refuses to cancel (it may have been paid a moment ago) we
   // look again before deciding anything.
   const checkoutAgeMin = (Date.now() - Date.parse(data.date || payment.created_at)) / 60000;
+  // A card that is declined, or a payment screen abandoned, makes SumUp report FAILED — but the SAME link can still be paid
+  // by a retry a minute later (seen: a link reported failed, then paid 5 minutes after it was made). So a FAILED report is not
+  // the end while the link is still inside its time: the tickets stay held. Once the link is older than STALE_MINUTES it is
+  // cancelled at SumUp first (so it can never be paid afterwards), and only then does it count as failed.
+  if (data.status === 'FAILED' && payment.status === 'pending' && !paidAtSumup(data)) {
+    if (checkoutAgeMin <= STALE_MINUTES) return payment.status;
+    const cancelled = await cancelSumupCheckout(payment.sumup_checkout_id);
+    if (!cancelled.ok) {
+      const again = await fetch(`https://api.sumup.com/v0.1/checkouts/${payment.sumup_checkout_id}`, { headers: { 'Authorization': `Bearer ${SUMUP_API_KEY}` } });
+      const d2 = await again.json().catch(() => ({}));
+      if (again.ok) data = d2;
+    }
+  }
   if (data.status === 'PENDING' && payment.status === 'pending' && !(data.transactions || []).length && checkoutAgeMin > STALE_MINUTES) {
     const cancelled = await cancelSumupCheckout(payment.sumup_checkout_id);
     if (cancelled.ok) data = { ...data, status: 'EXPIRED' };
@@ -825,7 +838,11 @@ async function syncCheckout(payment) {
       }).eq('id', payment.id);
       return 'void';
     }
+    // Paid after we had already given up on the link (it was marked failed and its online tickets released): put the same
+    // numbers back if nobody has taken them. If somebody has, the money is real and the tickets are gone — say so loudly.
+    const gone = payment.status === 'pending' ? [] : await reclaimSnapshotTickets(payment);
     await supabase.from('payments').update({ status: 'paid', sumup_transaction_code: tx.transaction_code || null, sumup_transaction_id: tx.id || null }).eq('id', payment.id);
+    if (gone.length) await flagPaidWithoutTickets(payment, gone, tx.transaction_code);
     await supabase.from('tickets').update({ status: 'paid' }).eq('payment_id', payment.id);
     await supabase.from('registrations').update({ status: 'submitted' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // a paid registration is now in
     return 'paid';
@@ -842,6 +859,35 @@ async function syncCheckout(payment) {
     return 'failed';
   }
   return payment.status;
+}
+
+// Has SumUp taken the money for this checkout? (Its own status names are "SUCCESSFUL" / "PAID" for a completed card payment.)
+function paidAtSumup(data) {
+  return (data.transactions || []).some(t => ['SUCCESSFUL', 'PAID'].includes(String(t && t.status || '').toUpperCase()));
+}
+// Takes back, for a payment that has just turned out to be paid, the tickets it was for and that were released in between —
+// provided they are still unsold. Returns the ones that could not be put back (somebody else now holds them).
+async function reclaimSnapshotTickets(payment) {
+  const snap = Array.isArray(payment.ticket_snapshot) ? payment.ticket_snapshot : [];
+  if (!snap.length) return [];
+  const { data: held } = await supabase.from('tickets').select('block_id, ticket_number').eq('payment_id', payment.id);
+  const have = new Set((held || []).map(t => `${t.block_id}:${t.ticket_number}`));
+  const lost = [];
+  for (const s of snap) {
+    if (have.has(`${s.block_id}:${s.ticket_number}`)) continue;
+    const { data: got } = await supabase.from('tickets').update({ status: 'paid', tier_id: s.tier_id, payment_id: payment.id, sold_at: payment.sold_at || new Date().toISOString() })
+      .eq('campaign_id', payment.campaign_id).eq('block_id', s.block_id).eq('ticket_number', s.ticket_number).eq('status', 'unsold').is('payment_id', null).select('id');
+    if (!got || !got.length) lost.push(s);
+  }
+  return lost;
+}
+// A payment that is paid but whose tickets now belong to somebody else. It stays "paid" (the money is real) and is put in front
+// of an Admin in Needs Attention until they have refunded it or given the buyer new numbers.
+async function flagPaidWithoutTickets(payment, lost, code) {
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', payment.campaign_id);
+  const label = (s) => `${((blocks || []).find(b => b.id === s.block_id) || {}).number_prefix || ''}${s.ticket_number}`;
+  const note = `Paid at SumUp${code ? ` (${code})` : ''}, but ${lost.map(label).join(', ')} had already been given to someone else. Refund this payment, or give the buyer new ticket numbers.`;
+  await supabase.from('payments').update({ attention_note: note }).eq('id', payment.id);
 }
 
 async function releaseStalePendingLinkPayments() {
@@ -2042,7 +2088,24 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
     tickets: groupTicketsForDisplay(p, tickets, tiers, blocks),
   }));
   await attachRegistrationNumbers(out);
-  return { payments: out };
+  // Paid, but the tickets were given to somebody else while the link looked dead: money received, nothing to show for it.
+  let fq = supabase.from('payments').select('*').eq('status', 'paid').not('attention_note', 'is', null).order('created_at', { ascending: false });
+  fq = campaign_id ? fq.eq('campaign_id', campaign_id) : fq.in('campaign_id', orgCampaignIds);
+  const { data: flagged } = await fq;
+  const paid_without_tickets = (flagged || []).map(p => ({
+    id: p.id, payer_name: p.payer_name, contact_value: p.contact_value, amount: p.amount, created_at: p.created_at, note: p.attention_note,
+    sumup_transaction_code: p.sumup_transaction_code, tickets: groupTicketsForDisplay(p, [], tiers, blocks),
+  }));
+  return { payments: out, paid_without_tickets };
+}
+// An Admin has refunded the payment or given the buyer new numbers: take it off Needs Attention.
+async function paymentAttentionDone(session, { payment_id }) {
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
+  const { data: payment } = await supabase.from('payments').select('id, campaigns!inner(org_id)').eq('id', payment_id).maybeSingle();
+  if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
+  const { error } = await supabase.from('payments').update({ attention_note: null }).eq('id', payment_id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
 }
 
 // A wrong mobile/email typed at the sale: fix it (the link itself is unchanged and, if still live,
@@ -3444,3 +3507,5 @@ exports.handler = async (event) => {
   }
   return res;
 };
+
+Object.assign(actions, { payment_attention_done: (s, b) => paymentAttentionDone(s, b) });
