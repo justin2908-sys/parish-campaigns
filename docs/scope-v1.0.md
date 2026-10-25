@@ -1363,3 +1363,31 @@ same numbers. A £2 raffle payment (ticket 15186, 11 Oct) went the same way; it 
 than "expired" straight away, because the buyer may still retry.
 
 Tests: `test/gateway/payment-sync.test.js` replays the W10/W11 sequence against stood-in SumUp replies.
+
+## 58. Closing the leaks found in the Walsingham audit — 2026-10-26 (on dev; preview only)
+
+After the W10/W11 double sale (§57) the payment code, the database and the live data were audited against the rules that must always
+be true. The data was clean apart from W10/W11; the code had these gaps, now closed:
+
+1. **The books check is real.** The old "integrity check" only confirmed that unsold + paid + held equals the total (always true), so
+   it stayed green while two payments held the same tickets. Overview now shows **✓ The books add up**, or a red **The books need a
+   look** listing: a paid payment that does not hold its tickets; a ticket paid for by two payments; a ticket and its payment
+   disagreeing (paid vs not, sold with no payment, unsold but still pointing at a payment); a card payment with no SumUp code; a link
+   waiting more than 2 hours; an amount that does not match the ticket prices. API `ledger_check` (Admin, SuperAdmin, Finance).
+   "I've dealt with this" marks a payment as reviewed (`attention_done_at/by`, migration `20261026000000_attention_done.sql`); the note
+   stays as the record, and a reviewed payment is not reported again.
+2. **A sale voided and then paid** now raises the same red Needs Attention card (it was only a text note in the void reason).
+3. **A registration whose payment was written off, then paid** gets its place back if one is free; if not, the payment is flagged.
+4. **Resending a link** always closes the old link at SumUp first, even one we had already written off, so a buyer can never be
+   charged twice. If the old one turns out to have been paid, no new link is made.
+5. **A sale is never left half-saved.** What a sale is for is written down before the SumUp link exists, and every write after it is
+   checked. If one fails the link is closed, the tickets freed and the sale voided (nothing is charged), and the person is told to
+   try again. Same for cash and machine sales.
+6. **Check against SumUp** (Overview): open SumUp's transaction export (CSV); every SumUp transaction code in it is compared with ours.
+   It lists SumUp takings we have not recorded, payments we have recorded as failed/void/pending that SumUp took, and paid card
+   payments of ours that the file does not show. Read in the browser and sent once; nothing from the file is kept. API `sumup_reconcile`.
+
+**Known limits.** Refunds and chargebacks made inside SumUp are not seen by us (refunds are recorded by hand; the SumUp check shows a
+payment that SumUp no longer lists). A late payment is only noticed when someone opens a screen that re-checks pending links, or by
+the SumUp check; a scheduled sweep was not added because every run costs Netlify credits.
+Tests: `test/gateway/books.test.js` and the browser script (`ui-check.js`).

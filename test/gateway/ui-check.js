@@ -248,7 +248,31 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   check('Needs Attention shows a red "Paid, but the tickets are gone" card with the payer, amount, SumUp code and what to do', await waitFor(`document.getElementById('adminContent').textContent.includes('Paid, but the tickets are gone') && document.getElementById('adminContent').textContent.includes('TAAA6RM3KPB') && document.getElementById('adminContent').textContent.includes('Refund this payment')`));
   await shot('attention-390-light-admin', true);
   await click('#adminContent button', 'Sorted'); await waitFor(`document.getElementById('toast').textContent.includes('sorted')`);
-  check('"Sorted" says "✓ Marked as sorted" and the card goes', (await toastText()) === '✓ Marked as sorted' && (await waitFor(`!document.getElementById('adminContent').textContent.includes('Paid, but the tickets are gone')`)) && T('payments').find(p => p.id === 'flag1').attention_note === null);
+  check('"Sorted" says "✓ Marked as sorted" and the card goes', (await toastText()) === '✓ Marked as sorted' && (await waitFor(`!document.getElementById('adminContent').textContent.includes('Paid, but the tickets are gone')`)) && !!T('payments').find(p => p.id === 'flag1').attention_done_at);
+
+  // Overview: the books check and the check against SumUp
+  T('tickets').length = 0; T('payments').length = 0;
+  const camp1 = 'walsingham-pilgrimage', blk1 = 'b-walsingham-pilgrimage';
+  const sale = (id, nums, extra) => { T('payments').push({ id, campaign_id: camp1, method: 'link', status: 'paid', amount: 22 * nums.length, created_at: new Date().toISOString(), sumup_transaction_code: 'TAAA' + id.toUpperCase().padEnd(7, '0').slice(0, 7), sumup_checkout_id: 'co-' + id, ticket_snapshot: nums.map(n => ({ tier_id: 'x', block_id: blk1, ticket_number: n })), ...extra }); };
+  const hold = (id, nums) => nums.forEach(n => T('tickets').push({ id: 'tk' + n, campaign_id: camp1, block_id: blk1, ticket_number: n, status: 'paid', payment_id: id }));
+  sale('ok1', [1, 2]); hold('ok1', [1, 2]);
+  await ev(`setAdminTab('overview'); 'ok'`);
+  check('Overview: a clean set of books says so in green', await waitFor(`document.getElementById('adminContent').textContent.includes('The books add up') && document.getElementById('adminContent').textContent.includes('Checked 1 payments and 2 sold tickets')`));
+  await shot('overview-390-light-clean', true);
+  sale('wa', [10, 11]); sale('wb', [10, 11]); hold('wb', [10, 11]);
+  await ev(`renderOverviewTab(); 'ok'`);
+  check('Overview: W10/W11 shows up in red, in plain words', await waitFor(`document.getElementById('adminContent').textContent.includes('The books need a look') && document.getElementById('adminContent').textContent.includes('holds only 0 of its 2 tickets') && document.getElementById('adminContent').textContent.includes('recorded as paid for by 2 different payments')`));
+  await shot('overview-390-light-problem', true);
+  await click('#adminContent button', "I've dealt with this"); await waitFor(`document.getElementById('toast').textContent.includes('dealt with')`);
+  check('one press of "I\'ve dealt with this" clears both messages and says so', (await toastText()) === '✓ Marked as dealt with' && (await waitFor(`document.getElementById('adminContent').textContent.includes('The books add up')`)) && !!T('payments').find(p => p.id === 'wa').attention_done_at);
+  // the SumUp file
+  const csvPath = require('path').join(OUT, 'sumup-test.csv');
+  fs.writeFileSync(csvPath, ['Date,Transaction ID,Description,Amount,Status', '5 Oct 2026,TAAAOK10000,Walsingham2026 — tickets W1 W2,44.00,Successful', '6 Oct 2026,TAAANEW0001,Walsingham2026 — tickets W20 · Test,22.00,Successful'].join('\n'));
+  const doc = await send('DOM.getDocument', {}); const q = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#suFile' });
+  await send('DOM.setFileInputFiles', { nodeId: q.result.nodeId, files: [csvPath] });
+  await click('#adminContent button', 'Check it');
+  check('Check against SumUp: it lists a SumUp payment we have no record of, and says "✓ Checked"', await waitFor(`document.getElementById('suResult').textContent.includes('SumUp took these, but they are not recorded here') && document.getElementById('suResult').textContent.includes('TAAANEW0001') && document.getElementById('suResult').textContent.includes('2 SumUp transactions read')`));
+  await shot('overview-390-light-sumup', true);
 
   // the SuperAdmin
   await loginAs(sessions.sa, { id: 'uA-sa', name: 'superadmin', role: 'superadmin', org_id: 'org-A', mobile: '07000000001' });

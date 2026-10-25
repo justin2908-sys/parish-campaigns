@@ -137,7 +137,8 @@ test('a payment that arrives after its tickets were released', async (t) => {
     assert.equal((await call('payment_attention_done', { payment_id: 'A' }, { session: other })).status, 404);
     assert.ok(payment('A').attention_note);
     assert.equal((await call('payment_attention_done', { payment_id: 'A' }, { session: AD })).status, 200);
-    assert.equal(payment('A').attention_note, null);
+    assert.ok(payment('A').attention_note, 'the note stays, as the record of what happened');
+    assert.ok(payment('A').attention_done_at && payment('A').attention_done_by);
     const after = await call('list_incomplete_payments', {}, { session: AD });
     assert.equal(after.status, 200, after.raw);
     assert.equal(after.body.paid_without_tickets.length, 0);

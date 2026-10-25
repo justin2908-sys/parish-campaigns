@@ -2546,7 +2546,7 @@ async function doRestoreCampaign(id) { try { await call('restore_campaign', { ca
 async function renderOverviewTab() {
   const seq = adminSeq;
   const { campaigns } = await call('list_campaigns', { include_inactive: true });   // closed campaigns still need their reports
-  const d = await call('dashboard_state', { campaign_id: campaignFilter || undefined });
+  const [d, books] = await Promise.all([call('dashboard_state', { campaign_id: campaignFilter || undefined }), call('ledger_check', { campaign_id: campaignFilter || undefined }).catch(e => ({ error: e.message }))]);
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   const pct = d.total ? Math.round((d.sold / d.total) * 100) : 0;
   const sellerRows = Object.entries(d.sellerBreakdown).sort((a, b) => (b[1].card + b[1].cash_confirmed + b[1].cash_pending) - (a[1].card + a[1].cash_confirmed + a[1].cash_pending));
@@ -2555,7 +2555,8 @@ async function renderOverviewTab() {
       <option value="">All Campaigns</option>
       ${campaigns.map(c=>`<option value="${c.id}" ${campaignFilter===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
     </select></div>
-    ${!d.integrityOk ? `<div class="card"><div class="error">The ticket counts don't add up — tell your developer (integrity check failed).</div></div>` : ''}
+    ${booksCardHtml(books)}
+    ${sumupCardHtml()}
     <div class="card">
       <h3 style="margin-top:0">Tickets</h3>
       <div class="stat"><span>Sold or reserved</span><b>${d.sold} of ${d.total} (${pct}%)</b></div>
@@ -2580,6 +2581,43 @@ async function renderOverviewTab() {
       ${sellerRows.map(([name, s])=>`<tr><td>${esc(name)}</td><td>£${s.card.toFixed(2)}</td><td>£${s.cash_confirmed.toFixed(2)}</td><td>£${s.cash_pending.toFixed(2)}</td><td><b>£${(s.card+s.cash_confirmed+s.cash_pending).toFixed(2)}</b></td></tr>`).join('')}
     </table>`}
     </div>`;
+}
+
+// The books check: does every payment that says it is paid hold its tickets, is any ticket paid for twice, do tickets and payments agree.
+function booksCardHtml(b) {
+  if (b.error) return `<div class="card"><div class="hint">The books check could not run: ${esc(b.error)}</div></div>`;
+  if (b.ok) return `<div class="card" style="border-left:5px solid var(--good)"><b style="color:var(--good)">✓ The books add up</b><div class="muted">Checked ${b.checked.payments} payments and ${b.checked.tickets} sold tickets: every paid payment holds its tickets, no ticket is paid for twice, and tickets and payments agree.</div></div>`;
+  const fixable = ['paid_without_tickets', 'ticket_sold_twice', 'paid_without_code', 'amount_mismatch'];
+  return `<div class="card" style="border:2px solid var(--bad)"><h3 style="margin-top:0;color:var(--bad)">The books need a look</h3>
+    ${b.problems.map(p => `<div style="border-top:1px solid var(--line);padding:10px 0">${esc(p.message)}${p.payment_id && fixable.includes(p.code) ? `<div style="margin-top:6px"><button class="small" onclick="doBooksSorted('${p.payment_id}')">I've dealt with this</button></div>` : ''}</div>`).join('')}
+    <div class="muted">Fix what it describes (refund in SumUp, or give new numbers), then press “I've dealt with this”. It stays on record.</div></div>`;
+}
+async function doBooksSorted(paymentId) {
+  try { await call('payment_attention_done', { payment_id: paymentId }); toast('✓ Marked as dealt with'); renderOverviewTab(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+// Check what SumUp took against what we have. The file is read in this browser and sent once; nothing from it is kept.
+function sumupCardHtml() {
+  return `<div class="card"><h3 style="margin-top:0">Check against SumUp</h3>
+    <p class="muted">In SumUp open <b>Reports</b> and export your transactions as a <b>CSV</b>. Open that file here. It lists anything SumUp took that isn't recorded here, and anything recorded here as paid that SumUp doesn't show. The file isn't kept.</p>
+    <label for="suFile">The SumUp file (CSV)</label><input type="file" id="suFile" accept=".csv,.txt,text/csv,text/plain">
+    <label for="suFrom">The file starts on <span class="muted">(optional, so older payments aren't expected in it)</span></label><input type="date" id="suFrom">
+    <button class="primary" style="margin-top:12px" onclick="doSumupCheck()">Check it</button><div id="suResult"></div></div>`;
+}
+async function doSumupCheck() {
+  const out = document.getElementById('suResult'), f = document.getElementById('suFile').files[0];
+  if (!f) { toast('Choose the SumUp file first', 'error'); return; }
+  out.innerHTML = '<p class="muted">Reading the file…</p>';
+  try {
+    const r = await call('sumup_reconcile', { text: await f.text(), from: document.getElementById('suFrom').value || undefined }, 60000);
+    const list = (rows, line) => rows.map(x => `<div style="border-top:1px solid var(--line);padding:8px 0">${line(x)}</div>`).join('');
+    out.innerHTML = `<p style="margin:12px 0 4px"><b>${r.sumup_codes}</b> SumUp transactions read; <b>${r.matched}</b> match our paid payments${r.other_takings ? `; ${r.other_takings} other takings that aren't pay-by-link sales (card machine, etc.)` : ''}.</p>
+      ${r.ok ? '<div class="info">✓ Everything agrees.</div>' : ''}
+      ${r.not_recorded.length ? `<div class="error"><b>SumUp took these, but they are not recorded here</b>${list(r.not_recorded, x => `<b>${esc(x.code)}</b> — ${esc(x.line)}`)}</div>` : ''}
+      ${r.recorded_as_not_paid.length ? `<div class="error"><b>Recorded here as not paid, but SumUp took the money</b>${list(r.recorded_as_not_paid, x => `<b>${esc(x.code)}</b> — ${esc(x.campaign)}, £${x.amount.toFixed(2)}, recorded as ${esc(x.status)}`)}</div>` : ''}
+      ${r.not_in_sumup.length ? `<div class="hint"><b>Recorded here as paid, but not in the file</b> (if the file doesn't cover these dates, ignore them)${list(r.not_in_sumup, x => `<b>${esc(x.code)}</b> — ${esc(x.campaign)}, £${x.amount.toFixed(2)}, ${esc(new Date(x.created_at).toLocaleDateString('en-GB'))}`)}</div>` : ''}`;
+    toast(r.ok ? '✓ Checked: everything agrees' : '✓ Checked: see what needs a look');
+  } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
 // ---- Sales tab ----
@@ -2661,7 +2699,7 @@ async function renderAttentionTab() {
   const lostHtml = paidNoTickets.length ? `<div class="card" style="border:2px solid var(--bad)"><h3 style="margin-top:0;color:var(--bad)">Paid, but the tickets are gone</h3>
     <p class="muted">These buyers have paid, but their tickets had already been given to someone else. Refund them in SumUp (then record it under Sales), or give them new numbers — then press “Sorted”.</p>
     ${paidNoTickets.map(p => `<div style="border-top:1px solid var(--line);padding:12px 0">
-      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.payer_name||'(name removed)')}</b><span class="badge bad">paid · no tickets</span></div>
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.payer_name||'(name removed)')}</b><span class="badge bad">${p.status === 'void' ? 'paid after being voided' : 'paid · no tickets'}</span></div>
       <div class="muted">${esc(p.contact_value||'(contact removed)')} · £${Number(p.amount).toFixed(2)} · ${esc(p.sumup_transaction_code||'')} · wanted ${p.tickets.map(esc).join(' · ')}</div>
       <div class="hint">${esc(p.note)}</div>
       <button class="small" onclick="doAttentionDone('${p.id}')">Sorted</button></div>`).join('')}</div>` : '';

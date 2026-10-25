@@ -835,6 +835,8 @@ async function syncCheckout(payment) {
       await supabase.from('payments').update({
         sumup_transaction_code: tx.transaction_code || null, sumup_transaction_id: tx.id || null,
         void_reason: `${payment.void_reason || ''} — WARNING: SumUp shows this checkout WAS PAID (${tx.transaction_code || 'no code'}). Refund needed.`,
+        attention_note: `Paid at SumUp${tx.transaction_code ? ` (${tx.transaction_code})` : ''} after this sale was voided, and its tickets were released. Refund it in SumUp (then record the refund), or give the buyer new ticket numbers.`,
+        attention_done_at: null, attention_done_by: null,
       }).eq('id', payment.id);
       return 'void';
     }
@@ -843,6 +845,7 @@ async function syncCheckout(payment) {
     const gone = payment.status === 'pending' ? [] : await reclaimSnapshotTickets(payment);
     await supabase.from('payments').update({ status: 'paid', sumup_transaction_code: tx.transaction_code || null, sumup_transaction_id: tx.id || null }).eq('id', payment.id);
     if (gone.length) await flagPaidWithoutTickets(payment, gone, tx.transaction_code);
+    if (payment.status === 'failed') await restoreRegistrationAfterLatePayment(payment, tx.transaction_code);
     await supabase.from('tickets').update({ status: 'paid' }).eq('payment_id', payment.id);
     await supabase.from('registrations').update({ status: 'submitted' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // a paid registration is now in
     return 'paid';
@@ -887,7 +890,17 @@ async function flagPaidWithoutTickets(payment, lost, code) {
   const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').eq('campaign_id', payment.campaign_id);
   const label = (s) => `${((blocks || []).find(b => b.id === s.block_id) || {}).number_prefix || ''}${s.ticket_number}`;
   const note = `Paid at SumUp${code ? ` (${code})` : ''}, but ${lost.map(label).join(', ')} had already been given to someone else. Refund this payment, or give the buyer new ticket numbers.`;
-  await supabase.from('payments').update({ attention_note: note }).eq('id', payment.id);
+  await supabase.from('payments').update({ attention_note: note, attention_done_at: null, attention_done_by: null }).eq('id', payment.id);
+}
+// A registration's place goes back the moment its payment is written off. If that payment then turns out to be paid, the person
+// has paid for a place they no longer hold: restore it if it is still free, otherwise flag it for an Admin.
+async function restoreRegistrationAfterLatePayment(payment, code) {
+  const { data: reg } = await supabase.from('registrations').select('id, reg_number, status, decision_note').eq('payment_id', payment.id).maybeSingle();
+  if (!reg || reg.status !== 'cancelled' || reg.decision_note !== 'Payment not completed') return;
+  const { data: c } = await supabase.from('campaigns').select('id, places').eq('id', payment.campaign_id).maybeSingle();
+  const left = c ? await registrationPlacesLeft(c) : 0;
+  if (left === null || left > 0) { await supabase.from('registrations').update({ status: 'submitted', decision_note: null }).eq('id', reg.id); return; }
+  await supabase.from('payments').update({ attention_note: `Paid at SumUp${code ? ` (${code})` : ''}, but the place for registration ${displayRegNumber(reg.reg_number)} had already gone to someone else. Refund this payment, or accept the registration anyway.`, attention_done_at: null, attention_done_by: null }).eq('id', payment.id);
 }
 
 async function releaseStalePendingLinkPayments() {
@@ -1291,24 +1304,30 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
   const ticketSnapshot = soldTicketRows.map(t => ({ ticket_number: t.ticket_number, tier_id: t.tier_id, block_id: t.block_id }));
 
   if (method === 'cash') {
-    await supabase.from('payments').update({ status: 'pending', ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+    const { error: cashErr } = await supabase.from('payments').update({ status: 'pending', ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+    if (cashErr) { await abortSale(payment.id, 'could not record the sale'); throw httpError(500, SALE_NOT_SAVED); }
     return { ok: true, payment_id: payment.id, amount, method: 'cash', contact_value: contact ? contact.value : undefined, tickets: soldTickets };
   }
   if (method === 'machine') {
     // Tapped on the POS machine outside the church and already confirmed there — we're just logging it.
-    await supabase.from('payments').update({ status: 'paid', ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+    const { error: machineErr } = await supabase.from('payments').update({ status: 'paid', ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+    if (machineErr) { await abortSale(payment.id, 'could not record the sale'); throw httpError(500, SALE_NOT_SAVED); }
     return { ok: true, payment_id: payment.id, amount, method: 'machine', contact_value: contact ? contact.value : undefined, tickets: soldTickets };
   }
 
   // link: a fresh SumUp checkout for THIS sale. Its reference is this sale's own id, so every
   // payment SumUp reports can be matched back to exactly these tickets and this buyer.
+  // What this sale is for is written down BEFORE the SumUp link exists, so money can never arrive for a sale we cannot identify.
+  const { error: snapErr } = await supabase.from('payments').update({ ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+  if (snapErr) { await abortSale(payment.id, 'could not record the sale'); throw httpError(500, SALE_NOT_SAVED); }
   const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: campaign.name, ticketNumbers: soldTickets.map(t => t.display_number) });
   if (!created.ok) {
     await releaseSaleTickets(payment.id);
     await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'could not create SumUp payment link' }).eq('id', payment.id);
     throw httpError(502, created.message);
   }
-  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url, ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+  const { error: linkErr } = await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url, ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+  if (linkErr) { await abortSale(payment.id, 'could not save the payment link', created.checkout_id); throw httpError(500, SALE_NOT_SAVED); }   // the link is closed, so nobody can pay for a sale we have no record of
   return { ok: true, payment_id: payment.id, amount, method: 'link', pay_url: created.pay_url, contact_value: contact.value, contact_kind: contact.kind, tickets: soldTickets };
 }
 
@@ -1557,13 +1576,17 @@ async function publicPurchase({ campaign_id, block_id, tier_counts, ticket_numbe
   }));
   const ticketSnapshot = soldTicketRows.map(t => ({ ticket_number: t.ticket_number, tier_id: t.tier_id, block_id: t.block_id }));
 
+  // What this sale is for is written down BEFORE the SumUp link exists, so money can never arrive for a sale we cannot identify.
+  const { error: snapErr } = await supabase.from('payments').update({ ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+  if (snapErr) { await abortSale(payment.id, 'could not record the sale'); throw httpError(500, SALE_NOT_SAVED); }
   const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: campaign.name, ticketNumbers: soldTickets.map(t => t.display_number) });
   if (!created.ok) {
     await releaseSaleTickets(payment.id);
     await supabase.from('payments').update({ status: 'void', voided: true, void_reason: 'could not create SumUp payment link' }).eq('id', payment.id);
     throw httpError(502, created.message);
   }
-  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url, ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+  const { error: linkErr } = await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url, ticket_snapshot: ticketSnapshot }).eq('id', payment.id);
+  if (linkErr) { await abortSale(payment.id, 'could not save the payment link', created.checkout_id); throw httpError(500, SALE_NOT_SAVED); }   // the link is closed, so nobody can pay for a sale we have no record of
   return { ok: true, payment_id: payment.id, pay_url: created.pay_url, amount, tickets: soldTickets };
 }
 
@@ -1705,6 +1728,13 @@ async function publicFindTickets({ campaign_id, contact_value }) {
 
 // Puts a sale's tickets back to unsold — physical and online alike, both are real
 // pre-populated rows now, so releasing one is always a reset, never a delete.
+const SALE_NOT_SAVED = 'Something went wrong saving this sale. Nothing has been charged — please try again.';
+// Undoes a sale that could not be saved completely: closes any SumUp link made for it, frees its tickets, and voids it.
+async function abortSale(payment_id, reason, checkoutId) {
+  if (checkoutId) await cancelSumupCheckout(checkoutId);
+  await releaseSaleTickets(payment_id);
+  await supabase.from('payments').update({ status: 'void', voided: true, void_reason: reason }).eq('id', payment_id);
+}
 async function releaseSaleTickets(payment_id) {
   await supabase.from('tickets').update({ status: 'unsold', tier_id: null, payment_id: null, sold_by: null, sold_at: null, attendee_name: null }).eq('payment_id', payment_id);
 }
@@ -2089,11 +2119,11 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   }));
   await attachRegistrationNumbers(out);
   // Paid, but the tickets were given to somebody else while the link looked dead: money received, nothing to show for it.
-  let fq = supabase.from('payments').select('*').eq('status', 'paid').not('attention_note', 'is', null).order('created_at', { ascending: false });
+  let fq = supabase.from('payments').select('*').in('status', ['paid', 'void']).not('attention_note', 'is', null).is('attention_done_at', null).order('created_at', { ascending: false });
   fq = campaign_id ? fq.eq('campaign_id', campaign_id) : fq.in('campaign_id', orgCampaignIds);
   const { data: flagged } = await fq;
   const paid_without_tickets = (flagged || []).map(p => ({
-    id: p.id, payer_name: p.payer_name, contact_value: p.contact_value, amount: p.amount, created_at: p.created_at, note: p.attention_note,
+    id: p.id, status: p.status, payer_name: p.payer_name, contact_value: p.contact_value, amount: p.amount, created_at: p.created_at, note: p.attention_note,
     sumup_transaction_code: p.sumup_transaction_code, tickets: groupTicketsForDisplay(p, [], tiers, blocks),
   }));
   return { payments: out, paid_without_tickets };
@@ -2103,7 +2133,7 @@ async function paymentAttentionDone(session, { payment_id }) {
   requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const { data: payment } = await supabase.from('payments').select('id, campaigns!inner(org_id)').eq('id', payment_id).maybeSingle();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
-  const { error } = await supabase.from('payments').update({ attention_note: null }).eq('id', payment_id);
+  const { error } = await supabase.from('payments').update({ attention_done_at: new Date().toISOString(), attention_done_by: session.uid }).eq('id', payment_id);   // the note stays, as the record of what happened
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
@@ -2212,6 +2242,11 @@ async function resendPayment(session, { payment_id }) {
       if (again === 'paid') throw httpError(400, 'That payment has just come through — no need to resend.');
       throw httpError(502, `Couldn't cancel the old link at SumUp (HTTP ${cancelled.status}), so no new link was issued — try again in a moment.`);
     }
+  } else if (payment.sumup_checkout_id) {
+    // The old link was written off here, but an older payment may never have had it cancelled at SumUp. Close it for certain
+    // before a second one exists, so the buyer can never be charged twice. (SumUp refusing may only mean it is already closed.)
+    const cancelled = await cancelSumupCheckout(payment.sumup_checkout_id);
+    if (!cancelled.ok && (await syncCheckout(payment)) === 'paid') throw httpError(400, 'That payment has just come through — no need to resend.');
   }
 
   for (const t of currentTickets) {
@@ -3509,3 +3544,141 @@ exports.handler = async (event) => {
 };
 
 Object.assign(actions, { payment_attention_done: (s, b) => paymentAttentionDone(s, b) });
+
+// ---------- Books check, and the check against SumUp ----------
+// The old "integrity check" only confirmed that unsold + paid + held added up to the total, which is always true, so it stayed green
+// while one pair of tickets was paid for twice. This one tests what actually has to be true: every payment that says it is paid
+// holds the tickets it was for, no ticket is paid for twice, a ticket and its payment agree, every card payment has its SumUp
+// code, nothing has been waiting for a card for hours, and what was paid matches what the tickets cost. A payment an Admin has
+// marked "Sorted" is not counted again.
+const LEDGER_PENDING_HOURS = 2;
+async function ledgerCheck(session, { campaign_id } = {}) {
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
+  const { data: orgCampaigns } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id).eq('binned', false);
+  const ids = (orgCampaigns || []).map(c => c.id);
+  if (campaign_id && !ids.includes(campaign_id)) throw httpError(404, 'Campaign not found');
+  const scoped = campaign_id ? [campaign_id] : ids;
+  if (!scoped.length) return { ok: true, problems: [], checked: { payments: 0, tickets: 0 } };
+  const nameOf = Object.fromEntries((orgCampaigns || []).map(c => [c.id, c.name]));
+  const [payments, sold, tiersRes, blocksRes, regsRes, unsoldRes] = await Promise.all([
+    fetchAll(() => supabase.from('payments').select('id, campaign_id, method, status, amount, ticket_snapshot, sumup_transaction_code, created_at, attention_done_at').in('campaign_id', scoped).order('id')),
+    fetchAll(() => supabase.from('tickets').select('id, campaign_id, block_id, ticket_number, status, payment_id').in('campaign_id', scoped).neq('status', 'unsold').order('id')),
+    supabase.from('tiers').select('id, price').in('campaign_id', scoped),
+    supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', scoped),
+    supabase.from('registrations').select('payment_id').not('payment_id', 'is', null).in('campaign_id', scoped),
+    supabase.from('tickets').select('id', { count: 'exact', head: true }).in('campaign_id', scoped).eq('status', 'unsold').not('payment_id', 'is', null),
+  ]);
+  const price = Object.fromEntries((tiersRes.data || []).map(t => [t.id, Number(t.price)]));
+  const prefix = Object.fromEntries((blocksRes.data || []).map(b => [b.id, b.number_prefix || '']));
+  const regPay = new Set((regsRes.data || []).map(r => r.payment_id));
+  const byId = new Map(payments.map(p => [p.id, p]));
+  const live = new Map();
+  for (const t of sold) if (t.payment_id) { if (!live.has(t.payment_id)) live.set(t.payment_id, []); live.get(t.payment_id).push(t); }
+  const snapOf = (p) => (Array.isArray(p.ticket_snapshot) ? p.ticket_snapshot : []);
+  const numLabel = (s) => `${prefix[s.block_id] || ''}${s.ticket_number}`;
+  const gbp = (n) => `£${Number(n).toFixed(2)}`;
+  const problems = [];
+  const add = (code, message, payment_id) => problems.push({ code, message, payment_id: payment_id || null });
+  const few = (arr, n = 4) => arr.slice(0, n).join('; ') + (arr.length > n ? `; and ${arr.length - n} more` : '');
+
+  // 1. paid, but it does not hold the tickets it was for
+  for (const p of payments) {
+    if (p.status !== 'paid' || regPay.has(p.id) || p.attention_done_at) continue;
+    const snap = snapOf(p), held = (live.get(p.id) || []).length;
+    if (snap.length && held < snap.length) add('paid_without_tickets', `${nameOf[p.campaign_id]}: ${gbp(p.amount)} paid${p.sumup_transaction_code ? ` (${p.sumup_transaction_code})` : ''} but it holds only ${held} of its ${snap.length} tickets (${snap.map(numLabel).join(', ')}).`, p.id);
+  }
+  // 2. the same ticket paid for by two payments
+  const owners = new Map();   // "campaign:number" -> paid payments whose snapshot names it
+  for (const p of payments) {
+    if (p.status !== 'paid' || regPay.has(p.id)) continue;
+    for (const s of snapOf(p)) { const k = `${p.campaign_id}:${s.ticket_number}`; if (!owners.has(k)) owners.set(k, []); owners.get(k).push({ p, s }); }
+  }
+  const groups = new Map();
+  for (const [, list] of owners) {
+    const ps = [...new Set(list.map(x => x.p.id))];
+    if (ps.length < 2 || list.some(x => x.p.attention_done_at)) continue;
+    const key = ps.slice().sort().join('+');
+    if (!groups.has(key)) groups.set(key, { ps: list.map(x => x.p).filter((p, i, a) => a.findIndex(q => q.id === p.id) === i), nums: [] });
+    groups.get(key).nums.push(numLabel(list[0].s));
+  }
+  for (const g of groups.values()) {
+    const lacking = g.ps.find(p => (live.get(p.id) || []).length < snapOf(p).length) || g.ps[0];   // the one that has lost its tickets, so one press of "dealt with" clears both messages
+    add('ticket_sold_twice', `${nameOf[g.ps[0].campaign_id]}: ${g.nums.join(', ')} ${g.nums.length > 1 ? 'are' : 'is'} recorded as paid for by ${g.ps.length} different payments (${g.ps.map(p => gbp(p.amount)).join(' and ')}).`, lacking.id);
+  }
+  // 3. a ticket and its payment disagree
+  const a1 = [], a2 = [], a3 = [];
+  for (const t of sold) {
+    const label = `${nameOf[t.campaign_id]} ${prefix[t.block_id] || ''}${t.ticket_number}`;
+    if (!t.payment_id) { a1.push(label); continue; }
+    const p = byId.get(t.payment_id);
+    if (!p) { a1.push(label); continue; }
+    if (t.status === 'paid' && p.status !== 'paid') a2.push(`${label} (payment is ${p.status})`);
+    if (t.status === 'held' && p.status === 'void') a2.push(`${label} (payment is void)`);
+    if (t.status !== 'paid' && p.status === 'paid' && !regPay.has(p.id)) a3.push(`${label} (is ${t.status})`);
+  }
+  if (a1.length) add('ticket_without_payment', `${a1.length} ticket${a1.length > 1 ? 's' : ''} sold or held with no payment behind ${a1.length > 1 ? 'them' : 'it'}: ${few(a1)}.`);
+  if (a2.length) add('ticket_paid_payment_not', `${a2.length} ticket${a2.length > 1 ? 's are' : ' is'} marked sold but ${a2.length > 1 ? 'their payments are' : 'its payment is'} not paid: ${few(a2)}.`);
+  if (a3.length) add('payment_paid_ticket_not', `${a3.length} ticket${a3.length > 1 ? 's' : ''} still not marked paid although the payment was: ${few(a3)}.`);
+  if ((unsoldRes.count || 0) > 0) add('unsold_with_payment', `${unsoldRes.count} unsold ticket${unsoldRes.count > 1 ? 's' : ''} still point${unsoldRes.count > 1 ? '' : 's'} at a payment.`);
+  // 4. a card payment with no SumUp code; 5. waiting for a card for hours; 6. the amount does not match the tickets
+  const noCode = payments.filter(p => p.method === 'link' && p.status === 'paid' && !p.sumup_transaction_code && !p.attention_done_at && !regPay.has(p.id));
+  if (noCode.length) add('paid_without_code', `${noCode.length} card payment${noCode.length > 1 ? 's are' : ' is'} marked paid with no SumUp transaction code: ${few(noCode.map(p => `${nameOf[p.campaign_id]} ${gbp(p.amount)} on ${String(p.created_at).slice(0, 10)}`))}.`, noCode[0].id);
+  const stuck = payments.filter(p => p.method === 'link' && p.status === 'pending' && Date.now() - Date.parse(p.created_at) > LEDGER_PENDING_HOURS * 3600000);
+  if (stuck.length) add('pending_too_long', `${stuck.length} card payment${stuck.length > 1 ? 's have' : ' has'} been waiting for payment for more than ${LEDGER_PENDING_HOURS} hours: ${few(stuck.map(p => `${nameOf[p.campaign_id]} ${gbp(p.amount)}`))}.`, stuck[0].id);
+  const wrong = [];
+  for (const p of payments) {
+    const snap = snapOf(p);
+    if (p.status !== 'paid' || !snap.length || p.attention_done_at || regPay.has(p.id) || snap.some(s => price[s.tier_id] === undefined)) continue;
+    const expected = snap.reduce((sum, s) => sum + price[s.tier_id], 0);
+    if (Math.abs(expected - Number(p.amount)) > 0.005) wrong.push(`${nameOf[p.campaign_id]}: paid ${gbp(p.amount)} for tickets that cost ${gbp(expected)}`);
+  }
+  if (wrong.length) add('amount_mismatch', `${wrong.length} payment${wrong.length > 1 ? 's do' : ' does'} not match the price of ${wrong.length > 1 ? 'their' : 'its'} tickets: ${few(wrong)}.`);
+  return { ok: problems.length === 0, problems, checked: { payments: payments.length, tickets: sold.length } };
+}
+
+// Check what SumUp says it took against what we have. The Admin saves SumUp's own list of transactions (Reports → export as a CSV) and
+// pastes or opens it here. It reads every SumUp transaction code (they look like TAAA6RM3KPB) from the file, whatever its columns, and
+// compares them with the codes on our payments. Nothing from the file is kept.
+const SUMUP_CODE_RE = /\bT(?=[A-Z0-9]{0,9}[0-9])[A-Z0-9]{10}\b/g;
+const maskLine = (line) => String(line).replace(/[^\s,;"]+@[^\s,;"]+/g, '…').replace(/\d{6,}/g, '…').replace(/\s+/g, ' ').trim().slice(0, 160);
+async function sumupReconcile(session, { text, from } = {}) {
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
+  const raw = String(text == null ? '' : text);
+  if (!raw.trim()) throw httpError(400, "That file looks empty. Export SumUp's transactions as a CSV and open that file.");
+  if (raw.length > 3000000) throw httpError(400, 'That file is too large (3 MB at most). Export a shorter date range.');
+  const fromDay = from ? cleanDate(from, 'The start date') : null;
+  const seen = new Map();
+  for (const line of raw.split(/\r?\n/)) {
+    const found = line.match(SUMUP_CODE_RE);
+    if (found) for (const code of found) if (!seen.has(code)) seen.set(code, line);
+  }
+  if (!seen.size) throw httpError(400, "I couldn't find any SumUp transaction codes in that file (they look like TAAA6RM3KPB). Is it SumUp's transaction export, saved as a CSV?");
+  const { data: orgCampaigns } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id);
+  const ids = (orgCampaigns || []).map(c => c.id), nameOf = Object.fromEntries((orgCampaigns || []).map(c => [c.id, c.name]));
+  const { data: ours } = ids.length ? await supabase.from('payments').select('id, campaign_id, method, status, amount, created_at, sumup_transaction_code').in('campaign_id', ids).not('sumup_transaction_code', 'is', null) : { data: [] };
+  const byCode = new Map((ours || []).map(p => [p.sumup_transaction_code, p]));
+  const names = (orgCampaigns || []).map(c => String(c.name).toLowerCase());
+  const looksOnline = (line) => { const l = line.toLowerCase(); return /\btickets?\b|registration|— /.test(l) || names.some(n => n && l.includes(n)); };
+  const matched = [], notRecorded = [], otherTakings = [], recordedAsNotPaid = [];
+  for (const [code, line] of seen) {
+    const p = byCode.get(code);
+    if (p) { if (p.status === 'paid') matched.push(code); else recordedAsNotPaid.push({ code, campaign: nameOf[p.campaign_id], amount: Number(p.amount), status: p.status, line: maskLine(line) }); }
+    else if (looksOnline(line)) notRecorded.push({ code, line: maskLine(line) });
+    else otherTakings.push({ code, line: maskLine(line) });
+  }
+  // paid card payments of ours that SumUp's list does not show (only for dates the list covers)
+  const { data: paidLinks } = ids.length ? await supabase.from('payments').select('id, campaign_id, amount, created_at, sumup_transaction_code').in('campaign_id', ids).eq('method', 'link').eq('status', 'paid') : { data: [] };
+  const notInSumup = (paidLinks || []).filter(p => p.sumup_transaction_code && !seen.has(p.sumup_transaction_code) && (!fromDay || String(p.created_at).slice(0, 10) >= fromDay))
+    .map(p => ({ code: p.sumup_transaction_code, campaign: nameOf[p.campaign_id], amount: Number(p.amount), created_at: p.created_at }));
+  const cap = (a) => a.slice(0, 200);
+  return {
+    sumup_codes: seen.size, matched: matched.length,
+    not_recorded: cap(notRecorded), recorded_as_not_paid: cap(recordedAsNotPaid), not_in_sumup: cap(notInSumup), other_takings: otherTakings.length,
+    ok: !notRecorded.length && !recordedAsNotPaid.length && !notInSumup.length,
+  };
+}
+
+Object.assign(actions, {
+  ledger_check: (s, b) => ledgerCheck(s, b),
+  sumup_reconcile: (s, b) => sumupReconcile(s, b),
+});
