@@ -142,3 +142,27 @@ Each step ships on its own, behind the existing "preview first, publish only whe
 
 In parallel, and not code: trademark and domain search for the name, standard terms + processor agreement + sub-processor list, a first
 price list, and two or three friendly pilot customers (a second parish and one school) to expose what we cannot see from here.
+
+## 5. Decisions and progress
+
+**Decided 2026-10-27 (Justin):** shared system for every customer (a dedicated install only as a premium option); each customer uses its
+own payment account, so money never passes through RAISE; UK only first, raffles for UK organisations only.
+
+**Step 1, started 2026-10-27**
+- **Cross-customer sweep (done).** `test/gateway/isolation.test.js` signs in as each kind of staff member of organisation A and calls
+  every logged-in action (86) with organisation B's ids in every id position, three ways each (1,290 calls), failing if anything of B's
+  is changed or returned. **First run found a real hole:** `list_recent_payments` and `list_incomplete_payments` returned another
+  organisation's payments (payer names, contact details, amounts) to any Admin, Finance or SuperAdmin who supplied that organisation's
+  campaign id (campaign ids appear in every public buy and register link). Nobody outside St.Vincent's has an account yet, so nothing
+  leaked. Fixed (a campaign must belong to the caller's organisation, or the answer is "not found"); the same sweep now passes.
+- **Same sweep, smaller finds.** Four look-ups read every customer's rows (all users' names, all tiers, all ticket blocks, all
+  "disabled campaign" rows) and used only the part they needed. Not a leak, but at about 1,000 rows across all customers the answers
+  would have silently gone wrong (the database returns at most 1,000 rows per request). All four are now limited to the caller's own
+  organisation.
+- **Baseline (done).** `supabase/baseline/live-schema-2026-10-27.sql` is the complete live structure, checked byte for byte against the
+  live database. A new empty database can now be built from the repository.
+- **Still to do in Step 1 (each needs a spending decision from Justin):** a separate staging database and project; paid Supabase and
+  Netlify plans; error monitoring; a backup and restore routine. Then, as database protection in depth, making the database itself
+  refuse cross-organisation reads.
+- **Not covered by the sweep:** the 16 actions open without a login. They are reachable by anyone who holds the right id or contact
+  detail by design; a separate review of exactly what each one returns is still to be done.
