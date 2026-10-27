@@ -327,7 +327,7 @@ async function requireCampaignsInOwnOrg(session, campaignIds) {
 async function listUsers(session) {
   requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const { data: users } = await supabase.from('users').select('id,mobile,name,role,active,created_at').eq('org_id', session.org_id).order('created_at');
-  const { data: disabled } = await supabase.from('user_campaigns').select('user_id, campaign_id');
+  const { data: disabled } = users.length ? await supabase.from('user_campaigns').select('user_id, campaign_id').in('user_id', users.map(u => u.id)) : { data: [] };   // only this organisation's people (the whole table is every customer's)
   const { data: campaigns } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id);
   const out = users.map(u => ({
     ...u,
@@ -1020,7 +1020,7 @@ async function exportCampaignReport(session, { campaign_id }) {
   const { data: blocks } = await supabase.from('ticket_blocks').select('*').eq('campaign_id', campaign_id);
   const tickets = await fetchAll(() => supabase.from('tickets').select('*').eq('campaign_id', campaign_id).order('ticket_number'));
   const payments = await fetchAll(() => supabase.from('payments').select('*').eq('campaign_id', campaign_id).order('id'));
-  const { data: users } = await supabase.from('users').select('id,name');
+  const { data: users } = await supabase.from('users').select('id,name').eq('org_id', session.org_id);
   const userName = (id) => (users.find(u => u.id === id) || {}).name || '';
   const tierName = (id) => (tiers.find(t => t.id === id) || {}).name || '';
   const blockLabel = (id) => (blocks.find(b => b.id === id) || {}).label || '';
@@ -2065,14 +2065,16 @@ async function listRecentPayments(session, { campaign_id } = {}) {
   requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
-  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
+  // A campaign id is in every public link, so it is never proof that it is ours: only this organisation's own campaigns may be asked for.
+  if (campaign_id && !orgCampaignIds.includes(campaign_id)) throw httpError(404, 'Campaign not found');
+  await syncOpenLinkPayments(campaign_id ? [campaign_id] : orgCampaignIds);
   let q = supabase.from('payments').select('*').order('created_at', { ascending: false }).limit(75);
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
-  const { data: users } = await supabase.from('users').select('id,name');
+  const { data: users } = await supabase.from('users').select('id,name').eq('org_id', session.org_id);
   const tickets = await ticketsForPayments(payments.map(p => p.id), 'payment_id, ticket_number, tier_id, block_id, attendee_name');
-  const { data: tiers } = await supabase.from('tiers').select('id, name');
-  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
+  const { data: tiers } = await supabase.from('tiers').select('id, name').in('campaign_id', orgCampaignIds);
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', orgCampaignIds);
   const out = payments.map(p => ({
     id: p.id,
     seller: sellerLabel(p.seller_id, users),
@@ -2098,14 +2100,15 @@ async function listIncompletePayments(session, { campaign_id } = {}) {
   await releaseStalePendingLinkPayments();
   const { data: orgCampaigns } = await supabase.from('campaigns').select('id').eq('org_id', session.org_id).eq('binned', false);
   const orgCampaignIds = orgCampaigns.map(c => c.id);
-  await syncOpenLinkPayments(campaign_id ? [campaign_id].filter(id => orgCampaignIds.includes(id)) : orgCampaignIds);
+  if (campaign_id && !orgCampaignIds.includes(campaign_id)) throw httpError(404, 'Campaign not found');   // see listRecentPayments
+  await syncOpenLinkPayments(campaign_id ? [campaign_id] : orgCampaignIds);
   let q = supabase.from('payments').select('*').eq('method', 'link').in('status', ['pending', 'failed']).order('created_at', { ascending: false });
   q = campaign_id ? q.eq('campaign_id', campaign_id) : q.in('campaign_id', orgCampaignIds);
   const { data: payments } = await q;
-  const { data: users } = await supabase.from('users').select('id,name');
+  const { data: users } = await supabase.from('users').select('id,name').eq('org_id', session.org_id);
   const tickets = await ticketsForPayments((payments || []).map(p => p.id), 'payment_id, ticket_number, tier_id, block_id');
-  const { data: tiers } = await supabase.from('tiers').select('id, name');
-  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix');
+  const { data: tiers } = await supabase.from('tiers').select('id, name').in('campaign_id', orgCampaignIds);
+  const { data: blocks } = await supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', orgCampaignIds);
   const out = (payments || []).map(p => ({
     id: p.id,
     seller: sellerLabel(p.seller_id, users),
@@ -2167,7 +2170,7 @@ async function myOpenLinks(session) {
   const list = payments || [];
   const [tickets, { data: blocks }] = await Promise.all([
     ticketsForPayments(list.map(p => p.id), 'payment_id, ticket_number, block_id'),
-    supabase.from('ticket_blocks').select('id, number_prefix, type'),
+    supabase.from('ticket_blocks').select('id, number_prefix, type').in('campaign_id', Object.keys(campaignName)),
   ]);
   const typeByBlock = Object.fromEntries((blocks || []).map(b => [b.id, b.type]));
   const out = list.map(p => {
