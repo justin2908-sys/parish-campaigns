@@ -207,7 +207,8 @@ create table public.registrations (
   decided_at timestamp with time zone,
   client_ip text,
   client_ref text,
-  created_at timestamp with time zone not null default now()
+  created_at timestamp with time zone not null default now(),
+  party_size integer not null default 1
 );
 
 create table public.ticket_blocks (
@@ -349,6 +350,8 @@ alter table rate_limits add constraint rate_limits_pkey PRIMARY KEY (key);
 alter table registration_files add constraint registration_files_pkey PRIMARY KEY (id);
 
 alter table registrations add constraint registrations_campaign_id_reg_number_key UNIQUE (campaign_id, reg_number);
+
+alter table registrations add constraint registrations_party_size_check CHECK (((party_size >= 1) AND (party_size <= 20)));
 
 alter table registrations add constraint registrations_pkey PRIMARY KEY (id);
 
@@ -680,24 +683,36 @@ CREATE OR REPLACE FUNCTION public.rate_reset(p_key text)
 AS $function$ delete from rate_limits where key = p_key $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.register_claim(p_campaign uuid, p_name text, p_phone text, p_email text, p_answers jsonb, p_agreements jsonb, p_status text, p_payment uuid, p_ip text, p_client_ref text)
+CREATE OR REPLACE FUNCTION public.register_claim(p_campaign uuid, p_name text, p_phone text, p_email text, p_answers jsonb, p_agreements jsonb, p_status text, p_payment uuid, p_ip text, p_client_ref text, p_party integer DEFAULT 1)
  RETURNS TABLE(reg_id uuid, number integer)
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v_places integer; v_next integer; v_used integer; v_id uuid;
+declare v_places integer; v_next integer; v_used integer; v_id uuid; v_party integer := greatest(1, coalesce(p_party, 1));
 begin
   select places into v_places from campaigns where id = p_campaign for update;
   if not found then raise exception 'NO_CAMPAIGN'; end if;
-  select coalesce(max(r.reg_number), 0) + 1, count(*) filter (where r.status not in ('cancelled', 'declined'))
+  select coalesce(max(r.reg_number), 0) + 1, coalesce(sum(r.party_size) filter (where r.status not in ('cancelled', 'declined')), 0)
     into v_next, v_used from registrations r where r.campaign_id = p_campaign;
   if v_places is not null and v_used >= v_places then raise exception 'FULL'; end if;
-  insert into registrations (campaign_id, reg_number, name, phone, email, answers, agreements, status, payment_id, client_ip, client_ref)
-  values (p_campaign, v_next, p_name, p_phone, p_email, p_answers, p_agreements, p_status, p_payment, p_ip, p_client_ref)
+  if v_places is not null and v_used + v_party > v_places then raise exception 'TOO_MANY:%', v_places - v_used; end if;
+  insert into registrations (campaign_id, reg_number, name, phone, email, answers, agreements, status, payment_id, client_ip, client_ref, party_size)
+  values (p_campaign, v_next, p_name, p_phone, p_email, p_answers, p_agreements, p_status, p_payment, p_ip, p_client_ref, v_party)
   returning id into v_id;
   return query select v_id, v_next;
 end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.registration_used(p_campaign uuid)
+ RETURNS integer
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select coalesce(sum(party_size), 0)::int from registrations
+   where campaign_id = p_campaign and status in ('awaiting_payment', 'submitted', 'accepted')
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.retention_pending(p_org uuid, p_days integer DEFAULT 90)

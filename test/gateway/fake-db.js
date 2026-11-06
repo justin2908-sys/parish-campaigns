@@ -8,7 +8,7 @@ function createFakeDb(clock) {
   const T = (n) => (tables[n] = tables[n] || []);
   const joins = { ticket_blocks: 'block_id' };   // tickets.block_id -> ticket_blocks, for "ticket_blocks!inner(type)"
   const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']] };
-  const defaults = { gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }) };
+  const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }) };
   let seq = 0;
   const faults = [];   // { table, op, when? }: the next matching write fails once, so tests can see what the code does when the database refuses
   const clone = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x)));
@@ -157,6 +157,24 @@ function createFakeDb(clock) {
       if (rows.some(r => !r)) return { data: null, error: { message: 'CLAIM_FAILED' } };
       rows.forEach((t, i) => Object.assign(t, { tier_id: a.p_items[i].tier_id, status: a.p_status, payment_id: a.p_payment_id, sold_by: a.p_sold_by, sold_at: new Date(clock.now()).toISOString() }));
       return { data: null, error: null };
+    }
+    if (name === 'registration_used') {   // same rule as the SQL function: places held by registrations that are not declined or cancelled
+      const n = T('registrations').filter(r => r.campaign_id === a.p_campaign && ['awaiting_payment', 'submitted', 'accepted'].includes(r.status)).reduce((s, r) => s + (r.party_size || 1), 0);
+      return { data: n, error: null };
+    }
+    if (name === 'register_claim') {   // mirrors the SQL function (lock, next number, FULL / TOO_MANY, insert)
+      const c = T('campaigns').find(x => x.id === a.p_campaign);
+      if (!c) return { data: null, error: { message: 'NO_CAMPAIGN' } };
+      const mine = T('registrations').filter(r => r.campaign_id === a.p_campaign);
+      const next = mine.reduce((m, r) => Math.max(m, r.reg_number), 0) + 1;
+      const used = mine.filter(r => !['cancelled', 'declined'].includes(r.status)).reduce((s, r) => s + (r.party_size || 1), 0);
+      const party = Math.max(1, a.p_party == null ? 1 : a.p_party);
+      if (c.places != null && used >= c.places) return { data: null, error: { message: 'FULL' } };
+      if (c.places != null && used + party > c.places) return { data: null, error: { message: 'TOO_MANY:' + (c.places - used) } };
+      const row = { id: crypto.randomUUID(), campaign_id: a.p_campaign, reg_number: next, name: a.p_name, phone: a.p_phone, email: a.p_email, answers: clone(a.p_answers), agreements: clone(a.p_agreements), status: a.p_status, payment_id: a.p_payment, client_ip: a.p_ip, client_ref: a.p_client_ref, party_size: party, created_at: new Date(clock.now() + (++seq)).toISOString() };
+      if (a.p_client_ref && mine.some(r => r.client_ref === a.p_client_ref)) return { data: null, error: { code: '23505', message: 'duplicate client_ref' } };
+      T('registrations').push(row);
+      return { data: [{ reg_id: row.id, number: next }], error: null };
     }
     return { data: null, error: null };   // rate_reset, rate_prune
   };

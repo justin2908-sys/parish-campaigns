@@ -1391,3 +1391,30 @@ be true. The data was clean apart from W10/W11; the code had these gaps, now clo
 payment that SumUp no longer lists). A late payment is only noticed when someone opens a screen that re-checks pending links, or by
 the SumUp check; a scheduled sweep was not added because every run costs Netlify credits.
 Tests: `test/gateway/books.test.js` and the browser script (`ui-check.js`).
+
+## 59. Registrations 2: the must-haves from the four Jotforms — 2026-11-06 (on dev; preview only)
+
+Built from `docs/registrations-fit-review-v1.md` (gaps 1–7 and the editor). Additive: forms already live behave exactly as before.
+
+1. **Choose several (tick boxes)**, with an optional "up to N". Answers are stored as a list; the CSV joins them with "; ".
+2. **Headings and notes** between questions: text to read, no answer, not a CSV column.
+3. **"Other, please type"** on a dropdown or tick-box question. What the person typed is stored as "Other: …".
+4. **Show a question only for some answers** (any-of / none-of, on a dropdown, tick-box or Yes/No question that comes earlier). A hidden
+   question is never required and nothing typed into it is stored, on the page *and* on the server; a question that depends on a hidden
+   question is hidden too.
+5. **Several places in one registration**: the form can ask "How many places?" (2–10 at most). Places, the waiting list and the
+   limit all count places, not registrations (database: `registrations.party_size`, `registration_used()`, `register_claim` v2 with a
+   "only N left" refusal). A form without the question takes one place, as before.
+6. **Counts and a printable list** (`registration_table`): for each choice question, people and places per answer; the list excludes
+   cancelled and declined; private (🔒) answers are left out unless ticked, so a printed list does not carry children's details.
+7. **Edit the questions** (`set_registration_form`, new screen under Form settings). Before anyone registers anything can change.
+   Afterwards only safe changes: reword, add choices, add notes/headings/optional questions, change the introduction. Removing,
+   re-ordering or re-typing an answered question, taking a choice away, or changing agreements, payment, the places question,
+   approval or the contact rule is refused in plain words. Questions keep their ids, so earlier answers always match.
+
+Security and privacy unchanged: the new action is SuperAdmin / Finance / Priest only, after the confidentiality statement, and
+organisation-scoped (tested). The migration also removed the public roles' right to run the two ticket-claiming functions.
+Baseline re-verified against the live database (sections 1–7 identical).
+Tests: `test/gateway/registrations.test.js` (29), `test/gateway/ui-registrations.js` (browser).
+Not yet: payment with suggested amounts / "Other" amount (next), the four forms rebuilt as templates, a "new" count on the tab, and a
+per-form viewer for volunteers.
