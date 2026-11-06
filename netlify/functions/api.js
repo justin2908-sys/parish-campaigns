@@ -2406,7 +2406,11 @@ async function waitingListClear(session, { campaign_id, confirm }) {
 // is one place; the number they keep is "R" + its number. Everything personal lives in that row (and its files) so
 // it can be exported, erased, and removed by the nightly retention job.
 const REG_PREFIX = 'R';
-const REG_FIELD_TYPES = ['text', 'longtext', 'number', 'date', 'dropdown', 'yesno', 'phone', 'email', 'address', 'file'];
+const REG_FIELD_TYPES = ['text', 'longtext', 'number', 'date', 'dropdown', 'multichoice', 'yesno', 'phone', 'email', 'address', 'file', 'note', 'heading'];
+const REG_CHOICE_TYPES = ['dropdown', 'multichoice', 'yesno'];   // the kinds of question another question can depend on
+const isRegQuestion = (f) => f.type !== 'note' && f.type !== 'heading';   // a note or a heading is only something to read: it has no answer
+const REG_OTHER = 'Other';   // the choice that lets a person type their own answer
+const MAX_REG_PARTY = 10;    // most places one registration may take
 const MAX_REG_FIELDS = 40, MAX_REG_PLACES = 2000, MAX_UPLOAD_BYTES = 3 * 1024 * 1024, MAX_UPLOAD_TOTAL = 3.5 * 1024 * 1024;
 const UPLOAD_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpeg', 'image/png': 'png', 'image/webp': 'webp' };
 
@@ -2425,18 +2429,42 @@ function cleanFormDef(def) {
   const fields = rawFields.map((f, i) => {
     if (!f || typeof f !== 'object') throw httpError(400, 'A question is not valid.');
     if (!REG_FIELD_TYPES.includes(f.type)) throw httpError(400, `Question ${i + 1}: choose what kind of answer it takes.`);
-    const label = cleanText(f.label, 200, `Question ${i + 1}`);
-    if (!label) throw httpError(400, `Question ${i + 1} needs its wording.`);
+    const isNote = f.type === 'note', isHeading = f.type === 'heading';
+    const label = cleanText(f.label, isNote ? 1200 : isHeading ? 120 : 200, isNote ? `Note ${i + 1}` : isHeading ? `Heading ${i + 1}` : `Question ${i + 1}`);
+    if (!label) throw httpError(400, isNote ? `Note ${i + 1} needs its text.` : isHeading ? `Heading ${i + 1} needs its text.` : `Question ${i + 1} needs its wording.`);
     let id = /^[a-z][a-z0-9_]{0,23}$/.test(String(f.id || '')) ? String(f.id) : `q${i + 1}`;
     while (seen.has(id)) id += 'x';
     seen.add(id);
-    let options = [];
-    if (f.type === 'dropdown') {
+    let options = [], allow_other = false, max_choices = null;
+    if (f.type === 'dropdown' || f.type === 'multichoice') {
       options = (Array.isArray(f.options) ? f.options : []).map(o => cleanText(o, 100, 'An option')).filter(Boolean);
-      if (options.length < 2) throw httpError(400, `Question ${i + 1} (${label}): a dropdown needs at least two options.`);
+      if (options.length < 2) throw httpError(400, `Question ${i + 1} (${label}): ${f.type === 'dropdown' ? 'a dropdown' : 'a tick-box question'} needs at least two options.`);
       if (options.length > 40) throw httpError(400, `Question ${i + 1}: too many options (40 at most).`);
+      if (new Set(options.map(o => o.toLowerCase())).size !== options.length) throw httpError(400, `Question ${i + 1} (${label}): two of the options are the same.`);
+      allow_other = !!f.allow_other;
+      if (allow_other && options.some(o => o.toLowerCase() === REG_OTHER.toLowerCase())) throw httpError(400, `Question ${i + 1} (${label}): "Other" is added for you, so take it out of the options.`);
+      if (f.type === 'multichoice' && f.max_choices !== undefined && f.max_choices !== null && f.max_choices !== '') {
+        const m = Number(f.max_choices);
+        if (!Number.isInteger(m) || m < 1 || m > options.length + (allow_other ? 1 : 0)) throw httpError(400, `Question ${i + 1} (${label}): "choose up to" must be a whole number from 1 to ${options.length + (allow_other ? 1 : 0)}.`);
+        max_choices = m;
+      }
     }
-    return { id, type: f.type, label, help: cleanText(f.help, 300, 'The hint'), required: !!f.required, sensitive: !!f.sensitive, options };
+    const out = { id, type: f.type, label, help: isNote || isHeading ? '' : cleanText(f.help, 300, 'The hint'), required: isNote || isHeading ? false : !!f.required, sensitive: isNote || isHeading ? false : !!f.sensitive, options };
+    if (allow_other) out.allow_other = true;
+    if (max_choices) out.max_choices = max_choices;
+    if (f.show_if) out.show_if = f.show_if;   // checked below, once every question's final id is known
+    return out;
+  });
+  // "Show this only if …": it must depend on an EARLIER question that has choices, and name choices that really exist.
+  fields.forEach((f, i) => {
+    if (!f.show_if) return;
+    const s = f.show_if, label = f.label.slice(0, 40);
+    const ctrl = fields.slice(0, i).find(x => x.id === s.field);
+    if (!ctrl || !REG_CHOICE_TYPES.includes(ctrl.type)) throw httpError(400, `"${label}": it can only depend on an earlier question that has choices (a dropdown, tick boxes or yes/no).`);
+    const valid = ctrl.type === 'yesno' ? ['yes', 'no'] : [...ctrl.options, ...(ctrl.allow_other ? [REG_OTHER] : [])];
+    const values = [...new Set((Array.isArray(s.values) ? s.values : []).map(v => String(v)))];
+    if (!values.length || values.some(v => !valid.includes(v))) throw httpError(400, `"${label}": choose which answers to "${ctrl.label.slice(0, 40)}" make it appear.`);
+    f.show_if = { field: ctrl.id, op: s.op === 'is_not' ? 'is_not' : 'is', values };
   });
   const rawAgs = Array.isArray(d.agreements) ? d.agreements : [];
   if (rawAgs.length > 8) throw httpError(400, 'A form can have at most 8 agreements.');
@@ -2447,16 +2475,57 @@ function cleanFormDef(def) {
   });
   let payment = null;
   if (d.payment && typeof d.payment === 'object') {
-    const min = Math.round(Number(d.payment.min) * 100) / 100, max = Math.round(Number(d.payment.max == null || d.payment.max === '' ? 500 : d.payment.max) * 100) / 100;
-    if (!Number.isFinite(min) || min < 1) throw httpError(400, 'The minimum payment must be at least £1 (or turn payment off).');
-    if (!Number.isFinite(max) || max < min || max > 5000) throw httpError(400, 'The maximum payment must be at least the minimum, and no more than £5,000.');
-    payment = { min, max, label: cleanText(d.payment.label, 120, 'The payment label') };
+    const money = (v) => Math.round(Number(v) * 100) / 100;
+    const label = cleanText(d.payment.label, 120, 'The payment label');
+    const mode = d.payment.mode === 'fixed' ? 'fixed' : d.payment.mode === 'choices' ? 'choices' : 'range';
+    const checkRange = () => {
+      const min = money(d.payment.min), max = money(d.payment.max == null || d.payment.max === '' ? 500 : d.payment.max);
+      if (!Number.isFinite(min) || min < 1) throw httpError(400, 'The minimum payment must be at least £1 (or turn payment off).');
+      if (!Number.isFinite(max) || max < min || max > 5000) throw httpError(400, 'The maximum payment must be at least the minimum, and no more than £5,000.');
+      return { min, max };
+    };
+    if (mode === 'fixed') {
+      const amount = money(d.payment.amount);
+      if (!Number.isFinite(amount) || amount < 1 || amount > 5000) throw httpError(400, 'A fixed price must be from £1 to £5,000.');
+      payment = { mode: 'fixed', amount, per_place: !!d.payment.per_place, label };
+    } else if (mode === 'choices') {
+      const amounts = [...new Set((Array.isArray(d.payment.amounts) ? d.payment.amounts : []).map(money))].sort((a, b) => a - b);
+      if (amounts.length < 2 || amounts.length > 6) throw httpError(400, 'Give between two and six suggested amounts (or use a fixed price).');
+      if (amounts.some(a => !Number.isFinite(a) || a < 1 || a > 5000)) throw httpError(400, 'Each suggested amount must be from £1 to £5,000.');
+      payment = { mode: 'choices', amounts, allow_other: !!d.payment.allow_other, label };
+      if (payment.allow_other) Object.assign(payment, checkRange());
+    } else payment = { ...checkRange(), label };
   }
-  return {
+  // "How many places?": when on, the person says how many places their registration takes (themselves and a companion, say).
+  let party = null;
+  if (d.party && typeof d.party === 'object') {
+    const mx = Number(d.party.max);
+    if (!Number.isInteger(mx) || mx < 2 || mx > MAX_REG_PARTY) throw httpError(400, `The most places one registration can take must be a whole number from 2 to ${MAX_REG_PARTY}.`);
+    party = { max: mx, label: cleanText(d.party.label, 150, 'The places question') || 'How many places do you need, including yourself?' };
+  }
+  if (payment && payment.per_place && !party) throw httpError(400, 'To charge per place, turn on "How many places does one registration take?" as well.');
+  const out = {
     intro: cleanText(d.intro, 2000, 'The introduction'),
     contact_mode: d.contact_mode === 'both' ? 'both' : 'either',
     fields, agreements, payment, approval: !!d.approval,
   };
+  if (party) out.party = party;
+  return out;
+}
+// What a person owes for this form, worked out on the server from its payment setting.
+function registrationPayAmount(cfg, amountIn, party) {
+  const money = (v) => Math.round(Number(v) * 100) / 100, pounds = (v) => `£${Number(v).toFixed(2)}`;
+  if (cfg.mode === 'fixed') return money(cfg.amount * (cfg.per_place ? party : 1));
+  const a = money(amountIn);
+  if (!Number.isFinite(a) || a <= 0) throw httpError(400, cfg.mode === 'choices' ? 'Please choose an amount.' : `Please enter an amount from ${pounds(cfg.min)} to ${pounds(cfg.max)}.`);
+  if (cfg.mode === 'choices') {
+    if (cfg.amounts.includes(a)) return a;
+    if (!cfg.allow_other) throw httpError(400, 'Please choose one of the amounts shown.');
+    if (a < cfg.min || a > cfg.max) throw httpError(400, `Please enter an amount from ${pounds(cfg.min)} to ${pounds(cfg.max)}.`);
+    return a;
+  }
+  if (a < cfg.min || a > cfg.max) throw httpError(400, `Please enter an amount from ${pounds(cfg.min)} to ${pounds(cfg.max)}.`);
+  return a;
 }
 function cleanPlaces(v) {
   if (v === undefined || v === null || v === '') return null;
@@ -2465,9 +2534,10 @@ function cleanPlaces(v) {
   return n;
 }
 const REG_ACTIVE_STATUSES = ['awaiting_payment', 'submitted', 'accepted'];   // these hold a place; cancelled and declined give it back
-async function registrationsUsed(campaign_id) {
-  const { count } = await supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id).in('status', REG_ACTIVE_STATUSES);
-  return count || 0;
+async function registrationsUsed(campaign_id) {   // places in use: the database adds up each registration's party size
+  const { data, error } = await supabase.rpc('registration_used', { p_campaign: campaign_id });
+  if (error) throw httpError(500, 'Could not count the places — please try again.');
+  return Number(data) || 0;
 }
 async function registrationPlacesLeft(c) {   // null = no limit
   if (c.places == null) return null;
@@ -2526,7 +2596,7 @@ async function publicRegistrationInfo({ campaign_id, preview }) {
   return {
     campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text },
     org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null, contact_email: org ? org.contact_email : null, privacy_url: org ? org.privacy_url : null },
-    form: { intro: def.intro || '', contact_mode: def.contact_mode || 'either', fields: def.fields || [], agreements: def.agreements || [], payment: def.payment || null, approval: !!def.approval },
+    form: { intro: def.intro || '', contact_mode: def.contact_mode || 'either', fields: def.fields || [], agreements: def.agreements || [], payment: def.payment || null, approval: !!def.approval, party: def.party || null },
     state: isPreview ? 'open' : state, opens_on: campaign.opens_on, closes_on: campaign.closes_on, preview: isPreview,
     places_left: left, sold_out: soldOut, waiting_list: !!campaign.waiting_list, queue_open: !!campaign.waiting_list && (soldOut || queued > 0),
   };
@@ -2543,8 +2613,39 @@ function validateRegEmail(v, what) {
   return e;
 }
 // One answer, checked against its question. Returns the cleaned value ('' when an optional question is left blank).
-function validateAnswer(f, raw) {
+// A choice question (one from a list, or several): returns { value, choices }. `value` is what staff read (a typed "Other" answer is
+// spelled out); `choices` is the plain list of what was picked ("Other" stays "Other"), which the counts and the show-only-if rules use.
+function validateChoice(f, raw, other) {
+  const label = f.label;
+  const multi = f.type === 'multichoice';
+  let picked = Array.isArray(raw) ? raw : (raw === undefined || raw === null || raw === '' ? [] : [raw]);
+  picked = [...new Set(picked.map(x => String(x)))];
+  if (!picked.length) {
+    if (f.required) throw httpError(400, `Please answer: ${label}`);
+    return { value: multi ? [] : '', choices: [] };
+  }
+  if (!multi && picked.length > 1) throw httpError(400, `Please choose just one option for "${label}".`);
+  const valid = [...f.options, ...(f.allow_other ? [REG_OTHER] : [])];
+  for (const p of picked) if (!valid.includes(p)) throw httpError(400, `Please choose from the options for "${label}".`);
+  if (multi && f.max_choices && picked.length > f.max_choices) throw httpError(400, `Please choose no more than ${f.max_choices} for "${label}".`);
+  const text = cleanText(other, 200, `The "Other" answer for "${label}"`);
+  const wantsOther = picked.includes(REG_OTHER);
+  if (wantsOther && !text) throw httpError(400, `Please type your answer where it says Other for "${label}".`);
+  const shown = picked.map(p => p === REG_OTHER ? `${REG_OTHER}: ${text}` : p);
+  return { value: multi ? shown : shown[0], choices: picked };
+}
+// Which questions are showing, given the answers so far. A question that depends on another is hidden when that one is hidden.
+function regQuestionShown(f, chosenBy, hidden) {
+  if (!f.show_if) return true;
+  if (hidden.has(f.show_if.field)) return false;
+  const picked = chosenBy[f.show_if.field] || [];
+  const hit = picked.some(v => f.show_if.values.includes(v));
+  return f.show_if.op === 'is_not' ? !hit : hit;
+}
+function validateAnswer(f, raw, other) {
   if (f.type === 'file') return '';   // the file itself arrives separately (see publicRegister)
+  if (!isRegQuestion(f)) return '';   // a note or a heading has no answer
+  if (f.type === 'dropdown' || f.type === 'multichoice') return validateChoice(f, raw, other).value;
   const empty = raw === undefined || raw === null || raw === '' || (typeof raw === 'object' && !Array.isArray(raw) && Object.values(raw).every(x => !String(x || '').trim()));
   if (empty) {
     if (f.required) throw httpError(400, `Please answer: ${f.label}`);
@@ -2563,11 +2664,6 @@ function validateAnswer(f, raw) {
       const s = String(raw).trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(new Date(s + 'T00:00:00Z').getTime()) || new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) !== s) throw httpError(400, `"${label}" should be a date.`);
       const y = Number(s.slice(0, 4)); if (y < 1900 || y > 2100) throw httpError(400, `"${label}" looks wrong — check the year.`);
-      return s;
-    }
-    case 'dropdown': {
-      const s = String(raw);
-      if (!f.options.includes(s)) throw httpError(400, `Please choose one of the options for "${label}".`);
       return s;
     }
     case 'yesno': {
@@ -2596,7 +2692,7 @@ function fileLooksLike(buf, kind) {
   return false;
 }
 
-async function publicRegister({ campaign_id, name, phone, email, answers, agreements, files, amount, client_ref, website }) {
+async function publicRegister({ campaign_id, name, phone, email, answers, others, party: partyIn, agreements, files, amount, client_ref, website }) {
   if (website) return { ok: true, registration_id: null, reg_number: 0, display_number: '', status: 'submitted' };   // the hidden spam-trap box was filled in: pretend, store nothing
   if (clientIp && (await rateHit(`reg:${clientIp}`, 3600)) > 60) throw httpError(429, 'Too many submissions from your connection — please try again later.');
   client_ref = cleanClientRef(client_ref);
@@ -2627,8 +2723,16 @@ async function publicRegister({ campaign_id, name, phone, email, answers, agreem
   const stored = [];
   const fileRows = [];
   let totalBytes = 0;
+  const othersIn = others && typeof others === 'object' ? others : {};
+  const chosenBy = {}, hidden = new Set();   // what was picked on each choice question, and which questions are not showing
   for (const f of def.fields) {
-    let value = validateAnswer(f, given[f.id]);
+    if (!isRegQuestion(f)) continue;   // notes and headings hold no answer
+    if (!regQuestionShown(f, chosenBy, hidden)) { hidden.add(f.id); continue; }   // not showing for this person: no answer, nothing required
+    let value, choices = null;
+    if (f.type === 'dropdown' || f.type === 'multichoice') ({ value, choices } = validateChoice(f, given[f.id], othersIn[f.id]));
+    else value = validateAnswer(f, given[f.id]);
+    if (choices) chosenBy[f.id] = choices;
+    else if (f.type === 'yesno') chosenBy[f.id] = value ? [value] : [];
     if (f.type === 'file') {
       const up = filesIn[f.id];
       if (!up || !up.data) { if (f.required) throw httpError(400, `Please attach a file for: ${f.label}`); }
@@ -2645,7 +2749,15 @@ async function publicRegister({ campaign_id, name, phone, email, answers, agreem
         value = filename;
       }
     }
-    stored.push({ id: f.id, label: f.label, type: f.type, value, sensitive: !!f.sensitive });
+    const entry = { id: f.id, label: f.label, type: f.type, value, sensitive: !!f.sensitive };
+    if (choices) entry.choices = choices;
+    stored.push(entry);
+  }
+  // Places: one, unless the form asks how many and they said more.
+  let party = 1;
+  if (def.party) {
+    party = partyIn === undefined || partyIn === null || partyIn === '' ? 1 : Number(partyIn);
+    if (!Number.isInteger(party) || party < 1 || party > def.party.max) throw httpError(400, `Please choose from 1 to ${def.party.max} places.`);
   }
   const givenAgs = agreements && typeof agreements === 'object' ? agreements : {};
   const agreed = def.agreements.map(a => {
@@ -2654,12 +2766,13 @@ async function publicRegister({ campaign_id, name, phone, email, answers, agreem
     return { id: a.id, kind: a.kind, text: a.text, accepted };
   });
 
-  // A form that takes a payment asks for an amount between its minimum and maximum, paid as part of submitting.
+  // A form that takes a payment collects it as part of submitting: an amount they choose between a minimum and maximum, a fixed price
+  // (optionally per place), or one of some suggested amounts (plus "Other"). The server works the amount out; it never trusts a price from the page.
   const payCfg = def.payment || null;
   let payAmount = null, paymentId = null;
   if (payCfg) {
-    payAmount = Math.round(Number(amount) * 100) / 100;
-    if (!Number.isFinite(payAmount) || payAmount < payCfg.min || payAmount > payCfg.max) throw httpError(400, `Please enter an amount from £${Number(payCfg.min).toFixed(2)} to £${Number(payCfg.max).toFixed(2)}.`);
+    payAmount = registrationPayAmount(payCfg, amount, party);
+    if (!(payAmount > 0 && payAmount <= 5000)) throw httpError(400, 'That comes to more than £5,000 — please reduce the number of places.');
     await enforcePublicPurchaseLimits(emailV || phoneV, 1);
     const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaign.id, method: 'link', amount: payAmount, status: 'pending', seller_id: null, payer_name: cleanedName, contact_value: emailV || phoneV, client_ip: clientIp || null }).select().single();
     if (payErr) throw httpError(500, 'Could not start your payment — please try again.');
@@ -2670,10 +2783,12 @@ async function publicRegister({ campaign_id, name, phone, email, answers, agreem
   // Take the next number and a place in one step.
   const { data: claim, error: claimErr } = await supabase.rpc('register_claim', {
     p_campaign: campaign.id, p_name: cleanedName, p_phone: phoneV, p_email: emailV, p_answers: stored, p_agreements: agreed,
-    p_status: payCfg ? 'awaiting_payment' : 'submitted', p_payment: paymentId, p_ip: clientIp || null, p_client_ref: client_ref,
+    p_status: payCfg ? 'awaiting_payment' : 'submitted', p_payment: paymentId, p_ip: clientIp || null, p_client_ref: client_ref, p_party: party,
   });
   if (claimErr) {
     await voidPayment('registration not saved');
+    const tooMany = /TOO_MANY:(\d+)/.exec(String(claimErr.message));
+    if (tooMany) throw httpError(409, `Sorry — only ${tooMany[1]} place${tooMany[1] === '1' ? ' is' : 's are'} left, so please choose ${tooMany[1] === '1' ? '1 place' : `${tooMany[1]} places or fewer`}.`);
     if (String(claimErr.message).includes('FULL')) throw httpError(409, campaign.waiting_list ? 'All places have just been taken — please join the waiting list.' : 'Sorry — this is fully booked.');
     if (claimErr.code === '23505' && client_ref) {
       const { data: again } = await supabase.from('registrations').select('id, reg_number, status').eq('campaign_id', campaign.id).eq('client_ref', client_ref).maybeSingle();
@@ -2746,7 +2861,7 @@ async function registrationForms(session) {
   const { data: camps } = await supabase.from('campaigns').select('*').eq('org_id', session.org_id).eq('kind', 'registration').eq('binned', false).order('created_at', { ascending: false });
   const ids = (camps || []).map(c => c.id);
   const [{ data: regs }, { data: waits }, { data: users }] = await Promise.all([
-    ids.length ? supabase.from('registrations').select('campaign_id, status').in('campaign_id', ids) : { data: [] },
+    ids.length ? supabase.from('registrations').select('campaign_id, status, party_size').in('campaign_id', ids) : { data: [] },
     ids.length ? supabase.from('waiting_list').select('campaign_id').in('campaign_id', ids) : { data: [] },
     supabase.from('users').select('id, name').eq('org_id', session.org_id),
   ]);
@@ -2758,7 +2873,8 @@ async function registrationForms(session) {
     return {
       id: c.id, name: c.name, state: campaignOpenState(c), is_draft: c.is_draft, active: c.active, opens_on: c.opens_on, closes_on: c.closes_on, keep_until: c.keep_until,
       places: c.places, waiting_list: !!c.waiting_list, waiting_count: (waits || []).filter(w => w.campaign_id === c.id).length,
-      total: mine.filter(r => r.status !== 'cancelled' && r.status !== 'declined').length,
+      total: mine.filter(r => r.status !== 'cancelled' && r.status !== 'declined').length,   // registrations still standing
+      places_used: mine.filter(r => REG_ACTIVE_STATUSES.includes(r.status)).reduce((n, r) => n + (r.party_size || 1), 0),   // places they hold between them
       awaiting_payment: by('awaiting_payment'), submitted: by('submitted'), accepted: by('accepted'), declined: by('declined'), cancelled: by('cancelled'),
       approval: !!def.approval, payment: def.payment || null, field_count: (def.fields || []).length, form_def: def, details_text: c.details_text,
       created_by: c.created_by, created_by_name: nameOf[c.created_by] || '', can_manage: session.role === 'superadmin' || c.created_by === session.uid,
@@ -2775,13 +2891,13 @@ async function requireRegistrationCampaign(session, campaign_id) {
 }
 async function registrationsList(session, { campaign_id }) {
   const c = await requireRegistrationCampaign(session, campaign_id);
-  const { data: rows } = await supabase.from('registrations').select('id, reg_number, name, phone, email, status, created_at, decision_note, payment_id').eq('campaign_id', c.id).order('reg_number');
+  const { data: rows } = await supabase.from('registrations').select('id, reg_number, name, phone, email, status, created_at, decision_note, payment_id, party_size').eq('campaign_id', c.id).order('reg_number');
   const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
   const { data: pays } = payIds.length ? await supabase.from('payments').select('id, amount, status').in('id', payIds) : { data: [] };
   const payBy = Object.fromEntries((pays || []).map(p => [p.id, p]));
   return {
     campaign: { id: c.id, name: c.name, form_def: c.form_def },
-    registrations: (rows || []).map(r => ({ id: r.id, display_number: displayRegNumber(r.reg_number), number: r.reg_number, name: r.name, phone: r.phone, email: r.email, status: r.status, created_at: r.created_at, decision_note: r.decision_note, payment: r.payment_id ? { amount: Number((payBy[r.payment_id] || {}).amount || 0), status: (payBy[r.payment_id] || {}).status } : null })),
+    registrations: (rows || []).map(r => ({ id: r.id, display_number: displayRegNumber(r.reg_number), number: r.reg_number, name: r.name, phone: r.phone, email: r.email, status: r.status, created_at: r.created_at, decision_note: r.decision_note, party_size: r.party_size || 1, payment: r.payment_id ? { amount: Number((payBy[r.payment_id] || {}).amount || 0), status: (payBy[r.payment_id] || {}).status } : null })),
   };
 }
 async function registrationGet(session, { registration_id }) {
@@ -2794,7 +2910,7 @@ async function registrationGet(session, { registration_id }) {
     r.decided_by ? supabase.from('users').select('name').eq('id', r.decided_by).maybeSingle() : { data: null },
   ]);
   return {
-    registration: { id: r.id, display_number: displayRegNumber(r.reg_number), name: r.name, phone: r.phone, email: r.email, status: r.status, created_at: r.created_at, answers: r.answers, agreements: r.agreements, decision_note: r.decision_note, decided_at: r.decided_at, decided_by: decider ? decider.name : null },
+    registration: { id: r.id, display_number: displayRegNumber(r.reg_number), name: r.name, phone: r.phone, email: r.email, status: r.status, created_at: r.created_at, party_size: r.party_size || 1, answers: r.answers, agreements: r.agreements, decision_note: r.decision_note, decided_at: r.decided_at, decided_by: decider ? decider.name : null },
     files: files || [], payment: pay || null, campaign: { id: c.id, name: c.name, approval: !!(c.form_def && c.form_def.approval) },
   };
 }
@@ -2825,7 +2941,45 @@ async function registrationDecide(session, { registration_id, decision, note }) 
   return { ok: true, status: decision, refund_due: refundDue };
 }
 
-function regFileHeaders(def) { return def.fields.map(f => f.label); }
+function regFileHeaders(def) { return def.fields.filter(isRegQuestion).map(f => f.label); }
+// One stored answer as plain text (an address on one line, several choices joined, nothing for a question that was not shown).
+function regAnswerText(a) {
+  if (!a) return '';
+  const v = a.value;
+  if (Array.isArray(v)) return v.join('; ');
+  if (v && typeof v === 'object') return [v.line1, v.line2, v.city, v.postcode].filter(Boolean).join(', ');
+  return v == null ? '' : String(v);
+}
+// Counts for the office: for every choice question, how many people (and places) picked each option, plus the full list laid out for printing.
+// Only registrations that hold a place count (declined and cancelled do not).
+async function registrationTable(session, { campaign_id }) {
+  const c = await requireRegistrationCampaign(session, campaign_id);
+  const def = c.form_def || { fields: [], agreements: [] };
+  const { data: rows } = await supabase.from('registrations').select('*').eq('campaign_id', c.id).order('reg_number');
+  const live = (rows || []).filter(r => REG_ACTIVE_STATUSES.includes(r.status));
+  const qs = def.fields.filter(isRegQuestion);
+  const counts = def.fields.filter(f => REG_CHOICE_TYPES.includes(f.type)).map(f => {
+    const options = f.type === 'yesno' ? ['yes', 'no'] : [...f.options, ...(f.allow_other ? [REG_OTHER] : [])];
+    const tally = Object.fromEntries(options.map(o => [o, { people: 0, places: 0 }]));
+    let blank = 0;
+    for (const r of live) {
+      const a = (r.answers || []).find(x => x.id === f.id);
+      if (!a) { blank++; continue; }   // not asked (hidden for them) or left blank
+      const picked = Array.isArray(a.choices) ? a.choices : (a.value ? [String(a.value)] : []);
+      if (!picked.length) { blank++; continue; }
+      for (const p of picked) { if (!tally[p]) tally[p] = { people: 0, places: 0 }; tally[p].people++; tally[p].places += r.party_size || 1; }
+    }
+    return { id: f.id, label: f.label, type: f.type, options: Object.entries(tally).map(([option, t]) => ({ option, people: t.people, places: t.places })), not_answered: blank };
+  });
+  return {
+    campaign: { id: c.id, name: c.name }, columns: qs.map(f => ({ id: f.id, label: f.label, sensitive: !!f.sensitive, type: f.type })),
+    rows: live.map(r => {
+      const ans = Object.fromEntries((r.answers || []).map(a => [a.id, a]));
+      return { display_number: displayRegNumber(r.reg_number), name: r.name || '', phone: r.phone || '', email: r.email || '', party_size: r.party_size || 1, status: r.status, answers: Object.fromEntries(qs.map(f => [f.id, regAnswerText(ans[f.id])])) };
+    }),
+    people: live.length, places: live.reduce((n, r) => n + (r.party_size || 1), 0), counts,
+  };
+}
 async function registrationsExport(session, { campaign_id }) {
   const c = await requireRegistrationCampaign(session, campaign_id);
   const def = c.form_def || { fields: [], agreements: [] };
@@ -2833,23 +2987,54 @@ async function registrationsExport(session, { campaign_id }) {
   const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
   const { data: pays } = payIds.length ? await supabase.from('payments').select('id, amount, status').in('id', payIds) : { data: [] };
   const payBy = Object.fromEntries((pays || []).map(p => [p.id, p]));
-  const headers = ['Registration', 'Registered at', 'Name', 'Mobile', 'Email', ...def.fields.map(f => f.label + (f.sensitive ? ' (sensitive)' : '')), ...def.agreements.map(a => `${a.kind === 'optional' ? 'Optional' : 'Agreed'}: ${a.text.slice(0, 80)}`), 'Status', 'Decision note', 'Paid (£)', 'Payment status'];
+  const qs = def.fields.filter(isRegQuestion);   // notes and headings are not columns
+  const headers = ['Registration', 'Registered at', 'Name', 'Mobile', 'Email', 'Places', ...qs.map(f => f.label + (f.sensitive ? ' (sensitive)' : '')), ...def.agreements.map(a => `${a.kind === 'optional' ? 'Optional' : 'Agreed'}: ${a.text.slice(0, 80)}`), 'Status', 'Decision note', 'Paid (£)', 'Payment status'];
   const lines = (rows || []).map(r => {
     const ans = Object.fromEntries((r.answers || []).map(a => [a.id, a]));
     const ag = Object.fromEntries((r.agreements || []).map(a => [a.id, a]));
-    const cell = (f) => { const a = ans[f.id]; if (!a) return ''; const v = a.value; if (v && typeof v === 'object') return [v.line1, v.line2, v.city, v.postcode].filter(Boolean).join(', '); return v == null ? '' : String(v); };
     const p = r.payment_id ? payBy[r.payment_id] : null;
-    return [displayRegNumber(r.reg_number), r.created_at, r.name || '', r.phone || '', r.email || '', ...def.fields.map(cell), ...def.agreements.map(a => (ag[a.id] && ag[a.id].accepted) ? 'Yes' : 'No'), r.status, r.decision_note || '', p ? Number(p.amount).toFixed(2) : '', p ? p.status : ''];
+    return [displayRegNumber(r.reg_number), r.created_at, r.name || '', r.phone || '', r.email || '', r.party_size || 1, ...qs.map(f => regAnswerText(ans[f.id])), ...def.agreements.map(a => (ag[a.id] && ag[a.id].accepted) ? 'Yes' : 'No'), r.status, r.decision_note || '', p ? Number(p.amount).toFixed(2) : '', p ? p.status : ''];
   });
   const csv = [headers, ...lines].map(row => row.map(csvEscape).join(',')).join('\n');
   return { csv, filename: `${c.name.replace(/[^a-z0-9-]/gi, '_')}-registrations-${new Date().toISOString().slice(0, 10)}.csv` };
 }
-// Changing the form itself is only allowed before anyone has registered (so every response matches what was asked).
+// Before anyone has registered the whole form can be changed. Once people have registered only safe changes are allowed, so that every
+// response still matches what was asked: fix wording and hints, add options, add notes, headings or new OPTIONAL questions, change the
+// introduction. Removing, re-ordering or re-typing a question, taking an option away, or changing the agreements, payment, places question,
+// approval or contact rule is refused.
+function checkSafeFormChange(oldDef, newDef) {
+  const oldF = oldDef.fields || [], newF = newDef.fields || [];
+  const newById = Object.fromEntries(newF.map((f, i) => [f.id, { f, i }]));
+  let last = -1;
+  for (const o of oldF) {
+    const n = newById[o.id];
+    if (!n) throw httpError(409, `People have already registered, so "${o.label.slice(0, 60)}" can't be removed. You can reword it, or leave it.`);
+    if (n.i < last) throw httpError(409, 'People have already registered, so the questions can no longer be put in a different order.');
+    last = n.i;
+    if (n.f.type !== o.type) throw httpError(409, `People have already registered, so "${o.label.slice(0, 60)}" can't be changed to a different kind of question.`);
+    const gone = (o.options || []).filter(x => !(n.f.options || []).includes(x));
+    if (gone.length) throw httpError(409, `People have already registered, so the option "${gone[0]}" can't be taken away from "${o.label.slice(0, 60)}".`);
+    if (!!o.allow_other && !n.f.allow_other) throw httpError(409, `People have already registered, so "Other" can't be taken away from "${o.label.slice(0, 60)}".`);
+    if (JSON.stringify(o.show_if || null) !== JSON.stringify(n.f.show_if || null)) throw httpError(409, `People have already registered, so when "${o.label.slice(0, 60)}" shows can't be changed now.`);
+    if (!!o.required !== !!n.f.required) throw httpError(409, `People have already registered, so "${o.label.slice(0, 60)}" can't be switched between required and optional now.`);
+  }
+  const oldIds = new Set(oldF.map(f => f.id));
+  for (const f of newF) if (!oldIds.has(f.id) && f.required) throw httpError(409, `People have already registered, so a new question ("${f.label.slice(0, 60)}") has to be optional.`);
+  const same = (a, b) => JSON.stringify(a == null ? null : a) === JSON.stringify(b == null ? null : b);
+  if (!same(oldDef.agreements, newDef.agreements)) throw httpError(409, 'People have already registered, so the agreements can no longer be changed.');
+  if (!same(oldDef.payment, newDef.payment)) throw httpError(409, 'People have already registered, so the payment can no longer be changed.');
+  if (!same(oldDef.party, newDef.party)) throw httpError(409, 'People have already registered, so the number-of-places question can no longer be changed.');
+  if (!!oldDef.approval !== !!newDef.approval) throw httpError(409, 'People have already registered, so approval can no longer be switched.');
+  if ((oldDef.contact_mode || 'either') !== (newDef.contact_mode || 'either')) throw httpError(409, 'People have already registered, so the contact rule can no longer be changed.');
+}
 async function setRegistrationForm(session, { campaign_id, form_def, details_text }) {
   await requireCampaignManager(session, campaign_id);
   const { count } = await supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id);
-  if (count) throw httpError(409, 'People have already registered, so the questions can no longer be changed.');
   const def = cleanFormDef(form_def);
+  if (count) {
+    const { data: cur } = await supabase.from('campaigns').select('form_def').eq('id', campaign_id).single();
+    checkSafeFormChange((cur && cur.form_def) || {}, def);
+  }
   const patch = { form_def: def };
   if (details_text !== undefined) patch.details_text = String(details_text || '').trim() || null;
   const { error } = await supabase.from('campaigns').update(patch).eq('id', campaign_id);
@@ -3019,6 +3204,7 @@ const actions = {
   registration_file: (s, b) => registrationFile(s, b),
   registration_decide: (s, b) => registrationDecide(s, b),
   registrations_export: (s, b) => registrationsExport(s, b),
+  registration_table: (s, b) => registrationTable(s, b),
   set_registration_form: (s, b) => setRegistrationForm(s, b),
   set_registration_places: (s, b) => setRegistrationPlaces(s, b),
   public_registration_info: (s, b) => publicRegistrationInfo(b),

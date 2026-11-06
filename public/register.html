@@ -47,6 +47,16 @@ window.__infoP = (function () {
   .q.bad input, .q.bad textarea, .q.bad select, .q.bad .seg, .q.bad .filebox { border-color:var(--bad); }
   .q .why { display:none; color:var(--bad); font-size:13.5px; margin-top:4px; }
   .q.bad .why { display:block; }
+  .q.hd { margin:20px 0 8px; padding-top:14px; border-top:1px solid var(--line); }
+  .q.hd:first-child { margin-top:0; padding-top:0; border-top:none; }
+  .q.hd h3 { margin:0; font-family:var(--font-head); font-size:19px; color:var(--pine-deep); }
+  .q.nt p { margin:0; white-space:pre-wrap; font-size:14.5px; line-height:1.5; color:var(--slate); background:var(--gold-dim); border:1px solid #DCCB98; border-radius:12px; padding:10px 12px; }
+  .checks { display:flex; flex-direction:column; gap:8px; }
+  .chk { display:flex; gap:10px; align-items:center; min-height:48px; padding:10px 12px; border:1.5px solid var(--line); border-radius:12px; background:#fff; font-size:16px; color:var(--ink); }
+  .chk input { width:22px; height:22px; flex:none; accent-color:var(--pine); }
+  .q.bad .checks .chk { border-color:var(--bad); }
+  .otherbox { margin-top:8px; }
+  .q[hidden] { display:none; }
   .addr { display:grid; gap:8px; grid-template-columns:1fr 1fr; }
   .addr input:nth-child(1), .addr input:nth-child(2) { grid-column:1 / -1; }
   .seg { display:flex; background:var(--pine-dim); border-radius:14px; padding:3px; border:1.5px solid transparent; }
@@ -62,6 +72,11 @@ window.__infoP = (function () {
   .agree label { font-size:15px; line-height:1.45; color:var(--ink); }
   .agree.bad label { color:var(--bad); }
   .trap { position:absolute; left:-9999px; top:auto; width:1px; height:1px; overflow:hidden; }
+  .amtgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(96px, 1fr)); gap:8px; }
+  .amtgrid button { min-height:52px; border:1.5px solid var(--line); background:#fff; border-radius:12px; font-size:18px; font-weight:800; color:var(--ink); }
+  .amtgrid button.on { border-color:var(--pine); background:var(--pine-dim); color:var(--pine-deep); box-shadow:0 0 0 2px var(--pine) inset; }
+  .q.bad .amtgrid button { border-color:var(--bad); }
+  .payfix { font-family:var(--font-head); font-size:26px; font-weight:600; color:var(--ink); }
   .amt { display:flex; align-items:center; gap:8px; }
   .amt span { font-family:var(--font-head); font-size:26px; font-weight:600; }
   .amt input { max-width:160px; }
@@ -200,7 +215,10 @@ function fieldHtml(f) {
     case 'date': input = `<input type="date" id="${id}">`; break;
     case 'phone': input = `<input type="tel" id="${id}" inputmode="tel" autocomplete="tel">`; break;
     case 'email': input = `<input type="email" id="${id}" inputmode="email" autocomplete="email">`; break;
-    case 'dropdown': input = `<select id="${id}"><option value="">Choose…</option>${f.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`; break;
+    case 'heading': return `<div class="q hd" id="q_${f.id}" data-type="heading"><h3>${esc(f.label)}</h3></div>`;
+    case 'note': return `<div class="q nt" id="q_${f.id}" data-type="note"><p>${esc(f.label)}</p></div>`;
+    case 'dropdown': input = `<select id="${id}"><option value="">Choose…</option>${f.options.map(o => `<option>${esc(o)}</option>`).join('')}${f.allow_other ? '<option value="Other">Other (please type)</option>' : ''}</select>${f.allow_other ? `<input type="text" id="fo_${f.id}" class="otherbox" maxlength="200" placeholder="Please type your answer" hidden>` : ''}`; break;
+    case 'multichoice': return `<div class="q" id="q_${f.id}" data-type="multichoice"><div class="lbl">${esc(f.label)}${req}</div>${help}${f.max_choices ? `<div class="help">Choose up to ${f.max_choices}.</div>` : ''}<div class="checks" id="${id}">${f.options.concat(f.allow_other ? ['Other'] : []).map((o, i) => `<label class="chk"><input type="checkbox" data-v="${esc(o)}"><span>${o === 'Other' && f.allow_other ? 'Other (please type)' : esc(o)}</span></label>`).join('')}${f.allow_other ? `<input type="text" id="fo_${f.id}" class="otherbox" maxlength="200" placeholder="Please type your answer" hidden>` : ''}</div>${why}</div>`;
     case 'yesno': return `<div class="q" id="q_${f.id}" data-type="yesno"><div class="lbl">${esc(f.label)}${req}</div>${help}<div class="seg" id="${id}"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></div>${why}</div>`;
     case 'address': return `<div class="q" id="q_${f.id}" data-type="address"><div class="lbl">${esc(f.label)}${req}</div>${help}<div class="addr" id="${id}"><input type="text" placeholder="Street address" data-a="line1" autocomplete="address-line1"><input type="text" placeholder="Address line 2 (optional)" data-a="line2" autocomplete="address-line2"><input type="text" placeholder="Town or city" data-a="city" autocomplete="address-level2"><input type="text" placeholder="Postcode" data-a="postcode" autocomplete="postal-code" style="text-transform:uppercase"></div>${why}</div>`;
     case 'file': return `<div class="q" id="q_${f.id}" data-type="file"><div class="lbl">${esc(f.label)}${req}</div>${help}<div class="filebox" id="${id}"><div class="name" id="fn_${f.id}">No file chosen</div><label class="smallbtn" style="display:inline-block;margin-top:8px">Choose a file or take a photo<input type="file" accept="image/*,application/pdf" id="fi_${f.id}" style="display:none"></label> <button type="button" class="smallbtn" id="fr_${f.id}" hidden>Remove</button></div><div class="help" style="margin-top:6px">A PDF or a photo, under 3 MB.</div>${why}</div>`;
@@ -209,6 +227,75 @@ function fieldHtml(f) {
 }
 function agreementHtml(a) {
   return `<div class="agree" id="ag_${a.id}"><input type="checkbox" id="ab_${a.id}"><label for="ab_${a.id}">${esc(a.text)}${a.kind === 'required' ? ' <span style="color:var(--wine)">*</span>' : ' <span style="color:var(--slate);font-size:13px">(optional)</span>'}</label></div>`;
+}
+// ---- the payment: a fixed price (optionally per place), suggested amounts with "Other", or an amount they choose between two limits
+let chosenAmount = null;   // the suggested amount tapped (a number), or 'other'
+function payCardHtml(pay) {
+  const title = esc(pay.label || (pay.mode === 'fixed' ? 'Your payment' : 'Your contribution'));
+  const card = (inner) => `<div class="card"><h2>${title}</h2><div class="q" id="q_amount">${inner}<div class="why"></div></div></div>`;
+  if (pay.mode === 'fixed') return card(`<div class="payfix" id="payFixed" aria-live="polite"></div><div class="help" style="margin-top:6px">You pay on the next page, by card.</div>`);
+  if (pay.mode === 'choices') return card(`<div class="amtgrid" id="amtGrid" role="group" aria-label="Choose an amount">${pay.amounts.map(a => `<button type="button" data-a="${a}">${money(a)}</button>`).join('')}${pay.allow_other ? '<button type="button" data-a="other">Other</button>' : ''}</div>
+    ${pay.allow_other ? `<div class="amt" id="otherAmtBox" hidden style="margin-top:10px"><span>£</span><input type="number" id="f_amount_other" inputmode="decimal" step="0.01" min="${pay.min}" max="${pay.max}" placeholder="Amount"></div>
+    <div class="help" id="otherAmtHelp" hidden style="margin-top:6px">Any amount from ${money(pay.min)} to ${money(pay.max)}.</div>` : ''}
+    <div class="help" style="margin-top:6px">You pay on the next page, by card.</div>`);
+  return card(`<div class="amt"><span>£</span><input type="number" id="f_amount" inputmode="decimal" step="0.01" min="${pay.min}" max="${pay.max}" value="${pay.min}"></div>
+    <div class="help" style="margin-top:6px">The minimum is ${money(pay.min)}; you may give more (up to ${money(pay.max)}). You pay on the next page, by card.</div>`);
+}
+// What they will pay right now (NaN until they have chosen). The server works it out again and never trusts this.
+function payAmountNow() {
+  const pay = info.form.payment; if (!pay) return NaN;
+  if (pay.mode === 'fixed') return pay.amount * (pay.per_place && info.form.party ? (Number(val('f_party')) || 1) : 1);
+  if (pay.mode === 'choices') return chosenAmount === 'other' ? Number(val('f_amount_other')) : (chosenAmount === null ? NaN : chosenAmount);
+  return Number(val('f_amount'));
+}
+function refreshPayFixed() {
+  const pay = info.form.payment, el = $('payFixed'); if (!el || !pay) return;
+  const n = pay.per_place && info.form.party ? (Number(val('f_party')) || 1) : 1;
+  el.innerHTML = n > 1 ? `<b>${money(pay.amount * n)}</b> <span class="muted">(${n} places × ${money(pay.amount)})</span>` : `<b>${money(pay.amount)}</b>`;
+}
+function wirePayment() {
+  const pay = info.form.payment; if (!pay) return;
+  if (pay.mode === 'fixed') { refreshPayFixed(); const p = $('f_party'); if (p) p.addEventListener('change', refreshPayFixed); }
+  if (pay.mode === 'choices') {
+    $('amtGrid').querySelectorAll('button').forEach(b => { b.onclick = () => {
+      chosenAmount = b.dataset.a === 'other' ? 'other' : Number(b.dataset.a);
+      $('amtGrid').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      if ($('otherAmtBox')) { $('otherAmtBox').hidden = chosenAmount !== 'other'; $('otherAmtHelp').hidden = chosenAmount !== 'other'; if (chosenAmount === 'other') $('f_amount_other').focus(); }
+      clearBad($('q_amount'));
+    }; });
+  }
+}
+// "How many places?": a drop-down of 1 up to the form's most (or what is left, if less)
+function partyCard(p) {
+  const most = info.places_left != null ? Math.min(p.max, Math.max(1, info.places_left)) : p.max;
+  const opts = []; for (let i = 1; i <= most; i++) opts.push(`<option value="${i}">${i}</option>`);
+  return `<div class="card"><h2>Places</h2><div class="q" id="q_party"><label for="f_party">${esc(p.label)}</label><select id="f_party">${opts.join('')}</select><div class="why"></div></div></div>`;
+}
+// Questions that show only for some answers: which choices are picked on a question (a list), read from the page
+function pickedOn(f) {
+  const id = 'f_' + f.id;
+  if (f.type === 'yesno') { const v = $(id) && $(id).dataset.v; return v ? [v] : []; }
+  if (f.type === 'dropdown') { const v = $(id) ? $(id).value : ''; return v ? [v] : []; }
+  if (f.type === 'multichoice') return [...document.querySelectorAll('#' + id + ' input[type=checkbox]:checked')].map(c => c.dataset.v);
+  return [];
+}
+// The same rule as the server's: a question that depends on a hidden question is hidden too. Returns the set of hidden question ids.
+function applyShowRules() {
+  const hidden = new Set();
+  for (const f of info.form.fields) {
+    let show = true;
+    if (f.show_if) {
+      if (hidden.has(f.show_if.field)) show = false;
+      else {
+        const ctrl = info.form.fields.find(x => x.id === f.show_if.field), picked = ctrl ? pickedOn(ctrl) : [];
+        const hit = picked.some(v => f.show_if.values.includes(v));
+        show = f.show_if.op === 'is_not' ? !hit : hit;
+      }
+    }
+    const el = $('q_' + f.id); if (el) el.hidden = !show;
+    if (!show) hidden.add(f.id);
+  }
+  return hidden;
 }
 function buildForm() {
   const F = info.form, both = F.contact_mode === 'both';
@@ -224,10 +311,9 @@ function buildForm() {
         <div class="q" id="q_email"><label for="f_email">Email address${both ? ' <span class="req">*</span>' : ''}</label><input type="email" id="f_email" inputmode="email" autocomplete="email"><div class="help" style="margin-top:6px">${both ? '' : 'Give a mobile number or an email — either one. '}You use it to find your registration again.</div><div class="why"></div></div>
       </div>
       ${F.fields.length ? `<div class="card"><h2>Questions</h2>${F.fields.map(fieldHtml).join('')}</div>` : ''}
+      ${F.party ? partyCard(F.party) : ''}
       ${F.agreements.length ? `<div class="card"><h2>Agreements</h2>${F.agreements.map(agreementHtml).join('')}</div>` : ''}
-      ${pay ? `<div class="card"><h2>${esc(pay.label || 'Your contribution')}</h2>
-        <div class="q" id="q_amount"><div class="amt"><span>£</span><input type="number" id="f_amount" inputmode="decimal" step="0.01" min="${pay.min}" max="${pay.max}" value="${pay.min}"></div>
-        <div class="help" style="margin-top:6px">The minimum is ${money(pay.min)}; you may give more (up to ${money(pay.max)}). You pay on the next page, by card.</div><div class="why"></div></div></div>` : ''}
+      ${pay ? payCardHtml(pay) : ''}
       <div class="trap" aria-hidden="true"><label>Leave this empty<input type="text" id="f_website" tabindex="-1" autocomplete="off"></label></div>
       ${info.form.approval ? '<div class="gold">Your application is checked by the parish before it is accepted — you will see its status on your registration page.</div>' : ''}
       <p class="fine">${privacyLine()}${info.places_left != null ? ` · ${info.places_left} place${info.places_left === 1 ? '' : 's'} left` : ''}</p>
@@ -235,10 +321,16 @@ function buildForm() {
     <div class="bar"><div class="in"><div id="barErr"></div><button type="button" class="go" id="goBtn">${pay ? 'Submit and pay' : 'Submit registration'}</button></div></div>
   </div>${sheets()}`;
   wireSheets();
-  document.querySelectorAll('.seg[id^=f_] button').forEach(b => { b.onclick = () => { const seg = b.parentNode; seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); seg.dataset.v = b.dataset.v; clearBad(seg.closest('.q')); }; });
+  document.querySelectorAll('.seg[id^=f_] button').forEach(b => { b.onclick = () => { const seg = b.parentNode; seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); seg.dataset.v = b.dataset.v; clearBad(seg.closest('.q')); applyShowRules(); }; });
   F.fields.filter(f => f.type === 'file').forEach(f => wireFile(f));
   document.querySelectorAll('.q input, .q textarea, .q select').forEach(el => { el.addEventListener('input', () => clearBad(el.closest('.q'))); });
+  // a typed "Other" box appears only while "Other" is chosen; the show-only-if rules are re-checked after every change
+  const syncOther = (f) => { const box = $('fo_' + f.id); if (!box) return; box.hidden = !pickedOn(f).includes('Other'); };
+  F.fields.filter(f => f.type === 'dropdown' || f.type === 'multichoice').forEach(f => { const el = $('f_' + f.id); el.addEventListener('change', () => { syncOther(f); applyShowRules();
+    if (f.type === 'multichoice' && f.max_choices) { const on = el.querySelectorAll('input[type=checkbox]:checked').length; el.querySelectorAll('input[type=checkbox]').forEach(c => { c.disabled = !c.checked && on >= f.max_choices; }); } }); });
+  applyShowRules();
   document.querySelectorAll('.agree input').forEach(el => { el.addEventListener('change', () => el.closest('.agree').classList.remove('bad')); });
+  wirePayment();
   $('goBtn').onclick = submit;
 }
 function clearBad(q) { if (q) q.classList.remove('bad'); }
@@ -278,16 +370,19 @@ async function prepareFile(file) {
 // ---- checking and sending
 function val(id) { const e = $(id); return e ? e.value.trim() : ''; }
 function collect() {
-  const answers = {};
+  const answers = {}, others = {}, hidden = applyShowRules();
   for (const f of info.form.fields) {
     const id = 'f_' + f.id;
-    if (f.type === 'yesno') answers[f.id] = $(id).dataset.v || '';
+    if (f.type === 'note' || f.type === 'heading' || hidden.has(f.id)) continue;   // nothing to answer, or not showing for this person
+    if (f.type === 'multichoice') { answers[f.id] = pickedOn(f); if (f.allow_other) others[f.id] = val('fo_' + f.id); }
+    else if (f.type === 'dropdown') { answers[f.id] = val(id); if (f.allow_other) others[f.id] = val('fo_' + f.id); }
+    else if (f.type === 'yesno') answers[f.id] = $(id).dataset.v || '';
     else if (f.type === 'address') { const a = {}; $(id).querySelectorAll('input').forEach(i => { a[i.dataset.a] = i.value.trim(); }); answers[f.id] = a; }
     else if (f.type === 'file') answers[f.id] = files[f.id] ? files[f.id].filename : '';
     else answers[f.id] = val(id);
   }
   const agreements = {}; info.form.agreements.forEach(a => { agreements[a.id] = $('ab_' + a.id).checked; });
-  return { answers, agreements };
+  return { answers, others, agreements, party: info.form.party ? Number(val('f_party')) || 1 : undefined };
 }
 function validate() {
   const problems = [];
@@ -299,18 +394,26 @@ function validate() {
   if (!both && !ph && !em) need('q_email', 'Please give a mobile number or an email address.');
   if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) need('q_email', "That email address doesn't look right.");
   if (ph && ph.replace(/[^\d]/g, '').length < 10) need('q_phone', 'That mobile number looks too short.');
-  const { answers, agreements } = collect();
+  const { answers, others, agreements } = collect();
   for (const f of info.form.fields) {
-    const v = answers[f.id], empty = f.type === 'address' ? !(v.line1 || v.city || v.postcode) : !v;
-    if (f.required && empty) { need('q_' + f.id, f.type === 'file' ? 'Please choose a file.' : 'Please answer this.'); continue; }
+    if (!(f.id in answers)) continue;   // a note, a heading, or a question that is not showing
+    const v = answers[f.id], empty = f.type === 'address' ? !(v.line1 || v.city || v.postcode) : Array.isArray(v) ? !v.length : !v;
+    if (f.required && empty) { need('q_' + f.id, f.type === 'file' ? 'Please choose a file.' : f.type === 'multichoice' ? 'Please tick at least one.' : 'Please answer this.'); continue; }
     if (empty) continue;
+    if ((f.type === 'dropdown' || f.type === 'multichoice') && [].concat(v).includes('Other') && !others[f.id]) { need('q_' + f.id, 'Please type your answer where it says Other.'); continue; }
+    if (f.type === 'multichoice' && f.max_choices && v.length > f.max_choices) need('q_' + f.id, `Please choose no more than ${f.max_choices}.`);
     if (f.type === 'address' && (!v.line1 || !v.city || !v.postcode)) need('q_' + f.id, 'Please give the street, town or city and postcode.');
     if (f.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) need('q_' + f.id, "That email address doesn't look right.");
     if (f.type === 'phone' && v.replace(/[^\d]/g, '').length < 10) need('q_' + f.id, 'That number looks too short.');
     if (f.type === 'number' && !Number.isFinite(Number(v))) need('q_' + f.id, 'Please type a number.');
   }
   const pay = info.form.payment;
-  if (pay) { const a = Number(val('f_amount')); if (!Number.isFinite(a) || a < pay.min || a > pay.max) need('q_amount', `Please enter an amount from ${money(pay.min)} to ${money(pay.max)}.`); }
+  if (pay && pay.mode === 'fixed') { if (!(payAmountNow() <= 5000)) need('q_amount', 'That comes to more than £5,000 — please choose fewer places.'); }
+  else if (pay && pay.mode === 'choices') {
+    const a = payAmountNow();
+    if (chosenAmount === null) need('q_amount', 'Please choose an amount.');
+    else if (chosenAmount === 'other' && (!Number.isFinite(a) || a < pay.min || a > pay.max)) need('q_amount', `Please enter an amount from ${money(pay.min)} to ${money(pay.max)}.`);
+  } else if (pay) { const a = payAmountNow(); if (!Number.isFinite(a) || a < pay.min || a > pay.max) need('q_amount', `Please enter an amount from ${money(pay.min)} to ${money(pay.max)}.`); }
   const badAg = info.form.agreements.filter(a => a.kind === 'required' && !agreements[a.id]);
   badAg.forEach(a => problems.push(['ag_' + a.id, null]));
   return problems;
@@ -327,15 +430,16 @@ async function submit() {
     $('barErr').innerHTML = `<div class="err">Please complete the ${problems.length === 1 ? 'question' : problems.length + ' questions'} marked in red.</div>`;
     return;
   }
-  const { answers, agreements } = collect();
-  const sig = JSON.stringify([val('f_name'), val('f_phone'), val('f_email'), answers, agreements, val('f_amount')]);
+  const { answers, others, agreements, party } = collect();
+  const sig = JSON.stringify([val('f_name'), val('f_phone'), val('f_email'), answers, others, party, agreements, payAmountNow()]);
   if (!attempt || attempt.sig !== sig) attempt = { sig, ref: newClientRef() };
   busy = true; $('goBtn').disabled = true; $('goBtn').textContent = 'Sending…';
   try {
-    const body = { campaign_id: campaignId, name: val('f_name'), phone: val('f_phone'), email: val('f_email'), answers, agreements, client_ref: attempt.ref, website: val('f_website') };
+    const body = { campaign_id: campaignId, name: val('f_name'), phone: val('f_phone'), email: val('f_email'), answers, others, agreements, client_ref: attempt.ref, website: val('f_website') };
+    if (party) body.party = party;
     const fl = {}; for (const f of info.form.fields) if (f.type === 'file' && files[f.id]) fl[f.id] = { filename: files[f.id].filename, mime: files[f.id].mime, data: files[f.id].data };
     if (Object.keys(fl).length) body.files = fl;
-    if (info.form.payment) body.amount = Number(val('f_amount'));
+    if (info.form.payment) body.amount = payAmountNow();
     const r = await call('public_register', body);
     if (r.pay_url) { $('veil').classList.add('on'); location.href = r.pay_url; return; }
     if (!r.registration_id) { $('app').innerHTML = `<div class="fatal"><div class="card"><div class="ok"><b>✓ Thank you — your registration has been received.</b></div></div></div>`; return; }   // (only a spam-trap answer comes back without an id)
