@@ -190,7 +190,56 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
 
   // the new-form wizard still works with the shared builder
   await ev(`closeRegForm(); openCampaignWizard('registration'); 'ok'`);
+  // ---- paying on the form (SumUp is stood in for: the page is sent to a pretend payment page)
+  global.fetch = async (u, opts = {}) => ({ ok: true, status: 200, json: async () => ({ id: 'co-' + Math.random().toString(36).slice(2), hosted_checkout_url: 'https://pay.example/x' }) });
+  const donate = await mk('Special Mass request', { fields: [q('text', 'Who is the Mass for?', { id: 'who', required: true })], payment: { mode: 'choices', amounts: [10, 20, 50], allow_other: true, min: 5, max: 200, label: 'Offering' } });
+  const dpage = `${base}/register.html?campaign_id=${donate}`;
+  await view(390, 844);
+  check('a form with suggested amounts opens', await open(dpage, "document.getElementById('amtGrid')"));
+  check('it shows each suggested amount and "Other", none chosen yet, and the Other box hidden', await ev(`[...document.querySelectorAll('#amtGrid button')].map(b => b.textContent).join('|') === '£10.00|£20.00|£50.00|Other' && !document.querySelector('#amtGrid .on') && document.getElementById('otherAmtBox').hidden`));
+  const am = await ev(`[...document.querySelectorAll('#amtGrid button')].map(b => Math.round(b.getBoundingClientRect().height))`);
+  check('  the amount buttons are at least 44px tall', am.every(h => h >= 44), JSON.stringify(am));
+  await setVal('#f_name', 'Peter Payer'); await setVal('#f_email', 'peter@example.org'); await setVal('#f_who', 'Grandad John');
+  await click('#goBtn');
+  check('submitting without choosing an amount says "Please choose an amount."', await ev(`document.getElementById('q_amount').classList.contains('bad') && document.querySelector('#q_amount .why').textContent === 'Please choose an amount.'`));
+  await click('#amtGrid button', 'Other');
+  check('tapping Other shows the box for typing an amount, with its limits', await ev(`!document.getElementById('otherAmtBox').hidden && document.getElementById('otherAmtHelp').textContent.includes('£5.00 to £200.00')`));
+  await setVal('#f_amount_other', '3'); await click('#goBtn');
+  check('an Other amount below the limit is refused on the page', await ev(`document.querySelector('#q_amount .why').textContent.includes('£5.00 to £200.00')`));
+  await shot('donate-390');
+  await click('#amtGrid button', '£20.00');
+  check('tapping a suggested amount selects it and hides the Other box', await ev(`document.querySelector('#amtGrid .on').textContent === '£20.00' && document.getElementById('otherAmtBox').hidden`));
+  const before = T('payments').length;
+  await click('#goBtn');
+  await sleep(2500);
+  check('submitting takes £20.00 and sends the person to the payment page; the registration waits for payment', T('payments').length === before + 1 && Number(T('payments').slice(-1)[0].amount) === 20 && T('registrations').slice(-1)[0].status === 'awaiting_payment', JSON.stringify(T('payments').slice(-1)));
+  // a fixed price per place updates as the places change
+  const dinnerFixed = await mk('Fixed Dinner', { fields: [], party: { max: 4, label: 'Places' }, payment: { mode: 'fixed', amount: 12, per_place: true, label: 'Dinner tickets' } });
+  await open(`${base}/register.html?campaign_id=${dinnerFixed}`, "document.getElementById('payFixed')");
+  check('a fixed price shows the price, with no amount to type', await ev(`document.getElementById('payFixed').textContent.trim() === '£12.00' && !document.getElementById('f_amount') && !document.getElementById('amtGrid')`));
+  await setVal('#f_party', '3', 'change');
+  check('choosing 3 places shows £36.00 (3 places × £12.00)', await ev(`document.getElementById('payFixed').textContent.replace(/\\s+/g, ' ').includes('£36.00') && document.getElementById('payFixed').textContent.includes('3 places × £12.00')`));
+  // the admin screen: money options in the editor
+  const moneyForm = await mk('Altar Servers', { fields: [q('text', 'Child name', { id: 'child' })] });
+  await loginAs(SA, { id: 'uA-sa', name: 'superadmin', role: 'superadmin', org_id: 'org-A', mobile: '07000000001' });
+  await ev(`setAdminTab('registrations'); 'ok'`); await waitFor(`document.getElementById('adminContent').textContent.includes('Altar Servers')`);
+  await ev(`openRegForm(${JSON.stringify(moneyForm)}); 'ok'`);
+  await waitFor(`document.getElementById('regFormPanel') && [...document.querySelectorAll('#regFormPanel button')].some(b => b.textContent.includes('Edit the questions'))`);
+  await click('#regFormPanel button', '✏ Edit the questions');
+  await waitFor(`document.getElementById('regEditPanel')`);
+  await click('#regEditPanel button', '💷 Take a payment');
+  check('"Take a payment" offers a fixed price, suggested amounts, or let them choose — and says no one in the office does anything', await waitFor(`['A fixed price', 'Suggested amounts', 'They choose'].every(t => [...document.querySelectorAll('#regEditPanel button')].some(b => b.textContent.trim() === t)) && document.getElementById('regEditPanel').textContent.includes('No one in the office has to do anything')`));
+  await click('#regEditPanel button', 'Suggested amounts');
+  await setVal('#regEditPanel input[placeholder^="e.g. 10"]', '10');
+  await click('#regEditPanel button', 'Save the questions');
+  check('one suggested amount is refused with a plain message', await waitFor(`document.getElementById('reMsg').textContent.includes('between two and six different suggested amounts')`));
+  await setVal('#regEditPanel input[placeholder^="e.g. 10"]', '£10, 25, 50');
+  await click('#regEditPanel button', 'Save the questions');
+  check('with valid amounts it saves, and the settings page describes the payment in words', await waitFor(`document.getElementById('toast').textContent.includes('Questions saved') && document.getElementById('regFormPanel').textContent.includes('Suggested £10.00, £25.00, £50.00')`), JSON.stringify(T('campaigns').find(c => c.id === moneyForm).form_def.payment));
+  check('  stored as mode "choices" with "Other" allowed between the limits', (() => { const p = T('campaigns').find(c => c.id === moneyForm).form_def.payment; return p.mode === 'choices' && JSON.stringify(p.amounts) === '[10,25,50]'; })());
+
   // every wizard step draws, the ready-made Sacrament template and a copied form build a definition the server accepts
+  await ev(`closeRegForm(); openCampaignWizard('registration'); 'ok'`); await waitFor(`typeof wiz !== 'undefined' && wiz && wiz.reg`);
   const wz = await ev(`(() => { const out = {}; try { wizResetContent(); wiz.kind = 'registration'; wiz.name = 'Sacrament test'; wiz.keep_until = '2027-06-01';
     const t = WIZ_TEMPLATES.registration.find(x => x.id === 'sacrament'); t.apply();
     for (const s of [4, 5, 6, 7]) { wizStep = s; out['step' + s] = regWizStepHtml().length; }

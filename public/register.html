@@ -72,6 +72,11 @@ window.__infoP = (function () {
   .agree label { font-size:15px; line-height:1.45; color:var(--ink); }
   .agree.bad label { color:var(--bad); }
   .trap { position:absolute; left:-9999px; top:auto; width:1px; height:1px; overflow:hidden; }
+  .amtgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(96px, 1fr)); gap:8px; }
+  .amtgrid button { min-height:52px; border:1.5px solid var(--line); background:#fff; border-radius:12px; font-size:18px; font-weight:800; color:var(--ink); }
+  .amtgrid button.on { border-color:var(--pine); background:var(--pine-dim); color:var(--pine-deep); box-shadow:0 0 0 2px var(--pine) inset; }
+  .q.bad .amtgrid button { border-color:var(--bad); }
+  .payfix { font-family:var(--font-head); font-size:26px; font-weight:600; color:var(--ink); }
   .amt { display:flex; align-items:center; gap:8px; }
   .amt span { font-family:var(--font-head); font-size:26px; font-weight:600; }
   .amt input { max-width:160px; }
@@ -223,6 +228,43 @@ function fieldHtml(f) {
 function agreementHtml(a) {
   return `<div class="agree" id="ag_${a.id}"><input type="checkbox" id="ab_${a.id}"><label for="ab_${a.id}">${esc(a.text)}${a.kind === 'required' ? ' <span style="color:var(--wine)">*</span>' : ' <span style="color:var(--slate);font-size:13px">(optional)</span>'}</label></div>`;
 }
+// ---- the payment: a fixed price (optionally per place), suggested amounts with "Other", or an amount they choose between two limits
+let chosenAmount = null;   // the suggested amount tapped (a number), or 'other'
+function payCardHtml(pay) {
+  const title = esc(pay.label || (pay.mode === 'fixed' ? 'Your payment' : 'Your contribution'));
+  const card = (inner) => `<div class="card"><h2>${title}</h2><div class="q" id="q_amount">${inner}<div class="why"></div></div></div>`;
+  if (pay.mode === 'fixed') return card(`<div class="payfix" id="payFixed" aria-live="polite"></div><div class="help" style="margin-top:6px">You pay on the next page, by card.</div>`);
+  if (pay.mode === 'choices') return card(`<div class="amtgrid" id="amtGrid" role="group" aria-label="Choose an amount">${pay.amounts.map(a => `<button type="button" data-a="${a}">${money(a)}</button>`).join('')}${pay.allow_other ? '<button type="button" data-a="other">Other</button>' : ''}</div>
+    ${pay.allow_other ? `<div class="amt" id="otherAmtBox" hidden style="margin-top:10px"><span>£</span><input type="number" id="f_amount_other" inputmode="decimal" step="0.01" min="${pay.min}" max="${pay.max}" placeholder="Amount"></div>
+    <div class="help" id="otherAmtHelp" hidden style="margin-top:6px">Any amount from ${money(pay.min)} to ${money(pay.max)}.</div>` : ''}
+    <div class="help" style="margin-top:6px">You pay on the next page, by card.</div>`);
+  return card(`<div class="amt"><span>£</span><input type="number" id="f_amount" inputmode="decimal" step="0.01" min="${pay.min}" max="${pay.max}" value="${pay.min}"></div>
+    <div class="help" style="margin-top:6px">The minimum is ${money(pay.min)}; you may give more (up to ${money(pay.max)}). You pay on the next page, by card.</div>`);
+}
+// What they will pay right now (NaN until they have chosen). The server works it out again and never trusts this.
+function payAmountNow() {
+  const pay = info.form.payment; if (!pay) return NaN;
+  if (pay.mode === 'fixed') return pay.amount * (pay.per_place && info.form.party ? (Number(val('f_party')) || 1) : 1);
+  if (pay.mode === 'choices') return chosenAmount === 'other' ? Number(val('f_amount_other')) : (chosenAmount === null ? NaN : chosenAmount);
+  return Number(val('f_amount'));
+}
+function refreshPayFixed() {
+  const pay = info.form.payment, el = $('payFixed'); if (!el || !pay) return;
+  const n = pay.per_place && info.form.party ? (Number(val('f_party')) || 1) : 1;
+  el.innerHTML = n > 1 ? `<b>${money(pay.amount * n)}</b> <span class="muted">(${n} places × ${money(pay.amount)})</span>` : `<b>${money(pay.amount)}</b>`;
+}
+function wirePayment() {
+  const pay = info.form.payment; if (!pay) return;
+  if (pay.mode === 'fixed') { refreshPayFixed(); const p = $('f_party'); if (p) p.addEventListener('change', refreshPayFixed); }
+  if (pay.mode === 'choices') {
+    $('amtGrid').querySelectorAll('button').forEach(b => { b.onclick = () => {
+      chosenAmount = b.dataset.a === 'other' ? 'other' : Number(b.dataset.a);
+      $('amtGrid').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      if ($('otherAmtBox')) { $('otherAmtBox').hidden = chosenAmount !== 'other'; $('otherAmtHelp').hidden = chosenAmount !== 'other'; if (chosenAmount === 'other') $('f_amount_other').focus(); }
+      clearBad($('q_amount'));
+    }; });
+  }
+}
 // "How many places?": a drop-down of 1 up to the form's most (or what is left, if less)
 function partyCard(p) {
   const most = info.places_left != null ? Math.min(p.max, Math.max(1, info.places_left)) : p.max;
@@ -271,9 +313,7 @@ function buildForm() {
       ${F.fields.length ? `<div class="card"><h2>Questions</h2>${F.fields.map(fieldHtml).join('')}</div>` : ''}
       ${F.party ? partyCard(F.party) : ''}
       ${F.agreements.length ? `<div class="card"><h2>Agreements</h2>${F.agreements.map(agreementHtml).join('')}</div>` : ''}
-      ${pay ? `<div class="card"><h2>${esc(pay.label || 'Your contribution')}</h2>
-        <div class="q" id="q_amount"><div class="amt"><span>£</span><input type="number" id="f_amount" inputmode="decimal" step="0.01" min="${pay.min}" max="${pay.max}" value="${pay.min}"></div>
-        <div class="help" style="margin-top:6px">The minimum is ${money(pay.min)}; you may give more (up to ${money(pay.max)}). You pay on the next page, by card.</div><div class="why"></div></div></div>` : ''}
+      ${pay ? payCardHtml(pay) : ''}
       <div class="trap" aria-hidden="true"><label>Leave this empty<input type="text" id="f_website" tabindex="-1" autocomplete="off"></label></div>
       ${info.form.approval ? '<div class="gold">Your application is checked by the parish before it is accepted — you will see its status on your registration page.</div>' : ''}
       <p class="fine">${privacyLine()}${info.places_left != null ? ` · ${info.places_left} place${info.places_left === 1 ? '' : 's'} left` : ''}</p>
@@ -290,6 +330,7 @@ function buildForm() {
     if (f.type === 'multichoice' && f.max_choices) { const on = el.querySelectorAll('input[type=checkbox]:checked').length; el.querySelectorAll('input[type=checkbox]').forEach(c => { c.disabled = !c.checked && on >= f.max_choices; }); } }); });
   applyShowRules();
   document.querySelectorAll('.agree input').forEach(el => { el.addEventListener('change', () => el.closest('.agree').classList.remove('bad')); });
+  wirePayment();
   $('goBtn').onclick = submit;
 }
 function clearBad(q) { if (q) q.classList.remove('bad'); }
@@ -367,7 +408,12 @@ function validate() {
     if (f.type === 'number' && !Number.isFinite(Number(v))) need('q_' + f.id, 'Please type a number.');
   }
   const pay = info.form.payment;
-  if (pay) { const a = Number(val('f_amount')); if (!Number.isFinite(a) || a < pay.min || a > pay.max) need('q_amount', `Please enter an amount from ${money(pay.min)} to ${money(pay.max)}.`); }
+  if (pay && pay.mode === 'fixed') { if (!(payAmountNow() <= 5000)) need('q_amount', 'That comes to more than £5,000 — please choose fewer places.'); }
+  else if (pay && pay.mode === 'choices') {
+    const a = payAmountNow();
+    if (chosenAmount === null) need('q_amount', 'Please choose an amount.');
+    else if (chosenAmount === 'other' && (!Number.isFinite(a) || a < pay.min || a > pay.max)) need('q_amount', `Please enter an amount from ${money(pay.min)} to ${money(pay.max)}.`);
+  } else if (pay) { const a = payAmountNow(); if (!Number.isFinite(a) || a < pay.min || a > pay.max) need('q_amount', `Please enter an amount from ${money(pay.min)} to ${money(pay.max)}.`); }
   const badAg = info.form.agreements.filter(a => a.kind === 'required' && !agreements[a.id]);
   badAg.forEach(a => problems.push(['ag_' + a.id, null]));
   return problems;
@@ -385,7 +431,7 @@ async function submit() {
     return;
   }
   const { answers, others, agreements, party } = collect();
-  const sig = JSON.stringify([val('f_name'), val('f_phone'), val('f_email'), answers, others, party, agreements, val('f_amount')]);
+  const sig = JSON.stringify([val('f_name'), val('f_phone'), val('f_email'), answers, others, party, agreements, payAmountNow()]);
   if (!attempt || attempt.sig !== sig) attempt = { sig, ref: newClientRef() };
   busy = true; $('goBtn').disabled = true; $('goBtn').textContent = 'Sending…';
   try {
@@ -393,7 +439,7 @@ async function submit() {
     if (party) body.party = party;
     const fl = {}; for (const f of info.form.fields) if (f.type === 'file' && files[f.id]) fl[f.id] = { filename: files[f.id].filename, mime: files[f.id].mime, data: files[f.id].data };
     if (Object.keys(fl).length) body.files = fl;
-    if (info.form.payment) body.amount = Number(val('f_amount'));
+    if (info.form.payment) body.amount = payAmountNow();
     const r = await call('public_register', body);
     if (r.pay_url) { $('veil').classList.add('on'); location.href = r.pay_url; return; }
     if (!r.registration_id) { $('app').innerHTML = `<div class="fatal"><div class="card"><div class="ok"><b>✓ Thank you — your registration has been received.</b></div></div></div>`; return; }   // (only a spam-trap answer comes back without an id)

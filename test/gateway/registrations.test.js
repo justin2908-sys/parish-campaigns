@@ -290,3 +290,70 @@ test('editing the questions: free before anyone registers, safe changes only aft
     assert.equal((await call('set_registration_form', { campaign_id: id, form_def: base() }, { session: se })).status, 403);
   });
 });
+
+test('paying on the form: a fixed price, a price per place, suggested amounts with Other, or a range', async (t) => {
+  let sumup;
+  const setup = async (payment, form = {}, extra = {}) => {
+    reset(); sumup = [];
+    global.fetch = async (url, opts = {}) => { sumup.push(JSON.parse(opts.body || '{}')); return { ok: true, status: 200, json: async () => ({ id: 'co-' + sumup.length, hosted_checkout_url: 'https://pay.example/' + sumup.length }) }; };
+    return make({ fields: [], payment, ...form }, extra);
+  };
+  const paid = () => T('payments').map(p => Number(p.amount));
+  await t.test('a fixed price is charged whatever the page says', async () => {
+    const id = await setup({ mode: 'fixed', amount: 12, label: 'Dinner ticket' });
+    const r = await reg(id, { amount: 1 }); assert.equal(r.status, 200, r.raw);
+    assert.deepEqual(paid(), [12]); assert.equal(r.body.amount, 12); assert.equal(sumup[0].amount, 12); assert.match(r.body.pay_url, /^https:\/\/pay\.example/);
+    assert.equal(T('registrations')[0].status, 'awaiting_payment');
+  });
+  await t.test('a price per place is multiplied by the places chosen, on the server', async () => {
+    const id = await setup({ mode: 'fixed', amount: 12, per_place: true }, { party: { max: 4 } });
+    assert.equal((await reg(id, { party: 3, amount: 1 })).status, 200);
+    assert.deepEqual(paid(), [36]);
+    assert.equal(T('registrations')[0].party_size, 3);
+  });
+  await t.test('a total over £5,000 is refused before anything is created', async () => {
+    const id = await setup({ mode: 'fixed', amount: 1000, per_place: true }, { party: { max: 10 } });
+    const r = await reg(id, { party: 10 }); assert.equal(r.status, 400); assert.match(r.body.error, /£5,000/);
+    assert.equal(T('payments').length, 0); assert.equal(T('registrations').length, 0);
+  });
+  await t.test('suggested amounts: a suggested one, or Other within its limits', async () => {
+    const id = await setup({ mode: 'choices', amounts: [50, 10, 20], allow_other: true, min: 5, max: 200, label: 'Donation' });
+    assert.deepEqual(T('campaigns').find(c => c.id === id).form_def.payment, { mode: 'choices', amounts: [10, 20, 50], allow_other: true, label: 'Donation', min: 5, max: 200 });
+    assert.equal((await reg(id, { amount: 20 })).status, 200);
+    assert.equal((await reg(id, { amount: 35.5, email: 'b@example.org' })).status, 200);
+    assert.deepEqual(paid(), [20, 35.5]);
+    for (const bad of [4.99, 200.01, 0, -5, 'lots', undefined]) { const r = await reg(id, { amount: bad, email: 'c@example.org' }); assert.equal(r.status, 400, `amount ${bad}: ${r.raw}`); }
+    assert.equal(T('payments').length, 2, 'refused attempts leave no payment behind');
+  });
+  await t.test('without "Other" only the suggested amounts are accepted', async () => {
+    const id = await setup({ mode: 'choices', amounts: [10, 20], allow_other: false });
+    assert.equal((await reg(id, { amount: 10 })).status, 200);
+    const r = await reg(id, { amount: 15, email: 'b@example.org' }); assert.equal(r.status, 400); assert.match(r.body.error, /one of the amounts shown/);
+  });
+  await t.test('a plain range still works exactly as before, and its stored shape has no extra keys', async () => {
+    const id = await setup({ min: 5, max: 50, label: 'Fee' });
+    assert.deepEqual(T('campaigns').find(c => c.id === id).form_def.payment, { min: 5, max: 50, label: 'Fee' });
+    assert.equal((await reg(id, { amount: 5 })).status, 200);
+    assert.equal((await reg(id, { amount: 51, email: 'b@example.org' })).status, 400);
+    // a form already live with this shape can still be re-saved safely after people registered
+    const def = T('campaigns').find(c => c.id === id).form_def;
+    assert.equal((await call('set_registration_form', { campaign_id: id, form_def: { ...def, intro: 'New intro' } }, { session: SA })).status, 200);
+  });
+  await t.test('bad payment settings are refused in plain words', async () => {
+    reset();
+    const bad = async (payment, form, re) => { const r = await call('create_campaign', { kind: 'registration', name: 'X', keep_until: '2027-06-01', form_def: { fields: [], payment, ...form } }, { session: SA }); assert.equal(r.status, 400, r.raw); assert.match(r.body.error, re); };
+    await bad({ mode: 'fixed', amount: 0 }, {}, /fixed price/);
+    await bad({ mode: 'fixed', amount: 6000 }, {}, /fixed price/);
+    await bad({ mode: 'fixed', amount: 10, per_place: true }, {}, /charge per place/);
+    await bad({ mode: 'choices', amounts: [10] }, {}, /two and six/);
+    await bad({ mode: 'choices', amounts: [1, 2, 3, 4, 5, 6, 7] }, {}, /two and six/);
+    await bad({ mode: 'choices', amounts: [10, 0.5] }, {}, /£1 to £5,000/);
+    await bad({ mode: 'choices', amounts: [10, 20], allow_other: true, min: 50, max: 10 }, {}, /maximum/);
+  });
+  await t.test('once people have registered the payment cannot be changed', async () => {
+    const id = await setup({ mode: 'fixed', amount: 12 });
+    await reg(id, {});
+    const r = await call('set_registration_form', { campaign_id: id, form_def: { fields: [], payment: { mode: 'fixed', amount: 15 } } }, { session: SA });
+    assert.equal(r.status, 409); assert.match(r.body.error, /payment can no longer be changed/);
+  });
+});

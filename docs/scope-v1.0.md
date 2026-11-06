@@ -1418,3 +1418,15 @@ Baseline re-verified against the live database (sections 1–7 identical).
 Tests: `test/gateway/registrations.test.js` (29), `test/gateway/ui-registrations.js` (browser).
 Not yet: payment with suggested amounts / "Other" amount (next), the four forms rebuilt as templates, a "new" count on the tab, and a
 per-form viewer for volunteers.
+
+### 59b. Paying on the form: fixed price, suggested amounts + Other, or a range — 2026-11-06 (on dev; preview only)
+
+A registration form can take payment in one of three ways, all collected on the form itself by card (SumUp hosted checkout), so no one
+in the office has to arrange or chase anything: **a fixed price** (optionally multiplied by the number of places chosen), **suggested
+amounts** (two to six, tapped like buttons) **with an optional "Other"** the person types within limits you set, or **an amount they
+choose** between a minimum and a maximum (the original way, unchanged and stored exactly as before).
+The server works out what is owed from the form's own setting; a price sent by the page is never trusted (a fixed price ignores it; a
+suggested form accepts only a suggested amount, or an Other inside the limits). A total over £5,000 is refused before anything is created.
+A person is registered once they have paid; if they do not finish, the place goes back by itself (unchanged). Refunds are still recorded
+by hand as before. Once people have registered, the payment setting cannot be changed.
+Tests: 9 more server tests (38 in `registrations.test.js`) and browser checks in `ui-registrations.js`.

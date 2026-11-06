@@ -2475,10 +2475,26 @@ function cleanFormDef(def) {
   });
   let payment = null;
   if (d.payment && typeof d.payment === 'object') {
-    const min = Math.round(Number(d.payment.min) * 100) / 100, max = Math.round(Number(d.payment.max == null || d.payment.max === '' ? 500 : d.payment.max) * 100) / 100;
-    if (!Number.isFinite(min) || min < 1) throw httpError(400, 'The minimum payment must be at least £1 (or turn payment off).');
-    if (!Number.isFinite(max) || max < min || max > 5000) throw httpError(400, 'The maximum payment must be at least the minimum, and no more than £5,000.');
-    payment = { min, max, label: cleanText(d.payment.label, 120, 'The payment label') };
+    const money = (v) => Math.round(Number(v) * 100) / 100;
+    const label = cleanText(d.payment.label, 120, 'The payment label');
+    const mode = d.payment.mode === 'fixed' ? 'fixed' : d.payment.mode === 'choices' ? 'choices' : 'range';
+    const checkRange = () => {
+      const min = money(d.payment.min), max = money(d.payment.max == null || d.payment.max === '' ? 500 : d.payment.max);
+      if (!Number.isFinite(min) || min < 1) throw httpError(400, 'The minimum payment must be at least £1 (or turn payment off).');
+      if (!Number.isFinite(max) || max < min || max > 5000) throw httpError(400, 'The maximum payment must be at least the minimum, and no more than £5,000.');
+      return { min, max };
+    };
+    if (mode === 'fixed') {
+      const amount = money(d.payment.amount);
+      if (!Number.isFinite(amount) || amount < 1 || amount > 5000) throw httpError(400, 'A fixed price must be from £1 to £5,000.');
+      payment = { mode: 'fixed', amount, per_place: !!d.payment.per_place, label };
+    } else if (mode === 'choices') {
+      const amounts = [...new Set((Array.isArray(d.payment.amounts) ? d.payment.amounts : []).map(money))].sort((a, b) => a - b);
+      if (amounts.length < 2 || amounts.length > 6) throw httpError(400, 'Give between two and six suggested amounts (or use a fixed price).');
+      if (amounts.some(a => !Number.isFinite(a) || a < 1 || a > 5000)) throw httpError(400, 'Each suggested amount must be from £1 to £5,000.');
+      payment = { mode: 'choices', amounts, allow_other: !!d.payment.allow_other, label };
+      if (payment.allow_other) Object.assign(payment, checkRange());
+    } else payment = { ...checkRange(), label };
   }
   // "How many places?": when on, the person says how many places their registration takes (themselves and a companion, say).
   let party = null;
@@ -2487,6 +2503,7 @@ function cleanFormDef(def) {
     if (!Number.isInteger(mx) || mx < 2 || mx > MAX_REG_PARTY) throw httpError(400, `The most places one registration can take must be a whole number from 2 to ${MAX_REG_PARTY}.`);
     party = { max: mx, label: cleanText(d.party.label, 150, 'The places question') || 'How many places do you need, including yourself?' };
   }
+  if (payment && payment.per_place && !party) throw httpError(400, 'To charge per place, turn on "How many places does one registration take?" as well.');
   const out = {
     intro: cleanText(d.intro, 2000, 'The introduction'),
     contact_mode: d.contact_mode === 'both' ? 'both' : 'either',
@@ -2494,6 +2511,21 @@ function cleanFormDef(def) {
   };
   if (party) out.party = party;
   return out;
+}
+// What a person owes for this form, worked out on the server from its payment setting.
+function registrationPayAmount(cfg, amountIn, party) {
+  const money = (v) => Math.round(Number(v) * 100) / 100, pounds = (v) => `£${Number(v).toFixed(2)}`;
+  if (cfg.mode === 'fixed') return money(cfg.amount * (cfg.per_place ? party : 1));
+  const a = money(amountIn);
+  if (!Number.isFinite(a) || a <= 0) throw httpError(400, cfg.mode === 'choices' ? 'Please choose an amount.' : `Please enter an amount from ${pounds(cfg.min)} to ${pounds(cfg.max)}.`);
+  if (cfg.mode === 'choices') {
+    if (cfg.amounts.includes(a)) return a;
+    if (!cfg.allow_other) throw httpError(400, 'Please choose one of the amounts shown.');
+    if (a < cfg.min || a > cfg.max) throw httpError(400, `Please enter an amount from ${pounds(cfg.min)} to ${pounds(cfg.max)}.`);
+    return a;
+  }
+  if (a < cfg.min || a > cfg.max) throw httpError(400, `Please enter an amount from ${pounds(cfg.min)} to ${pounds(cfg.max)}.`);
+  return a;
 }
 function cleanPlaces(v) {
   if (v === undefined || v === null || v === '') return null;
@@ -2734,12 +2766,13 @@ async function publicRegister({ campaign_id, name, phone, email, answers, others
     return { id: a.id, kind: a.kind, text: a.text, accepted };
   });
 
-  // A form that takes a payment asks for an amount between its minimum and maximum, paid as part of submitting.
+  // A form that takes a payment collects it as part of submitting: an amount they choose between a minimum and maximum, a fixed price
+  // (optionally per place), or one of some suggested amounts (plus "Other"). The server works the amount out; it never trusts a price from the page.
   const payCfg = def.payment || null;
   let payAmount = null, paymentId = null;
   if (payCfg) {
-    payAmount = Math.round(Number(amount) * 100) / 100;
-    if (!Number.isFinite(payAmount) || payAmount < payCfg.min || payAmount > payCfg.max) throw httpError(400, `Please enter an amount from £${Number(payCfg.min).toFixed(2)} to £${Number(payCfg.max).toFixed(2)}.`);
+    payAmount = registrationPayAmount(payCfg, amount, party);
+    if (!(payAmount > 0 && payAmount <= 5000)) throw httpError(400, 'That comes to more than £5,000 — please reduce the number of places.');
     await enforcePublicPurchaseLimits(emailV || phoneV, 1);
     const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaign.id, method: 'link', amount: payAmount, status: 'pending', seller_id: null, payer_name: cleanedName, contact_value: emailV || phoneV, client_ip: clientIp || null }).select().single();
     if (payErr) throw httpError(500, 'Could not start your payment — please try again.');

@@ -1597,7 +1597,7 @@ async function doSetWaiting(enabled) {
 // payment (a minimum and a maximum), and whether each application needs approving.
 const WIZ_STEPS_REG = ['Start', 'About it', 'Dates', 'Places', 'Questions', 'Agreements and money', 'Review'];
 const REG_TYPE_LABELS = { text: 'Short answer', longtext: 'Long answer', number: 'Number', date: 'Date', dropdown: 'Choose one (dropdown)', multichoice: 'Choose several (tick boxes)', yesno: 'Yes / No', phone: 'Phone number', email: 'Email address', address: 'UK address', file: 'File or photo', heading: 'Section heading (no answer)', note: 'Note to read (no answer)' };
-function newRegState() { return { intro: '', contactMode: 'either', fields: [], agreements: [], payEnabled: false, payMin: '', payMax: '500', payLabel: '', approval: false, partyOn: false, partyMax: '2', partyLabel: '' }; }
+function newRegState() { return { intro: '', contactMode: 'either', fields: [], agreements: [], payEnabled: false, payMode: 'fixed', payAmount: '', payPerPlace: false, payAmounts: '', payOther: true, payMin: '', payMax: '500', payLabel: '', approval: false, partyOn: false, partyMax: '2', partyLabel: '' }; }
 // Every question carries a stable key (it becomes its id on the server), so "show only if" rules and earlier answers keep pointing at the right question.
 let regKeySeq = 0;
 function regNewKey() { return 'k' + (++regKeySeq); }
@@ -1683,6 +1683,26 @@ function regRemove(i) { curReg().fields.splice(i, 1); regTidy(); regRedraw(); }
 function regAddAgreement() { curReg().agreements.push({ kind: 'required', text: '' }); regRedraw(); }
 function regRemoveAgreement(i) { curReg().agreements.splice(i, 1); regRedraw(); }
 function regSetPay(on) { curReg().payEnabled = !!on; regRedraw(); }
+function regSetPayMode(m) { const R = curReg(); R.payMode = m; if (m === 'choices' && !R.payMin) R.payMin = '1'; regRedraw(); }
+// The payment, in a sentence, for the review page and the form's settings. `p` is the server's payment object.
+function regPayText(p) {
+  if (!p) return 'No payment';
+  const m = (n) => '£' + Number(n).toFixed(2);
+  if (p.mode === 'fixed') return `${m(p.amount)}${p.per_place ? ' per place' : ''} (fixed)`;
+  if (p.mode === 'choices') return `Suggested ${p.amounts.map(m).join(', ')}${p.allow_other ? `, or other (${m(p.min)}–${m(p.max)})` : ''}`;
+  return `${m(p.min)} or more, up to ${m(p.max)}`;
+}
+// The payment as the server stores it, from the builder's state (null when there is none).
+function regPayDef(R) {
+  if (!R.payEnabled) return null;
+  if (R.payMode === 'fixed') return { mode: 'fixed', amount: Number(R.payAmount), per_place: !!R.payPerPlace && !!R.partyOn, label: R.payLabel };
+  if (R.payMode === 'choices') {
+    const o = { mode: 'choices', amounts: String(R.payAmounts || '').split(/[,\n;]+/).map(x => x.trim().replace(/^£/, '')).filter(Boolean).map(Number), allow_other: !!R.payOther, label: R.payLabel };
+    if (R.payOther) { o.min = Number(R.payMin); o.max = Number(R.payMax || 500); }
+    return o;
+  }
+  return { min: Number(R.payMin), max: Number(R.payMax || 500), label: R.payLabel };
+}
 function regSetParty(on) { curReg().partyOn = !!on; regRedraw(); }
 function regSetShowOn(i, on) {
   const fs = curReg().fields, f = fs[i]; f.showOn = !!on;
@@ -1789,10 +1809,25 @@ function regSettingsHtml(locked) {
       <button type="button" style="flex:1 1 110px" class="${!R.payEnabled ? 'active' : ''}" onclick="regSetPay(false)">No payment</button>
       <button type="button" style="flex:1 1 110px" class="${R.payEnabled ? 'active alt' : ''}" onclick="regSetPay(true)">💷 Take a payment</button>
     </div>
-    ${R.payEnabled ? `<div style="display:flex;gap:8px;margin-top:8px"><div style="flex:1"><label style="margin-top:0">Minimum (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMin)}" oninput="curReg().payMin=this.value"></div>
-        <div style="flex:1"><label style="margin-top:0">Maximum (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMax)}" oninput="curReg().payMax=this.value"></div></div>
+    ${R.payEnabled ? `<label>How much do they pay?</label>
+      <div class="toggle" style="width:100%;flex-wrap:wrap">
+        <button type="button" style="flex:1 1 100px" class="${R.payMode === 'fixed' ? 'active alt' : ''}" onclick="regSetPayMode('fixed')">A fixed price</button>
+        <button type="button" style="flex:1 1 100px" class="${R.payMode === 'choices' ? 'active alt' : ''}" onclick="regSetPayMode('choices')">Suggested amounts</button>
+        <button type="button" style="flex:1 1 100px" class="${R.payMode === 'range' ? 'active alt' : ''}" onclick="regSetPayMode('range')">They choose</button>
+      </div>
+      ${R.payMode === 'fixed' ? `<label>Price (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payAmount)}" oninput="curReg().payAmount=this.value" placeholder="e.g. 12.00">
+        <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:8px"><input type="checkbox" style="width:auto;margin:0" ${R.payPerPlace ? 'checked' : ''} ${R.partyOn ? '' : 'disabled'} onchange="curReg().payPerPlace=this.checked; regRedraw()"> Charge this for every place they book${R.partyOn ? '' : ' (turn on “How many places does one registration take?” first)'}</label>
+        <p class="muted" style="margin-top:8px">Everyone pays exactly this${R.partyOn && R.payPerPlace ? ', multiplied by the number of places they choose' : ''}, by card, as part of submitting. Nobody can change the price.</p>` : ''}
+      ${R.payMode === 'choices' ? `<label>Suggested amounts (£) <span class="muted">(two to six, separated by commas)</span></label><input value="${esc(R.payAmounts)}" oninput="curReg().payAmounts=this.value" placeholder="e.g. 10, 20, 50, 100">
+        <label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:8px"><input type="checkbox" style="width:auto;margin:0" ${R.payOther ? 'checked' : ''} onchange="curReg().payOther=this.checked; regRedraw()"> Also let them type another amount (“Other”)</label>
+        ${R.payOther ? `<div style="display:flex;gap:8px;margin-top:8px"><div style="flex:1"><label style="margin-top:0">Other: at least (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMin)}" oninput="curReg().payMin=this.value"></div>
+          <div style="flex:1"><label style="margin-top:0">Other: at most (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMax)}" oninput="curReg().payMax=this.value"></div></div>` : ''}
+        <p class="muted" style="margin-top:8px">People tap one of the amounts${R.payOther ? ' or choose Other and type their own' : ''}, then pay by card as part of submitting.</p>` : ''}
+      ${R.payMode === 'range' ? `<div style="display:flex;gap:8px;margin-top:8px"><div style="flex:1"><label style="margin-top:0">Minimum (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMin)}" oninput="curReg().payMin=this.value"></div>
+          <div style="flex:1"><label style="margin-top:0">Maximum (£)</label><input type="number" step="0.01" min="1" inputmode="decimal" value="${esc(R.payMax)}" oninput="curReg().payMax=this.value"></div></div>
+        <p class="muted" style="margin-top:8px">There is no set price: people type an amount from the minimum up to the maximum and pay by card as part of submitting.</p>` : ''}
       <label>What the payment is for <span class="muted">(optional)</span></label><input placeholder="e.g. Registration fee" value="${esc(R.payLabel)}" oninput="curReg().payLabel=this.value">
-      <p class="muted" style="margin-top:8px">There is no fixed price: people choose an amount from the minimum up to the maximum and pay by card as part of submitting.</p>` : '<p class="muted" style="margin-top:8px">Nothing is paid; people just register.</p>'}
+      <p class="muted" style="margin-top:8px">The money goes straight to your SumUp account. A person is only registered once they have paid; if they don't finish, the place goes back by itself. No one in the office has to do anything.</p>` : '<p class="muted" style="margin-top:8px">Nothing is paid; people just register.</p>'}
     <label style="margin-top:16px">Approval</label>
     <div class="toggle" style="width:100%;flex-wrap:wrap">
       <button type="button" style="flex:1 1 110px" class="${!R.approval ? 'active' : ''}" onclick="curReg().approval=false; regRedraw()">Not needed</button>
@@ -1807,7 +1842,7 @@ function regWizStepHtml() {
   if (wizStep === 5) return regQuestionsHtml(false);
   if (wizStep === 6) return regIntroHtml() + '<div style="height:12px"></div>' + regSettingsHtml(false);
   // step 7: review
-  const q = R.fields.filter(regIsQ).length, money = R.payEnabled ? `£${Number(R.payMin || 0).toFixed(2)} or more, up to £${Number(R.payMax || 0).toFixed(2)}` : 'No payment';
+  const q = R.fields.filter(regIsQ).length, money = regPayText(regPayDef(R));
   return `
     <div class="card" style="background:var(--brass-dim);margin:0 0 12px"><p style="margin:0;line-height:1.5">${regSummaryHtml()}</p></div>
     <div class="stat"><span>Name <button type="button" class="link" onclick="goToWizStep(2)">Edit</button></span><b>${esc(wiz.name) || '—'}</b></div>
@@ -1828,7 +1863,7 @@ function regSummaryHtml() {
   const close = wiz.closes_on ? ` until ${fmtDay(wiz.closes_on)}.` : ', with no closing date.';
   const places = wiz.places ? ` ${esc(wiz.places)} place${Number(wiz.places) === 1 ? '' : 's'}${wiz.waitingList ? ', then a waiting list.' : '.'}` : ' There is no limit on places.';
   const party = R.partyOn ? ` One registration can take up to ${esc(R.partyMax)} places.` : '';
-  const money = R.payEnabled ? ` They pay at least £${Number(R.payMin || 0).toFixed(2)} (up to £${Number(R.payMax || 0).toFixed(2)}) as part of registering.` : ' There is no payment.';
+  const money = R.payEnabled ? ` They pay by card as part of registering: ${esc(regPayText(regPayDef(R)))}.` : ' There is no payment.';
   const appr = R.approval ? ' Each application is checked and marked Accepted or Declined.' : '';
   const keep = wiz.keep_until ? ` Names, contact details, answers and any uploaded files are kept until ${fmtDay(wiz.keep_until)} and removed 90 days later, on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}.` : '';
   return `<b>${n}</b> is a registration form. ${open}${close}${places}${party}${money}${appr} Only SuperAdmin, Finance and Priest can read the answers.${keep}`;
@@ -1846,7 +1881,7 @@ function regBuildFormDef(R) {
       return o;
     }),
     agreements: R.agreements.map(a => ({ kind: a.kind, text: a.text })),
-    payment: R.payEnabled ? { min: Number(R.payMin), max: Number(R.payMax || 500), label: R.payLabel } : null,
+    payment: regPayDef(R),
   };
   if (R.partyOn) def.party = { max: Number(R.partyMax), label: R.partyLabel };
   return def;
@@ -1874,9 +1909,21 @@ function regValidateStep(step, R) {
   if (step === 6) {
     for (let i = 0; i < R.agreements.length; i++) if (!R.agreements[i].text.trim()) return `Agreement ${i + 1} needs its wording (or remove it).`;
     if (R.payEnabled) {
-      const mn = Number(R.payMin), mx = Number(R.payMax || 500);
-      if (!(mn >= 1)) return 'The minimum payment must be at least £1 — or choose No payment.';
-      if (!(mx >= mn) || mx > 5000) return 'The maximum payment must be at least the minimum, and no more than £5,000.';
+      const range = () => {
+        const mn = Number(R.payMin), mx = Number(R.payMax || 500);
+        if (!(mn >= 1)) return R.payMode === 'choices' ? 'For “Other”, the least a person can type must be at least £1.' : 'The minimum payment must be at least £1 — or choose No payment.';
+        if (!(mx >= mn) || mx > 5000) return R.payMode === 'choices' ? 'For “Other”, the most must be at least the least, and no more than £5,000.' : 'The maximum payment must be at least the minimum, and no more than £5,000.';
+        return '';
+      };
+      if (R.payMode === 'fixed') {
+        const a = Number(R.payAmount);
+        if (!(a >= 1 && a <= 5000)) return 'A fixed price must be from £1 to £5,000.';
+      } else if (R.payMode === 'choices') {
+        const d = regPayDef(R), list = d.amounts;
+        if (list.length < 2 || list.length > 6 || new Set(list).size !== list.length) return 'Give between two and six different suggested amounts, separated by commas (for example 10, 20, 50).';
+        if (list.some(a => !(a >= 1 && a <= 5000))) return 'Each suggested amount must be a number from £1 to £5,000.';
+        if (R.payOther) return range();
+      } else return range();
     }
   }
   return '';
@@ -1891,7 +1938,9 @@ function regFromDef(def, locked) {
     fields: (def.fields || []).map(f => regClone({ key: f.id, type: f.type, label: f.label, help: f.help || '', required: !!f.required, sensitive: !!f.sensitive, options: (f.options || []).join('\n'),
       allowOther: !!f.allow_other, maxChoices: f.max_choices || '', showOn: !!f.show_if, showField: f.show_if ? f.show_if.field : '', showOp: f.show_if ? f.show_if.op : 'is', showValues: f.show_if ? f.show_if.values.slice() : [], locked: !!locked })),
     agreements: (def.agreements || []).map(a => ({ kind: a.kind, text: a.text })),
-    payEnabled: !!p, payMin: p ? String(p.min) : '', payMax: p ? String(p.max) : '500', payLabel: p ? (p.label || '') : '',
+    payEnabled: !!p, payMode: p ? (p.mode || 'range') : 'range', payAmount: p && p.mode === 'fixed' ? String(p.amount) : '', payPerPlace: !!(p && p.per_place),
+    payAmounts: p && p.mode === 'choices' ? p.amounts.join(', ') : '', payOther: p && p.mode === 'choices' ? !!p.allow_other : true,
+    payMin: p && p.min != null ? String(p.min) : '', payMax: p && p.max != null ? String(p.max) : '500', payLabel: p ? (p.label || '') : '',
     partyOn: !!party, partyMax: party ? String(party.max) : '2', partyLabel: party ? (party.label || '') : '',
   });
 }
@@ -2161,7 +2210,7 @@ function drawRegForm() {
       </div>
       <p class="muted" style="margin:8px 0 0">Closing a form just pauses it — the link keeps working and says it isn't taking registrations. The Recycle Bin removes it from the lists and the link stops working; the SuperAdmin can restore it. Either way, people's details are removed automatically 90 days after “keep until”.</p></div>
     <div class="card"><b>The form</b>
-      <div class="muted" style="margin:2px 0 6px">${(def.fields || []).length} question${(def.fields || []).length === 1 ? '' : 's'} · ${(def.agreements || []).length} agreement${(def.agreements || []).length === 1 ? '' : 's'} · ${def.payment ? `payment £${def.payment.min}–£${def.payment.max}` : 'no payment'} · ${def.approval ? 'each one is checked' : 'no approval step'}</div>
+      <div class="muted" style="margin:2px 0 6px">${(def.fields || []).length} question${(def.fields || []).length === 1 ? '' : 's'} · ${(def.agreements || []).length} agreement${(def.agreements || []).length === 1 ? '' : 's'} · ${def.payment ? `payment: ${regPayText(def.payment)}` : 'no payment'} · ${def.approval ? 'each one is checked' : 'no approval step'}</div>
       <ol style="margin:6px 0 0;padding-left:20px;line-height:1.6">${(def.fields || []).map(q => `<li>${q.sensitive ? '🔒 ' : ''}${q.type === 'heading' ? '<b>' + esc(q.label) + '</b>' : esc(q.label.length > 90 ? q.label.slice(0, 90) + '…' : q.label)}${q.required ? ' *' : ''} <span class="muted">(${esc(REG_TYPE_LABELS[q.type] || q.type)}${q.show_if ? ', shown only for some answers' : ''})</span></li>`).join('') || '<li class="muted">No questions of its own — just name and contact.</li>'}</ol>
       ${def.party ? `<div class="muted" style="margin-top:6px">Each registration can take up to ${def.party.max} places.</div>` : ''}
       <div class="tiny-actions" style="margin-top:10px"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="openRegEdit()">✏ Edit the questions</button> <button class="small" onclick="doRegPreview()">Preview</button></div>
