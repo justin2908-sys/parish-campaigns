@@ -31,7 +31,7 @@ function reset(at = '2026-11-10T10:00:00Z') {
 }
 let seq = 0;
 const make = (over, opts) => call('public_listing_create', {
-  slug: 'svp-osterley', title: 'Garden chairs, set of four', description: 'Four sturdy wooden garden chairs, a few years old but in good condition. Collect from Osterley.', category: 'Furniture & home', kind: 'sell',
+  email_confirm: (over && over.email) || 'mary@example.org', slug: 'svp-osterley', title: 'Garden chairs, set of four', description: 'Four sturdy wooden garden chairs, a few years old but in good condition. Collect from Osterley.', category: 'Furniture & home', kind: 'sell',
   price_text: '£40 the set', display_name: 'Mary', email: 'mary@example.org', days: 14, images: [pic()], amount: 0, agree: true, client_ref: 'ref-' + (++seq) + '-' + Math.random().toString(36).slice(2, 10), ...over,
 }, opts);
 const approve = (id, who = 'adA') => call('listings_review', { id, decision: 'approve' }, { session: S[who] });
@@ -125,12 +125,19 @@ test('Making a listing', async (t) => {
     await bad({ title: 'Chairs, ring 07700900123 now' }, /in the title/); await bad({ price_text: 'call 07700 900123' }, /in the price/); await bad({ display_name: 'Mary 07700900123' }, /in your name/);
     await bad({ category: 'Weapons' }, /choose a category/); await bad({ kind: 'swap' }, /for sale, free, or a service/);
     for (const d of [6, 31, 14.5, 'x', undefined]) await bad({ days: d }, /1 to 4 weeks/);
+    await bad({ email: 'mary@example.org', email_confirm: '' }, /second time/); await bad({ email: 'mary@example.org', email_confirm: undefined }, /second time/);
+    await bad({ email: 'mary@example.org', email_confirm: 'mary@exmaple.org' }, /do not match/); await bad({ email: 'mary@example.org', email_confirm: 'maria@example.org' }, /do not match/);
     await bad({ email: '' }, /give your email/); await bad({ email: undefined }, /give your email/); await bad({ email: 'not an email' }, /email address/);
     await bad({ images: [pic(), pic(), pic(), pic(), pic()] }, /Up to 4 pictures/);
     await bad({ images: [{ t: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(100)]).toString('base64'), f: webp() }] }, /WebP or JPEG/);
     await bad({ images: [{ t: webp(50000), f: webp() }] }, /too large/); await bad({ images: [{ t: webp(), f: webp(160000) }] }, /too large/);
     for (const a of [undefined, '', -1, 201, 'abc', NaN]) await bad({ amount: a }, /£0 is fine/);
     assert.equal(T('listings').length, 0); assert.equal(T('payments').length, 0); assert.equal(db.uploads.length, 0);
+  });
+  await t.test('the address typed twice is the same address even if the capitals or spaces differ, and is stored once, in lower case', async () => {
+    reset();
+    const r = await make({ email: '  Mary@Example.ORG ', email_confirm: 'mary@example.org' });
+    assert.equal(r.status, 200, r.raw); assert.equal(T('listings')[0].email, 'mary@example.org');
   });
   await t.test('a plain price like £1,500 or a street number is fine, and so is a JPEG', async () => {
     reset();

@@ -4832,6 +4832,9 @@ async function publicListingCreate(b) {
   if (!Number.isInteger(days) || days < 7 || days > 30) throw httpError(400, 'A listing runs for 1 to 4 weeks (7 to 30 days).');
   if (b.email === undefined || !String(b.email).trim()) throw httpError(400, 'Please give your email address. It is how people reach you, and it is never shown on the page.');
   const email = validateRegEmail(b.email, 'your email address');
+  const again = String(b.email_confirm == null ? '' : b.email_confirm).trim().toLowerCase();   // typed twice, so a slip cannot send the lister's messages to a stranger
+  if (!again) throw httpError(400, 'Please type your email address a second time, to be sure it is right.');
+  if (again !== email) throw httpError(400, 'The two email addresses do not match. Please check them.');
   const images = Array.isArray(b.images) ? b.images : [];
   if (images.length > LISTING_MAX_IMAGES) throw httpError(400, `Up to ${LISTING_MAX_IMAGES} pictures, please.`);
   const prepared = images.map(i => ({ t: listingCheckImage(i && i.t, 40000), f: listingCheckImage(i && i.f, 150000) }));

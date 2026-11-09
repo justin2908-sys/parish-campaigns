@@ -56,7 +56,8 @@ async function launch() {
 }
 const view = (w, h) => send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
 async function open(url, waitFor) { await send('Page.navigate', { url }); for (let i = 0; i < 60; i++) { await sleep(250); try { if (await ev(`!!(${waitFor})`)) return true; } catch { /* page loading */ } } return false; }
-async function shot(name) {
+async function shot(...a) { try { return await shotRaw(...a); } catch (e) { console.log('  (screenshot skipped: ' + e.message + ')'); } }   // pictures are a courtesy; a slow screenshot must not fail the checks
+async function shotRaw(name) {
   const m = await send('Page.getLayoutMetrics');
   const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: Math.ceil(m.result.cssContentSize.width), height: Math.min(6000, Math.ceil(m.result.cssContentSize.height)), scale: 1 } });
   fs.writeFileSync(path.join(OUT, name + '.png'), Buffer.from(r.result.data, 'base64'));
@@ -121,6 +122,28 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('the parish page has a price-tag picture button to Listings (no words on it; its name is for screen readers)', tag && tag.href === '/listings/svp-osterley' && tag.words === '' && /listings/i.test(tag.aria), JSON.stringify(tag));
   await click('a.ic[href^="/listings/"]');
   check('it opens the Listings page', await waitFor(`document.querySelector('.item')`));
+  // the invitation: Listings is new, so the first time someone opens it they are warmly asked to add something
+  const inv = await waitFor(`document.getElementById('inviteCard')`, 6000);
+  check('a friendly prompt to list appears on screen when the page opens', inv);
+  const iv = await ev(`(() => { const c = document.getElementById('inviteCard'); return c && { head: c.querySelector('h2').textContent, text: c.textContent, add: !!c.querySelector('a[href="#new"]'), looking: [...c.querySelectorAll('button')].some(b => /Just looking/.test(b.textContent)), focused: document.activeElement === c }; })()`);
+  check('it has a catchy line, says how quick it is, that £0 is fine, that the office checks, and how many are listed already', iv && iv.head.length > 15 && /two minutes/.test(iv.text) && /£0 is a perfectly good price/.test(iv.text) && /office looks at every listing/.test(iv.text) && /6 listings/.test(iv.text) && /The more of us list/.test(iv.text), JSON.stringify(iv && [iv.head, iv.text.slice(0, 160)]));
+  check('it has an "Add a listing" button and a "Just looking" way out, and takes the focus', iv && iv.add && iv.looking && iv.focused);
+  await shot('listings-390-light-invite');
+  const inm = await ev(MEASURE_PAGE);
+  check('the prompt at 390px: readable and tappable', !inm.hscroll && !inm.smallText.length && !inm.smallTargets.length, JSON.stringify([inm.smallText.slice(0, 2), inm.smallTargets.slice(0, 3)]));
+  await click('[data-invite-close]', 'Just looking'); await sleep(200);
+  check('"Just looking" closes it, and it is not asked again on the next visit', await ev(`!document.getElementById('invite') && !!localStorage.getItem('lst_invited_svp-osterley')`));
+  await open(base + '/listings/svp-osterley', "document.querySelector('.item')"); await sleep(600);
+  check('…not even after the page is opened again', await ev(`!document.getElementById('invite')`));
+  await ev(`localStorage.removeItem('lst_invited_svp-osterley'); 'ok'`);
+  await open(base + '/listings/svp-osterley', "document.getElementById('invite')");
+  await click('[data-invite-add]');
+  check('"Add a listing" in the prompt takes them straight to the form', await waitFor(`location.hash === '#new' && document.getElementById('fTitle') && !document.getElementById('invite')`, 6000));
+  await ev(`localStorage.setItem('lst_invited_svp-osterley', String(Date.now() - 4 * 864e5)); 'ok'`);
+  await open(base + '/listings/svp-osterley', "document.querySelector('.item')"); await sleep(500);
+  check('after a few days it asks again, kindly', await ev(`!!document.getElementById('invite')`));
+  await click('[data-invite-close]');
+  await ev(`(() => { const e = document.getElementById('invite'); return 'closed'; })()`);
 
   // ---- the page itself
   for (const [w, h] of [[390, 844], [360, 740]]) {
@@ -198,6 +221,10 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   await typeIn('#fDesc', 'A solid oak bookcase with four shelves. Buyer collects from Osterley, any evening this week.');
   check('…and the flag goes when it is taken out', await ev(`!document.querySelector('#fDesc').closest('.f').querySelector('.warnline')`));
   await typeIn('#fPrice', '£60'); await typeIn('#fEmail', 'newlister@example.org'); await typeIn('#fName', 'Sam');
+  await typeIn('#fEmail2', 'newlister@exmaple.org');
+  check('typing the email a second time shows at once if the two do not match', /do not match yet/.test(await ev(`document.getElementById('emailMatch').textContent`)));
+  await typeIn('#fEmail2', 'newlister@example.org');
+  check('…and says so when they do', /They match/.test(await ev(`document.getElementById('emailMatch').textContent`)));
   // pictures: a big photo is made small in the browser before it is sent
   await ev(`(() => { const c = document.createElement('canvas'); c.width = 3000; c.height = 2000; const g = c.getContext('2d'); const gr = g.createLinearGradient(0, 0, 3000, 2000); gr.addColorStop(0, '#c33'); gr.addColorStop(1, '#36c'); g.fillStyle = gr; g.fillRect(0, 0, 3000, 2000);
     for (let i = 0; i < 3000; i++) { g.fillStyle = 'rgba(' + (i * 7 % 255) + ',' + (i * 13 % 255) + ',' + (i * 29 % 255) + ',.6)'; g.fillRect((i * 37) % 3000, (i * 53) % 2000, 60, 60); }
@@ -213,6 +240,9 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   // Other = 0
   await click('[data-pay="other"]'); await waitFor(`document.getElementById('fOther')`); await typeIn('#fOther', '0');
   check('choosing "Other" and typing 0 turns the button into a plain "Send for approval"', (await ev(`document.getElementById('sendBtn').textContent`)) === 'Send for approval', await ev(`document.getElementById('sendBtn').textContent`));
+  await typeIn('#fEmail2', 'wrong@example.org'); await click('#sendBtn'); await sleep(300);
+  check('sending with two different email addresses is stopped, in words, and the second box is marked', /two email addresses do not match/.test(await ev(`document.querySelector('.err').textContent`)) && await ev(`!!document.getElementById('fEmail2').closest('.f.bad')`));
+  await typeIn('#fEmail2', 'newlister@example.org');
   await click('#sendBtn'); await sleep(300);
   check('not ticking the box stops it, in words', /tick the box/.test(await ev(`document.querySelector('.err').textContent`)));
   await ev(`document.getElementById('fAgree').click(); 'ok'`);
@@ -234,7 +264,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   await open(base + '/listings/svp-osterley#new', "document.getElementById('fTitle')");
   await click('[data-fkind]', 'Service'); await click('[data-fcat]', 'Services & trades');
   await typeIn('#fTitle', 'Electrician, local and reliable'); await typeIn('#fDesc', 'Qualified electrician offering small domestic jobs: sockets, lights, fault finding. Parishioner rates.');
-  await typeIn('#fEmail', 'sparky@example.org'); await ev(`document.getElementById('fAgree').click(); 'ok'`);
+  await typeIn('#fEmail', 'sparky@example.org'); await typeIn('#fEmail2', 'sparky@example.org'); await ev(`document.getElementById('fAgree').click(); 'ok'`);
   const wantAmt = (await call('public_listings', { slug: 'svp-osterley' })).body.new_listing.quotes.find(q => q.days === 14 && q.images === 0).suggested;
   check('the button says what will be paid', (await ev(`document.getElementById('sendBtn').textContent`)) === 'Pay £' + wantAmt.toFixed(2).replace(/.00$/, '') + ' and send for approval', await ev(`document.getElementById('sendBtn').textContent`));
   await click('#sendBtn'); await sleep(2500);

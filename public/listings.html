@@ -300,7 +300,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
         detail = r.d; detail.id = id; $('sheetHost').innerHTML = sheetHtml(detail); document.body.style.overflow = 'hidden'; $('sheetCard').focus();
       }).catch(function () { say(W.failedHelp); });
   }
-  function closeSheet() { $('sheetHost').innerHTML = ''; document.body.style.overflow = ''; detail = null; reporting = false; if (lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) { /* gone */ } } }
+  function closeSheet() { if ($('invite')) return; $('sheetHost').innerHTML = ''; document.body.style.overflow = ''; detail = null; reporting = false; if (lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) { /* gone */ } } }
   function contactCall() { return fetch('/api/public_listing_contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, id: detail.id }) }).then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || W.failed); return d; }); }); }
   // The address goes to the clipboard and is never drawn on the page. (Phones only allow a copy right after a press, so the copy is promised before the reply arrives.)
   function copyEmail() {
@@ -329,9 +329,31 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
       .catch(function () { say(W.failedHelp); });
   }
 
+  // ---- the invitation: Listings is new and gets better with every listing, so a friendly nudge to add one (once every few days on a device, never in the way of the form)
+  var INVITES = [
+    ['One person’s spare is another’s blessing.', 'A table you no longer need, a cake you are good at, a coat the children have outgrown: someone in the parish is hoping for it.'],
+    ['Skilled with a spade, a spanner or a sponge cake?', 'Let your parish family know. Offer your skills, or sell what you make, to people who already know the church.'],
+    ['Got something to give away? Someone nearby is hoping for it.', 'Put it on the parish noticeboard in two minutes. Selling is fine, and so is giving it away free.']
+  ];
+  var FIRST = ['Be among the first on our parish noticeboard.', 'This is new, and it is only as good as what we put on it. Add something small today and help it get going.'];
+  function inviteKey() { return 'lst_invited_' + slug; }
+  function shouldInvite() { try { var t = Number(localStorage.getItem(inviteKey()) || 0); return !t || Date.now() - t > 3 * DAY; } catch (e) { return true; } }
+  function markInvited() { try { localStorage.setItem(inviteKey(), String(Date.now())); } catch (e) { /* private window: it may ask again next time */ } }
+  function inviteHtml() {
+    var n = data.listings.length, few = n < 4, pick = few ? FIRST : INVITES[Math.floor(Date.now() / DAY) % INVITES.length];
+    return '<div class="sheet" id="invite" data-invitebg><div class="sheet-card" id="inviteCard" role="dialog" aria-modal="true" aria-labelledby="inviteTitle" tabindex="-1">' +
+      '<div class="sheet-head"><h2 id="inviteTitle">' + esc(pick[0]) + '</h2><button class="iconbtn" type="button" data-invite-close aria-label="Close" title="Close">' + ico(I.close) + '</button></div>' +
+      '<p class="desc">' + esc(pick[1]) + '</p>' + (n >= 3 ? '<p class="small"><b style="color:var(--brand-text)">' + n + ' listings</b> from your parish family right now. The more of us list, the better this gets for everyone.</p>' : '<p class="small">The more of us list, the better this gets for everyone.</p>') +
+      '<div class="acts"><a class="btn solid" href="#new" data-invite-add>' + ico(I.plus, 20) + esc(W.add) + '</a><button class="btn" type="button" data-invite-close>Just looking</button></div>' +
+      '<p class="small">It takes about two minutes. £0 is a perfectly good price, and the office looks at every listing before it appears.</p></div></div>';
+  }
+  function showInvite() { if (detail || $('invite') || !data || location.hash === '#new') return; $('sheetHost').innerHTML = inviteHtml(); document.body.style.overflow = 'hidden'; var c = $('inviteCard'); if (c) c.focus(); }
+  function closeInvite(add) { markInvited(); if ($('invite')) { $('sheetHost').innerHTML = ''; document.body.style.overflow = ''; } if (!add) { var b = $('addBtn'); if (b && b.focus) { try { b.focus(); } catch (e) { /* fine */ } } } }
+
   // ---- adding a listing
   var form = null, busy = false, errMsg = '', badField = '', attemptRef = '';
-  function newForm() { return { kind: '', category: '', title: '', description: '', price: '', photos: [], days: 14, name: '', email: '', payMode: 'suggested', other: '', agree: false, working: 0 }; }
+  function newForm() { return { kind: '', category: '', title: '', description: '', price: '', photos: [], days: 14, name: '', email: '', email2: '', payMode: 'suggested', other: '', agree: false, working: 0 }; }
+  function emailMatchText() { var a = form.email.trim().toLowerCase(), b = form.email2.trim().toLowerCase(); return !b ? '' : (a === b ? '✓ They match' : 'These two do not match yet'); }
   function quote() { var t = data.new_listing.quotes, n = form.photos.length; for (var i = 0; i < t.length; i++) if (t[i].days === form.days && t[i].images === n) return t[i]; return { suggested: 0, supporter: 1 }; }
   function chosenAmount() { var qt = quote(); if (form.payMode === 'suggested') return qt.suggested; if (form.payMode === 'supporter') return qt.supporter; var v = Math.round(Number(String(form.other).replace(/[£,\s]/g, '')) * 100) / 100; return form.other === '' || !isFinite(v) ? NaN : v; }
   function hasContact(s) { if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(s) || /(https?:\/\/|www\.)\S+/i.test(s)) return true; var m = s.match(/\+?\d[\d\s().-]{7,}\d/g) || []; for (var i = 0; i < m.length; i++) if (m[i].replace(/\D/g, '').length >= 9) return true; return false; }
@@ -353,6 +375,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
       '<section class="panel"><h2><span class="n">2</span>Pictures</h2><p class="intro">Optional, up to ' + N.max_images + '. Pictures make a listing much more likely to be looked at. They are made small for phones automatically.</p><div class="photos">' + photos + (f.photos.length < N.max_images ? '<label class="addph" for="fPhoto">' + ico(I.camera, 26) + '<span>' + (f.working ? 'Working…' : 'Add') + '</span></label><input id="fPhoto" type="file" accept="image/*" multiple hidden>' : '') + '</div></section>' +
       '<section class="panel"><h2><span class="n">3</span>How long?</h2>' + seg(days, f.days, 'data-fdays') + '<p class="small">The days start when the office approves your listing.</p></section>' +
       '<section class="panel"><h2><span class="n">4</span>Your email</h2><div class="f' + (badField === 'email' ? ' bad' : '') + '"><label for="fEmail">Email address</label><input id="fEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" value="' + esc(f.email) + '"><span class="help">Email only, never a phone number. It is never shown on the page: people press a button that hands it to them, and write to you from their own email.</span></div>' +
+      '<div class="f' + (badField === 'email2' ? ' bad' : '') + '"><label for="fEmail2">Type your email address again</label><input id="fEmail2" type="email" inputmode="email" autocomplete="off" maxlength="254" value="' + esc(f.email2) + '"><span class="help" id="emailMatch">' + esc(emailMatchText() || 'To be sure we have it right.') + '</span></div>' +
       '<div class="f"><label for="fName">Your first name (optional)</label><input id="fName" maxlength="40" autocomplete="given-name" value="' + esc(f.name) + '"></div></section>' +
       '<section class="panel"><h2><span class="n">5</span>Supporting the parish</h2><p class="intro">A listing helps the parish when you can. Here are two suggestions for a listing like yours. Choose what suits you; <b>£0 is perfectly fine</b>.</p><div class="pay3" role="group" aria-label="Amount">' +
       '<button type="button" data-pay="suggested" aria-pressed="' + (f.payMode === 'suggested') + '"><span>Suggested<small>for ' + esc(days.filter(function (d) { return d[0] === f.days; })[0][1]) + ' and ' + f.photos.length + ' picture' + (f.photos.length === 1 ? '' : 's') + '</small></span><span class="amt">' + gbp(qt.suggested) + '</span></button>' +
@@ -363,7 +386,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
       '<div class="bar gutter"><div class="wrap">' + (errMsg ? '<p class="err" role="alert">' + esc(errMsg) + '</p>' : '') + '<button class="btn solid big" type="button" id="sendBtn"' + (busy || f.working ? ' disabled' : '') + '>' + esc(busy ? 'Sending…' : (amt > 0 ? 'Pay ' + gbp(amt) + ' and send for approval' : 'Send for approval')) + '</button><p class="small" style="text-align:center">The office looks at every listing before it appears.</p></div></div>';
     var ae = document.activeElement && document.activeElement.id, sy = window.scrollY;
     $('app').innerHTML = html; window.scrollTo(0, sy);
-    if (ae && $(ae) && /^f(Title|Desc|Price|Email|Name|Other)$/.test(ae)) { var el = $(ae); el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* not for every type */ } }
+    if (ae && $(ae) && /^f(Title|Desc|Price|Email|Email2|Name|Other)$/.test(ae)) { var el = $(ae); el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* not for every type */ } }
   }
   function drawFormBar() { var b = $('sendBtn'); if (!b) return; var amt = chosenAmount(); b.textContent = busy ? 'Sending…' : (amt > 0 ? 'Pay ' + gbp(amt) + ' and send for approval' : 'Send for approval'); b.disabled = busy || form.working > 0; }
   // A phone photo is several megabytes. This makes two small copies in the phone before anything is sent: a thumbnail for the list and a bigger one to look at.
@@ -398,12 +421,13 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
     else if (f.description.trim().length < 20) { badField = 'description'; errMsg = 'Please describe it (at least 20 characters).'; }
     else if (hasContact(f.title + ' ' + f.description + ' ' + f.price + ' ' + f.name)) { errMsg = 'Please take out phone numbers, email addresses and web links. People contact you through the “Copy email address” button.'; }
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())) { badField = 'email'; errMsg = 'Please give your email address.'; }
+    else if (f.email2.trim().toLowerCase() !== f.email.trim().toLowerCase()) { badField = 'email2'; errMsg = 'The two email addresses do not match. Please check them.'; }
     else if (isNaN(chosenAmount()) || chosenAmount() < 0) { badField = 'amount'; errMsg = 'Please type an amount (0 is fine).'; }
     else if (!f.agree) { badField = 'agree'; errMsg = 'Please tick the box to say you understand.'; }
     if (errMsg) { renderNew(); var e = document.querySelector('.err'); if (e) e.scrollIntoView({ block: 'nearest' }); var bad = document.querySelector('.bad'); if (bad && bad.scrollIntoView) bad.scrollIntoView({ block: 'center' }); return; }
     busy = true; renderNew();
     if (!attemptRef) attemptRef = 'a' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-    var body = { slug: slug, kind: f.kind, category: f.category, title: f.title, description: f.description, price_text: f.kind === 'free' ? '' : f.price, display_name: f.name, email: f.email.trim(), days: f.days, amount: chosenAmount(), agree: true,
+    var body = { slug: slug, kind: f.kind, category: f.category, title: f.title, description: f.description, price_text: f.kind === 'free' ? '' : f.price, display_name: f.name, email: f.email.trim(), email_confirm: f.email2.trim(), days: f.days, amount: chosenAmount(), agree: true,
       images: f.photos.map(function (p) { return { t: p.t, f: p.f }; }), client_ref: attemptRef, website: '' };
     fetch('/api/public_listing_create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
@@ -437,6 +461,8 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
   document.addEventListener('click', function (e) {
     var t = e.target, b;
     if ((b = t.closest('[data-open]'))) { openSheet(b.getAttribute('data-open')); return; }
+    if (t.closest('[data-invite-add]')) { closeInvite(true); return; }
+    if (t.closest('[data-invite-close]') || t.id === 'invite') { closeInvite(false); return; }
     if (t.closest('[data-close]') || t.id === 'sheet') { closeSheet(); return; }
     if (t.closest('[data-copyemail]')) { copyEmail(); return; }
     if (t.closest('[data-mailto]')) { writeEmail(); return; }
@@ -468,18 +494,19 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
     var t = e.target; if (!t) return;
     if (t.id === 'fSearch') { var v = t.value; clearTimeout(searchTimer); searchTimer = setTimeout(function () { q = v; drawList(); }, 120); return; }
     if (!form) return;
-    var map = { fTitle: 'title', fDesc: 'description', fPrice: 'price', fName: 'name', fEmail: 'email', fOther: 'other' };
+    var map = { fTitle: 'title', fDesc: 'description', fPrice: 'price', fName: 'name', fEmail: 'email', fEmail2: 'email2', fOther: 'other' };
     if (map[t.id]) {
       form[map[t.id]] = t.value; if (t.id === 'fOther') drawFormBar();
+      if (t.id === 'fEmail' || t.id === 'fEmail2') { var em = $('emailMatch'), mt = emailMatchText(); if (em) { em.textContent = mt || 'To be sure we have it right.'; em.style.color = mt.indexOf('✓') === 0 ? 'var(--brand-text)' : (mt ? 'var(--bad)' : ''); } }
       if (t.id === 'fTitle' || t.id === 'fDesc' || t.id === 'fPrice') { var f = t.closest('.f'); if (f) { var h = f.querySelector('.warnline'); if (hasContact(t.value)) { if (!h) { var sp = document.createElement('span'); sp.className = 'warnline'; sp.textContent = 'Please take out phone numbers, email addresses and web links. People contact you through a button that hands them your email.'; f.appendChild(sp); } } else if (h) h.remove(); var help = f.querySelector('.help'); if (help && t.id === 'fTitle') help.textContent = t.value.length + ' of 70'; } }
     }
   });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { if (detail) closeSheet(); else if (e.target && e.target.id === 'fSearch' && q) { q = ''; e.target.value = ''; drawList(); } } });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { if ($('invite')) closeInvite(false); else if (detail) closeSheet(); else if (e.target && e.target.id === 'fSearch' && q) { q = ''; e.target.value = ''; drawList(); } } });
   function route() {
     if (!data) return;
     closeSheet();
     if (location.hash === '#new') { if (!form) form = newForm(); busy = false; renderNew(); window.scrollTo(0, 0); }
-    else { form = null; renderBrowse(); }
+    else { form = null; renderBrowse(); if (shouldInvite()) showInvite(); }
   }
   window.addEventListener('hashchange', route);
 

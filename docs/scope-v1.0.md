@@ -1548,3 +1548,11 @@ every listing before it appears.
 - Tests: `test/gateway/listings.test.js` (36) and the browser checks in `test/gateway/ui-listings.js`.
 - **Not built:** email verification (nothing is emailed), an access code (declined), the lister editing a listing after sending it (they take it down and list again), saving a half-made form, a swap/wanted kind,
   a listing renewal button, and the Priest/Admin getting an alert when something waits (the tab shows a count and a banner).
+
+### 62b. Listings: the email typed twice, and an invitation to list — 2026-11-10
+- **Email twice:** the form asks for the email address and then "Type your email address again", showing at once whether the two match ("✓ They match" / "These two do not match yet"). The server checks again and
+  refuses a missing or different second copy (capitals and spaces do not matter; the address is stored once, in lower case), so a slip can never send a lister's messages to a stranger.
+- **Invitation:** because Listings is new and only as good as what is on it, the first time someone opens the page (and again after 3 days on that device) a friendly sheet appears: a catchy line that changes by day
+  ("One person's spare is another's blessing." / "Skilled with a spade, a spanner or a sponge cake?" / "Got something to give away? Someone nearby is hoping for it."), or "Be among the first on our parish
+  noticeboard." while there are fewer than 4 listings; how many are listed already; "The more of us list, the better this gets for everyone"; that it takes about two minutes, that £0 is a perfectly good price and that
+  the office checks every listing. Buttons: "Add a listing" (straight to the form) and "Just looking" (remembered on that phone). It never appears over the form.
