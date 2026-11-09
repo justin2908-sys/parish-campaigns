@@ -3633,9 +3633,12 @@ function repoStyle() {
   .rp-act { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   .rp-act button { min-height:44px; }
   .rp-cancel { border:1.5px solid var(--bad); border-radius:10px; padding:10px; background:var(--surface); display:grid; gap:8px; }
-  .rp-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+  .rp-item { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
   .rp-item b.nm { overflow-wrap:anywhere; }
   .rp-item.off { opacity:.62; }
+  .rp-main { display:flex; gap:10px; align-items:center; min-width:0; }
+  .rp-thumb { width:44px; height:44px; flex:none; border-radius:8px; background:var(--paper); overflow:hidden; display:grid; place-items:center; color:var(--slate); }
+  .rp-thumb img { width:100%; height:100%; object-fit:contain; background:#fff; }
   .rp-cat { margin:14px 0 2px; font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--slate); }
   .rp-chip { display:inline-block; font-size:12.5px; font-weight:700; padding:1px 8px; border-radius:999px; background:var(--line); color:var(--ink); margin-left:4px; vertical-align:middle; }
   .rp-chip.low { background:var(--warn-dim); color:var(--warn); } .rp-chip.out { background:var(--bad-dim); color:var(--bad); }
@@ -3663,7 +3666,7 @@ async function renderRepositoryTab() {
   try { d = await call('shop_get'); }
   catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
   gwStyle(); repoStyle();
-  repo = { d, view: 'orders', orders: null, weekend: null, imp: { text: '', result: null, busy: false }, form: null, filter: '', draft: repoDraftFrom(d), cancelId: null, removeArm: null };
+  repo = { d, view: 'orders', orders: null, weekend: null, imp: { text: '', result: null, busy: false }, pic: null, limit: 60, form: null, filter: '', draft: repoDraftFrom(d), cancelId: null, removeArm: null };
   try { repo.orders = await call('shop_orders', {}); repo.weekend = repo.orders.weekend; } catch (e) { repo.orders = { weekends: [], orders: [], totals: { orders: 0, to_prepare: 0, taken: 0 }, weekend: null, weekend_label: '' }; }
   if (adminSeq === seq) repoPaint();
 }
@@ -3692,6 +3695,7 @@ function repoHeadHtml() {
     <p class="gw-lede">Parishioners choose items, pick the Mass where they will collect, and pay by card. You see the orders here; the repository volunteer makes each one up and hands it out after Mass.</p>
     ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="repoCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="repoSeeShop()">See the shop</button></div>` : '<div class="hint">The parish page has no address yet, so the shop cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
     <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for online orders</b><div class="muted">Switch off to stop new orders at once. Orders already made stay on the list.${!o.slug ? '' : ' A shopping-bag shortcut appears on the parish page while it is open.'}</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for online orders" onchange="repoSetEnabled(this)"><span></span></label></div>
+    ${(() => { const sl = repoSyncLine(); return `<div class="${sl.warn ? 'hint' : 'muted'}" style="margin-top:10px">${esc(sl.text)}${sl.warn ? ` <button class="small" style="min-height:44px;margin-top:6px" onclick="repo.view='items'; repoPaint()">Update the stock from SumUp</button>` : ''}</div>`; })()}
     <div class="rp-pills" role="group" aria-label="Repository sections">${pill('orders', 'Orders')}${pill('items', 'Items (' + d.items.length + ')')}${pill('settings', 'Mass times &amp; cut-off')}</div></div>`;
 }
 function repoCopyLink() { const url = location.origin + repo.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
@@ -3785,36 +3789,65 @@ function repoStockChip(i) {
 }
 function repoItemRows() {
   const q = repo.filter.trim().toLowerCase();
-  const list = repo.d.items.filter(i => !q || [i.name, i.category, i.sku].join(' ').toLowerCase().includes(q));
-  if (!list.length) return `<p class="muted" style="margin:8px 0 0">${repo.d.items.length ? 'No item matches that.' : 'No items yet. Bring them across from SumUp above, or add one by hand.'}</p>`;
+  const all = repo.d.items.filter(i => !q || [i.name, i.category, i.sku, i.barcode].join(' ').toLowerCase().includes(q));
+  if (!all.length) return `<p class="muted" style="margin:8px 0 0">${repo.d.items.length ? 'No item matches that.' : 'No items yet. Bring them across from SumUp above, or add one by hand.'}</p>`;
+  const list = all.slice(0, q ? 200 : repo.limit);
   let last = null, out = '';
   for (const i of list) {
     if ((i.category || '') !== last) { last = i.category || ''; out += `<div class="rp-cat">${esc(last || 'No category')}</div>`; }
-    out += `<div class="rp-item ${i.available ? '' : 'off'}"><div><b class="nm">${esc(i.name)}</b> <span>${repoMoney(i.price)}</span>${repoStockChip(i)}${i.sku ? `<div class="muted" style="font-size:13.5px">Code ${esc(i.sku)}</div>` : ''}</div>
+    const thumb = i.image ? `<img src="${esc(i.image)}" alt="" width="44" height="44" loading="lazy" decoding="async">` : (i.has_picture ? '…' : '');
+    out += `<div class="rp-item ${i.available ? '' : 'off'}"><div class="rp-main"><span class="rp-thumb">${thumb}</span><div style="min-width:0"><b class="nm">${esc(i.name)}</b> <span>${repoMoney(i.price)}</span>${repoStockChip(i)}${i.featured ? '<span class="rp-chip">★ Our pick</span>' : ''}${i.barcode || i.sku ? `<div class="muted" style="font-size:13.5px">Code ${esc(i.sku || i.barcode)}${i.from_sumup ? ' · from SumUp' : ''}</div>` : ''}</div></div>
       <div class="rp-act"><label class="gw-onpage" style="margin:0"><span class="gw-switch" style="width:48px;height:28px"><input type="checkbox" ${i.available ? 'checked' : ''} aria-label="${esc(i.name)} is on sale" onchange="repoToggleItem('${i.id}', this)"><span></span></span><span class="muted" style="font-weight:600">${i.available ? 'On sale' : 'Off'}</span></label>
+      <button class="small" aria-pressed="${i.featured}" title="Show this near the top of the shop" onclick="repoTogglePick('${i.id}')">${i.featured ? '★ Picked' : '☆ Pick'}</button>
       <button class="small" onclick="repoEditItem('${i.id}')">Edit</button>
       ${repo.removeArm === i.id ? `<button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="repoRemoveItem('${i.id}')">Yes, remove</button><button class="small" onclick="repo.removeArm=null; repoDrawItems()">Keep</button>` : `<button class="small" onclick="repo.removeArm='${i.id}'; repoDrawItems()">Remove</button>`}</div></div>`;
   }
+  if (!q && all.length > repo.limit) out += `<button class="small" style="margin-top:10px;min-height:44px" onclick="repo.limit += 100; repoDrawItems()">Show more (${all.length - repo.limit} more)</button>`;
   return out;
 }
-function repoDrawItems() { const box = document.getElementById('repoItemRows'); if (box) box.innerHTML = repoItemRows(); }
-function repoImportHtml() {
-  const imp = repo.imp, r = imp.result;
-  return `<div class="card"><h3 style="margin-top:0">Bring your items across from SumUp</h3>
-    <p class="gw-lede">SumUp cannot send its item list to us directly, but it can export it as a file. In SumUp: open <b>Catalog</b>, then <b>Items</b>, then press <b>Export</b>. Open that file here. You do this once; after that the items live here. Doing it again later refreshes the names and prices and keeps your stock counts.</p>
-    <label for="repoFile">The exported file (.csv)</label><input id="repoFile" type="file" accept=".csv,.txt,text/csv,text/plain" onchange="repoPickFile(this)">
-    <label for="repoPaste" style="margin-top:10px">…or paste its contents</label><textarea id="repoPaste" rows="3" placeholder="Item name,Price,Category…" oninput="repo.imp.text=this.value; repo.imp.result=null">${esc(imp.text)}</textarea>
-    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" ${imp.busy ? 'disabled' : ''} onclick="repoImportCheck()">Check the file</button></div>
-    <div id="repoImportOut">${r ? repoImportResultHtml(r) : ''}</div></div>`;
+async function repoTogglePick(id) {
+  const i = repo.d.items.find(x => x.id === id); if (!i) return;
+  try { await call('shop_item_set_featured', { id, featured: !i.featured }); i.featured = !i.featured; toast(i.featured ? `✓ ${i.name} will show near the top of the shop` : `✓ ${i.name} is no longer a pick`); repoDrawItems(); }
+  catch (e) { toast(e.message, 'error'); }
 }
+function repoDrawItems() { const box = document.getElementById('repoItemRows'); if (box) box.innerHTML = repoItemRows(); }
+// ---- the weekly update from SumUp (stock, prices, new items), and the small pictures
+const repoDaysAgo = (iso) => (iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 864e5) : null);
+function repoSyncLine() {
+  const s = repo.d.settings, n = repoDaysAgo(s.last_sync_at);
+  if (!s.last_sync_at) return { text: 'Stock has not been brought across from SumUp yet.', warn: true };
+  const when = new Date(s.last_sync_at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  return { text: `Stock last updated from SumUp on ${when} (${n <= 0 ? 'today' : n === 1 ? 'yesterday' : n + ' days ago'}).${s.last_sync_note ? ' ' + s.last_sync_note + '.' : ''}`, warn: n >= 7 };
+}
+function repoImportHtml() {
+  const imp = repo.imp, r = imp.result, sl = repoSyncLine();
+  return `<div class="card"><h3 style="margin-top:0">Weekly stock update from SumUp</h3>
+    <p class="gw-lede">SumUp cannot send its item list to us, but it can export it as a file. Once a week (best on a Tuesday or Wednesday, before orders close), bring the stock across: in SumUp open <b>Catalog</b>, then <b>Items</b>, press <b>Export</b>, and open that file here. New items arrive, stock and prices are refreshed, and anything removed in SumUp goes off sale. Orders still waiting to be made up are taken off the count, so the shop never offers something already promised.</p>
+    <div class="${sl.warn ? 'hint' : 'muted'}" style="margin:0 0 8px"><b>${esc(sl.text)}</b>${sl.warn ? ' Please do the weekly update before orders close.' : ''}</div>
+    <label for="repoFile">The exported file (.csv)</label><input id="repoFile" type="file" accept=".csv,.txt,text/csv,text/plain" onchange="repoPickFile(this)">
+    <label for="repoPaste" style="margin-top:10px">…or paste its contents</label><textarea id="repoPaste" rows="3" placeholder="Item name,Variations,…" oninput="repo.imp.text=this.value; repo.imp.result=null">${esc(imp.text)}</textarea>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" ${imp.busy ? 'disabled' : ''} onclick="repoImportCheck()">Check the file</button></div>
+    <div id="repoImportOut">${r ? repoImportResultHtml(r) : ''}</div>
+    <div id="repoPicBox">${repoPicturesHtml()}</div></div>`;
+}
+function repoListHtml(title, rows) { return rows.length ? `<div style="margin-top:6px"><b>${esc(title)}</b><ul class="rp-skip" style="margin-top:2px">${rows.join('')}</ul></div>` : ''; }
 function repoImportResultHtml(r) {
   const skipped = r.skipped_count ? `<div class="muted" style="margin-top:6px">${r.skipped_count} line${r.skipped_count === 1 ? '' : 's'} left out:</div><ul class="rp-skip">${r.skipped.slice(0, 8).map(s => `<li>line ${s.line}${s.name ? ' (' + esc(s.name) + ')' : ''}: ${esc(s.reason)}</li>`).join('')}${r.skipped_count > 8 ? `<li>and ${r.skipped_count - 8} more</li>` : ''}</ul>` : '';
-  if (r.committed) return `<div class="rp-box" style="border-color:var(--good)"><b>✓ Done.</b> ${r.new_items} new item${r.new_items === 1 ? '' : 's'} added, ${r.updated} refreshed. Check the Items list below; set stock counts where you want them.${skipped}</div>`;
-  if (!r.found) return `<div class="rp-box"><b>I found no items I could use.</b>${skipped}</div>`;
-  return `<div class="rp-box"><b>I found ${r.found} item${r.found === 1 ? '' : 's'}:</b> ${r.new_items} new, ${r.updated} already here (their name and price will be refreshed; stock and on/off kept).
-    <div class="muted" style="font-size:13.5px;margin-top:4px">Using the columns: name “${esc(r.columns.name)}”, price “${esc(r.columns.price)}”${r.columns.category ? `, category “${esc(r.columns.category)}”` : ''}${r.columns.variation ? `, variation “${esc(r.columns.variation)}”` : ''}.</div>
-    <ul class="rp-skip">${r.sample.map(s => `<li>${esc(s.name)} — ${repoMoney(s.price)}${s.category ? ' · ' + esc(s.category) : ''}${s.is_new ? '' : ' (already here)'}</li>`).join('')}${r.found > r.sample.length ? `<li>and ${r.found - r.sample.length} more</li>` : ''}</ul>${skipped}
-    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoImportCommit()">Import these ${r.found} items</button></div></div>`;
+  const other = r.not_repository ? `<div class="muted" style="margin-top:4px">${r.not_repository} line${r.not_repository === 1 ? '' : 's'} belong to other campaigns (BBQ, Tambola and so on, not in an “R-” category), so they are not brought across.</div>` : '';
+  if (r.committed) return `<div class="rp-box" style="border-color:var(--good)"><b>✓ Done.</b> ${r.new_items} new item${r.new_items === 1 ? '' : 's'}, ${r.updated} refreshed (${r.stock_changed} stock change${r.stock_changed === 1 ? '' : 's'}, ${r.price_changed} price change${r.price_changed === 1 ? '' : 's'})${r.switched_off ? `, ${r.switched_off} taken off sale` : ''}.${skipped}${other}</div>`;
+  if (!r.found) return `<div class="rp-box"><b>I found no items I could use.</b>${other}${skipped}</div>`;
+  const isSumup = r.format === 'sumup';
+  const lists = isSumup ? repoListHtml('New items', r.new_names.map(n => `<li>${esc(n)}</li>`)) +
+      repoListHtml('Stock changes', r.stock_changes.map(c => `<li>${esc(c.name)}: ${c.from === null ? 'not counted' : c.from} → ${c.to === null ? 'not counted' : c.to}</li>`).concat(r.stock_changed > r.stock_changes.length ? [`<li>and ${r.stock_changed - r.stock_changes.length} more</li>`] : [])) +
+      repoListHtml('Price changes', r.price_changes.map(c => `<li>${esc(c.name)}: ${repoMoney(c.from)} → ${repoMoney(c.to)}</li>`)) +
+      repoListHtml('No longer in SumUp', r.missing_names.map(n => `<li>${esc(n)}</li>`).concat(r.missing > r.missing_names.length ? [`<li>and ${r.missing - r.missing_names.length} more</li>`] : []))
+    : `<ul class="rp-skip">${r.sample.map(s => `<li>${esc(s.name)} — ${repoMoney(s.price)}${s.category ? ' · ' + esc(s.category) : ''}${s.is_new ? '' : ' (already here)'}</li>`).join('')}${r.found > r.sample.length ? `<li>and ${r.found - r.sample.length} more</li>` : ''}</ul>`;
+  return `<div class="rp-box"><b>I found ${r.found} item${r.found === 1 ? '' : 's'}:</b> ${r.new_items} new, ${r.updated} already here${isSumup ? ` (${r.stock_changed} stock change${r.stock_changed === 1 ? '' : 's'}, ${r.price_changed} price change${r.price_changed === 1 ? '' : 's'}${r.missing ? `, ${r.missing} no longer in SumUp` : ''})` : ' (their name and price will be refreshed; stock and on/off kept)'}.
+    ${isSumup && r.held_back ? `<div class="muted" style="margin-top:4px">${r.held_back} unit${r.held_back === 1 ? ' is' : 's are'} held back for orders waiting to be made up, and are taken off SumUp's count.</div>` : ''}
+    ${lists}${skipped}${other}
+    ${isSumup && r.missing ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:8px"><input type="checkbox" id="repoOffMissing" style="width:auto;margin:0" checked> Take the ${r.missing} item${r.missing === 1 ? '' : 's'} no longer in SumUp off sale (they are not deleted)</label>` : ''}
+    ${r.pictures_to_prepare ? `<div class="muted" style="margin-top:6px">${r.pictures_to_prepare} picture${r.pictures_to_prepare === 1 ? '' : 's'} will be made small for phones straight afterwards (about a minute).</div>` : ''}
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoImportCommit()">Update these ${r.found} items</button></div></div>`;
 }
 function repoPickFile(input) {
   const f = input.files && input.files[0]; if (!f) return;
@@ -3832,10 +3865,58 @@ async function repoImportCheck() {
 }
 async function repoImportCommit() {
   try {
-    const r = await call('shop_import', { text: repo.imp.text, commit: true }, 60000);
-    repo.imp.result = r; repo.imp.text = ''; toast(`✓ Imported: ${r.new_items} new, ${r.updated} refreshed`);
+    const off = document.getElementById('repoOffMissing');
+    const r = await call('shop_import', { text: repo.imp.text, commit: true, switch_off_missing: off ? off.checked : true }, 90000);
+    repo.imp.result = r; repo.imp.text = ''; toast(`✓ Updated: ${r.new_items} new, ${r.updated} refreshed`);
     await repoReload(); repo.view = 'items'; repoPaint();
+    if (repo.d.pictures_todo.length) repoPrepPictures();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- small pictures. SumUp's own are about 650 KB each; this browser makes a small copy of each (240 pixels, a few kilobytes), the server stores it,
+// and the shop only ever loads the small ones. It carries on where it left off if the page is closed.
+function repoPicturesHtml() {
+  const d = repo.d, p = repo.pic, todo = d.pictures_todo.length, have = d.items.filter(i => i.image).length;
+  if (p && p.running) return `<div class="rp-box"><b>Preparing pictures: ${p.done} of ${p.total}</b>${p.failed ? ` (${p.failed} could not be made)` : ''}<div style="height:10px;border-radius:6px;background:var(--line);margin:8px 0;overflow:hidden"><div style="height:100%;width:${Math.round(100 * p.done / Math.max(1, p.total))}%;background:var(--accent)"></div></div><div class="muted" style="font-size:13.5px">You can leave this page open and carry on; if you close it, it picks up where it stopped next time.</div></div>`;
+  if (todo) return `<div class="rp-box"><b>${todo} picture${todo === 1 ? '' : 's'} still to make small for phones.</b> ${have} ${have === 1 ? 'is' : 'are'} ready.<div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoPrepPictures()">Prepare the pictures</button></div></div>`;
+  return have ? `<div class="muted" style="margin-top:10px">✓ All ${have} pictures are ready (small and quick on a phone).</div>` : '';
+}
+function repoDrawPictures() { const b = document.getElementById('repoPicBox'); if (b) b.innerHTML = repoPicturesHtml(); }
+async function repoMakePicture(src) {
+  const res = await fetch(src, { mode: 'cors', cache: 'no-store' });
+  if (!res.ok) throw new Error('picture not found (' + res.status + ')');
+  const bmp = await createImageBitmap(await res.blob());
+  const MAX = 240, scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(bmp, 0, 0, w, h); if (bmp.close) bmp.close();
+  const toBlob = (type, q) => new Promise(r => c.toBlob(r, type, q));
+  let out = await toBlob('image/webp', 0.6);
+  if (!out || out.type !== 'image/webp') out = await toBlob('image/jpeg', 0.62);   // some browsers cannot make WebP
+  for (let q = 0.5; out && out.size > 95000 && q > 0.2; q -= 0.1) out = await toBlob(out.type, q);
+  if (!out || out.size > 100000) throw new Error('could not be made small enough');
+  return await new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(',')[1]); rd.onerror = no; rd.readAsDataURL(out); });
+}
+async function repoPrepPictures() {
+  if (repo.pic && repo.pic.running) return;
+  const queue = repo.d.pictures_todo.slice();
+  if (!queue.length) { toast('✓ All the pictures are already ready'); return; }
+  repo.pic = { running: true, done: 0, total: queue.length, failed: 0 };
+  repoDrawPictures();
+  let okCount = 0;
+  const worker = async () => {
+    while (queue.length && repo && repo.pic && repo.pic.running) {
+      const src = queue.shift();
+      try { await call('shop_image_save', { src, data: await repoMakePicture(src) }, 40000); okCount++; }
+      catch (e) { repo.pic.failed++; }
+      repo.pic.done++;
+      repoDrawPictures();
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  const failed = repo.pic.failed; repo.pic = null;
+  toast(failed ? `Pictures: ${okCount} ready, ${failed} could not be made (they will show a plain icon)` : `✓ ${okCount} picture${okCount === 1 ? '' : 's'} ready`, failed ? 'error' : undefined);
+  try { await repoReload(); } catch { /* the screen will refresh on the next visit */ }
 }
 function repoFormHtml() {
   const f = repo.form; if (!f) return '';

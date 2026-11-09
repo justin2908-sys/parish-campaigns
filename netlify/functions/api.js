@@ -3794,6 +3794,9 @@ READ_ONLY_PUBLIC.add('public_gateway');   // a pure look-up, so the flood check 
 const baseHandler = exports.handler;
 exports.handler = async (event) => {
   const res = await baseHandler(event);
+  if (res && res.statusCode === 200 && String(event.path || '').split('/').pop() === 'public_shop') {   // the shop window may be reused for half a minute; the order itself always checks the live stock
+    res.headers = { ...res.headers, 'Cache-Control': 'public, max-age=30, stale-while-revalidate=120' };
+  }
   if (res && res.statusCode === 200 && String(event.path || '').split('/').pop() === 'public_gateway') {
     res.headers = { ...res.headers, 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' };
   }
@@ -4043,14 +4046,45 @@ async function shopOrgBySlug(slug) {
 }
 async function publicShop({ slug }) {
   const { org, settings, tz } = await shopOrgBySlug(slug);
-  const { data: items } = await supabase.from('repository_items').select('id, name, description, category, price, stock, sort').eq('org_id', org.id).eq('available', true);
-  const list = (items || []).slice().sort((a, b) => String(a.category || '~').localeCompare(String(b.category || '~')) || (a.sort - b.sort) || String(a.name).localeCompare(String(b.name)));
+  const now = new Date(), today = gwToday(tz, now);
+  const [{ data: items }, units] = await Promise.all([
+    supabase.from('repository_items').select('id, name, description, category, price, stock, sort, featured, added_at, image_path').eq('org_id', org.id).eq('available', true),
+    shopPopularity(org.id, now),
+  ]);
+  const newSince = new Date(now.getTime() - 14 * 864e5).toISOString();
+  const oldest = (items || []).reduce((m, i) => (i.added_at && (!m || i.added_at < m) ? i.added_at : m), null);
+  const hasOlder = !!oldest && oldest < newSince;   // the very first import is not "new": only items that arrive in a later sync are
+  const scored = (items || []).map(i => {
+    const out = i.stock === 0, season = shopSeason(i.category, today), pop = units.get(i.id) || 0, isNew = hasOlder && !!i.added_at && i.added_at >= newSince;
+    return { i, out, season, pop, isNew, score: (out ? -100 : 0) + (i.featured ? 6 : 0) + (season ? season.boost : 0) + Math.log2(1 + pop) * 3 + (isNew ? 1 : 0) };
+  });
+  const catSeason = new Map();   // a category is "in season" if any rule matches it today
+  for (const s of scored) if (s.season && !catSeason.has(s.i.category || '')) catSeason.set(s.i.category || '', s.season);
+  const catCount = new Map();
+  for (const s of scored) catCount.set(s.i.category || '', (catCount.get(s.i.category || '') || 0) + 1);
+  const cats = [...catCount.keys()].sort((a, b) => ((catSeason.get(b) ? catSeason.get(b).boost : 0) - (catSeason.get(a) ? catSeason.get(a).boost : 0)) || (a === '') - (b === '') || a.localeCompare(b));
+  const catRank = new Map(cats.map((c, n) => [c, n]));
+  scored.sort((a, b) => (catRank.get(a.i.category || '') - catRank.get(b.i.category || '')) || (b.score - a.score) || (a.i.sort - b.i.sort) || String(a.i.name).localeCompare(String(b.i.name)));
+  const live = scored.filter(s => !s.out);
+  const top = (list, n) => list.slice(0, n).map(s => s.i.id);
+  const byScore = (list) => list.slice().sort((a, b) => b.score - a.score || String(a.i.name).localeCompare(String(b.i.name)));
+  const seasonLabel = [...catSeason.values()].sort((a, b) => b.boost - a.boost)[0];
+  const shelves = [
+    { key: 'picks', title: 'Our picks', ids: top(byScore(live.filter(s => s.i.featured)), 10) },
+    { key: 'season', title: seasonLabel ? `In season: ${seasonLabel.label}` : 'In season', ids: top(byScore(live.filter(s => s.season)), 10) },
+    { key: 'popular', title: 'Popular right now', ids: top(byScore(live.filter(s => s.pop > 0)).sort((a, b) => b.pop - a.pop), 8) },
+    { key: 'new', title: 'New in', ids: top(byScore(live.filter(s => s.isNew)), 8) },
+  ].filter(sh => sh.ids.length >= 2 || (sh.key === 'picks' && sh.ids.length));
   return {
     org: { name: org.display_name || org.name },
     intro: settings.intro_text || null,
     cutoff_text: shopCutoffText(settings),
-    items: list.map(i => ({ id: i.id, name: i.name, description: i.description || '', category: i.category || '', price: Number(i.price), sold_out: i.stock === 0, left: i.stock !== null && i.stock !== undefined && i.stock > 0 && i.stock <= 5 ? i.stock : null })),
-    options: shopOptions(settings, tz, new Date()).map(o => ({ key: o.key, label: o.label, weekend: o.weekend })),
+    img_base: shopImageBase(),
+    categories: cats.map(c => ({ name: c, count: catCount.get(c), season: catSeason.has(c) })),
+    shelves,
+    items: scored.map(s => ({ id: s.i.id, name: s.i.name, description: s.i.description || '', category: s.i.category || '', price: Number(s.i.price), img: s.i.image_path || null,
+      sold_out: s.out, left: s.i.stock !== null && s.i.stock !== undefined && s.i.stock > 0 && s.i.stock <= 5 ? s.i.stock : null })),
+    options: shopOptions(settings, tz, now).map(o => ({ key: o.key, label: o.label, weekend: o.weekend })),
   };
 }
 
@@ -4186,7 +4220,8 @@ async function shopOrgOfSession(session) {
   if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
   return org;
 }
-function shopItemShape(i) { return { id: i.id, name: i.name, description: i.description || '', category: i.category || '', sku: i.sku || '', price: Number(i.price), stock: i.stock === undefined ? null : i.stock, available: i.available !== false }; }
+function shopItemShape(i) { return { id: i.id, name: i.name, description: i.description || '', category: i.category || '', sku: i.sku || '', barcode: i.barcode || '', price: Number(i.price), stock: i.stock === undefined ? null : i.stock, available: i.available !== false,
+  featured: !!i.featured, image: shopImageUrl(i.image_path), has_picture: !!i.image_src, from_sumup: !!i.sumup_variant_id }; }
 async function shopGet(session) {
   const org = await shopOrgOfSession(session);
   const settings = await shopSettings(org.id, { create: true });
@@ -4194,8 +4229,9 @@ async function shopGet(session) {
   const list = (items || []).slice().sort((a, b) => String(a.category || '~').localeCompare(String(b.category || '~')) || (a.sort - b.sort) || String(a.name).localeCompare(String(b.name)));
   return {
     org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/shop/${org.slug}` : null, timezone: org.timezone },
-    settings: { enabled: !!settings.enabled, slots: settings.slots || [], cutoff_weekday: settings.cutoff_weekday, cutoff_time: settings.cutoff_time, intro_text: settings.intro_text || '' },
+    settings: { enabled: !!settings.enabled, slots: settings.slots || [], cutoff_weekday: settings.cutoff_weekday, cutoff_time: settings.cutoff_time, intro_text: settings.intro_text || '', last_sync_at: settings.last_sync_at || null, last_sync_note: settings.last_sync_note || '' },
     items: list.map(shopItemShape),
+    pictures_todo: [...new Set(list.filter(i => i.image_src && i.image_src !== i.image_done_src).map(i => i.image_src))],   // the office's browser makes these small pictures
     options_now: shopOptions(settings, org.timezone, new Date()).map(o => ({ key: o.key, label: o.label })),
     can_manage: ['superadmin', 'admin', 'finance', 'priest'].includes(session.role),
   };
@@ -4209,7 +4245,7 @@ function shopCleanItem(b) {
     stock = Number(b.stock);
     if (!Number.isInteger(stock) || stock < 0 || stock > 100000) throw httpError(400, 'The stock must be a whole number, 0 or more. Leave it empty if you do not count this item.');
   }
-  return { name, price, stock, description: gwText(b.description, 300, 'The description') || null, category: gwText(b.category, 60, 'The category') || null, sku: gwText(b.sku, 60, 'The code') || null, available: b.available !== false };
+  return { name, price, stock, description: gwText(b.description, 300, 'The description') || null, category: gwText(b.category, 60, 'The category') || null, sku: gwText(b.sku, 60, 'The code') || null, available: b.available !== false, ...(b.featured === undefined ? {} : { featured: !!b.featured }) };
 }
 async function shopItemSave(session, b) {
   const org = await shopOrgOfSession(session);
@@ -4237,6 +4273,13 @@ async function shopItemSetAvailable(session, { id, available }) {
   const { data: old } = await supabase.from('repository_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
   if (!old) throw httpError(404, 'Item not found');
   await supabase.from('repository_items').update({ available: !!available, updated_at: new Date().toISOString() }).eq('id', old.id).eq('org_id', org.id);
+  return { ok: true };
+}
+async function shopItemSetFeatured(session, { id, featured }) {   // "our pick": shown near the top of the shop
+  const org = await shopOrgOfSession(session);
+  const { data: old } = await supabase.from('repository_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!old) throw httpError(404, 'Item not found');
+  await supabase.from('repository_items').update({ featured: !!featured, updated_at: new Date().toISOString() }).eq('id', old.id).eq('org_id', org.id);
   return { ok: true };
 }
 async function shopSetSettings(session, b) {
@@ -4294,6 +4337,10 @@ function shopReadImport(text) {
   if (rows.length < 2) throw httpError(400, 'I could only find one line in that file. It needs a heading line and then one line per item.');
   const norm = (h) => String(h).toLowerCase().replace(/[^a-z0-9]/g, '');
   const head = rows[0].map(norm);
+  if (head.includes('itemiddonotchange') || head.includes('variantiddonotchange')) {   // SumUp's own export
+    if (rows.length - 1 > SHOP_MAX_IMPORT_ROWS) throw httpError(400, `That file has more than ${SHOP_MAX_IMPORT_ROWS} lines. Please import it in parts.`);
+    return shopReadSumup(rows, head);
+  }
   const col = (names) => { for (const n of names) { const i = head.indexOf(n); if (i >= 0) return i; } return -1; };
   const iName = col(['itemname', 'name', 'item', 'productname', 'product', 'title']);
   const iPrice = col(['price', 'unitprice', 'sellingprice', 'saleprice', 'priceincltax', 'pricegbp']);
@@ -4319,28 +4366,179 @@ function shopReadImport(text) {
   });
   return { items, skipped, columns: { name: rows[0][iName], price: rows[0][iPrice], category: iCat >= 0 ? rows[0][iCat] : null, sku: iSku >= 0 ? rows[0][iSku] : null, description: iDesc >= 0 ? rows[0][iDesc] : null, variation: iVar >= 0 ? rows[0][iVar] : null } };
 }
-async function shopImport(session, { text, commit }) {
+// SumUp's own export has 47 columns. An item with options is one "parent" line (name, category, picture, no price) followed by one line per
+// option (no name; the option's name, price, quantity and permanent id); a single-option item is one line. When the file has the parish's
+// repository categories ("R-General", "R-Christmas"...) only those are brought across: BBQ, Tambola and the like belong to other campaigns.
+function shopReadSumup(rows, head) {
+  const col = (n) => head.indexOf(n);
+  const I = { name: col('itemname'), vari: col('variations'), price: col('price'), track: col('trackinventoryyesno'), qty: col('quantity'), barcode: col('barcode'), sku: col('sku'),
+    desc: col('descriptiononlinestoreandinvoicesonly'), cat: col('category'), disp: col('displayiteminonlinestoreyesno'), itemId: col('itemiddonotchange'), varId: col('variantiddonotchange'),
+    imgs: [1, 2, 3, 4, 5, 6, 7].map(n => col('image' + n)).filter(i => i >= 0) };
+  if (I.name < 0 || I.price < 0) throw httpError(400, 'This looks like a SumUp file, but it has no "Item name" or "Price" column. Please export it again from Catalog, then Items.');
+  const clean = (v) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  const cell = (r, i) => (i >= 0 && r[i] !== undefined ? clean(r[i]) : '');
+  const repoCat = (c) => { for (const part of String(c || '').split('||')) { const m = /^R\s*-\s*(.+)$/i.exec(part.trim()); if (m) return clean(m[1]).slice(0, 60); } return null; };
+  const firstImage = (r) => { for (const i of I.imgs) { const u = cell(r, i); if (/^https:\/\/[a-z0-9.-]*sumup\.com\/[^\s]{3,250}$/i.test(u)) return u; } return null; };
+  const stripHtml = (s) => clean(String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')).slice(0, 300);
+  const anyRepo = rows.slice(1).some(r => repoCat(r[I.cat]));
+  const items = [], skipped = [], seen = new Set();
+  let notRepo = 0, base = null;
+  const closeBase = () => { if (base && base.container && !base.options) skipped.push({ line: base.line, name: base.name, reason: 'no price' }); };
+  rows.slice(1).forEach((r, idx) => {
+    const line = idx + 2, name = cell(r, I.name), variation = cell(r, I.vari), priceRaw = cell(r, I.price), varId = cell(r, I.varId);
+    if (name) {
+      closeBase();
+      const cat = cell(r, I.cat);
+      base = { name, line, cat, repo: repoCat(cat), track: cell(r, I.track), disp: cell(r, I.disp), itemId: cell(r, I.itemId), desc: stripHtml(cell(r, I.desc)), image: firstImage(r), container: !priceRaw && !varId, options: 0 };
+      if (base.container) return;   // the parent of an item with options: its options follow
+    } else if (!base) { skipped.push({ line, reason: 'no item name' }); return; }
+    if (anyRepo && !base.repo) { notRepo++; return; }
+    const isOption = !name;
+    let display = base.name;
+    if (variation && (isOption || !/^(regular|default|standard|none|n\/a|-)$/i.test(variation))) display = `${base.name} (${variation})`;
+    const price = Math.round(Number(priceRaw.replace(/[£,\s]/g, '')) * 100) / 100;
+    if (!Number.isFinite(price) || price <= 0) { skipped.push({ line, name: display.slice(0, 60), reason: 'no price' }); if (isOption) base.options++; return; }
+    if (price > 500) { skipped.push({ line, name: display.slice(0, 60), reason: 'price over £500' }); if (isOption) base.options++; return; }
+    if (display.length > 120) { skipped.push({ line, name: display.slice(0, 40), reason: 'name too long' }); return; }
+    if (isOption) base.options++;
+    const barcode = cell(r, I.barcode).slice(0, 60), sku = cell(r, I.sku).slice(0, 60), key = varId || barcode || display.toLowerCase();
+    if (seen.has(key)) { skipped.push({ line, name: display.slice(0, 60), reason: 'listed twice' }); return; }
+    seen.add(key);
+    const track = (cell(r, I.track) || base.track) === 'Yes';
+    const qty = Number(cell(r, I.qty));
+    items.push({ name: display, price, category: base.repo || clean(base.cat.split('||')[0]).slice(0, 60) || null, sku: sku || null, barcode: barcode || null, description: base.desc || null,
+      stock: track ? (Number.isFinite(qty) ? Math.max(0, Math.round(qty)) : 0) : null, available: base.disp !== 'No', image_src: base.image,
+      sumup_item_id: (cell(r, I.itemId) || base.itemId || null), sumup_variant_id: varId || null, line });
+  });
+  closeBase();
+  return { items, skipped, not_repository: notRepo, format: 'sumup', columns: { name: rows[0][I.name], price: rows[0][I.price], category: I.cat >= 0 ? rows[0][I.cat] : null, sku: I.barcode >= 0 ? rows[0][I.barcode] : null, description: I.desc >= 0 ? rows[0][I.desc] : null, variation: I.vari >= 0 ? rows[0][I.vari] : null } };
+}
+// What is promised to people but not yet taken off the shelf: orders being paid for, and paid ones not yet made up. A weekly sync takes this away
+// from SumUp's count, so the shop never offers something already promised. (Made-up and collected orders have left the shelf already.)
+async function shopReservedByItem(orgId) {
+  const { data: os } = await supabase.from('repository_orders').select('id, status').eq('org_id', orgId).in('status', ['awaiting_payment', 'paid']);
+  const ids = (os || []).map(o => o.id), out = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data } = await supabase.from('repository_order_lines').select('item_id, qty').in('order_id', ids.slice(i, i + 100));
+    for (const l of data || []) if (l.item_id) out.set(l.item_id, (out.get(l.item_id) || 0) + l.qty);
+  }
+  return out;
+}
+const shopSameStock = (a, b) => (a === undefined ? null : a) === (b === undefined ? null : b);
+// The weekly sync (and the first import). SumUp's export is the truth for name, price and stock; what the office decided here (on/off, featured) stays.
+async function shopImport(session, { text, commit, switch_off_missing }) {
   const org = await shopOrgOfSession(session);
   const read = shopReadImport(text);
-  const { data: have } = await supabase.from('repository_items').select('id, name, sku').eq('org_id', org.id);
-  const bySku = new Map(), byName = new Map();
-  for (const h of have || []) { if (h.sku) bySku.set(h.sku.toLowerCase(), h); byName.set(String(h.name).toLowerCase(), h); }
-  const plan = read.items.map(it => { const hit = (it.sku && bySku.get(it.sku.toLowerCase())) || byName.get(it.name.toLowerCase()) || null; return { ...it, existing_id: hit ? hit.id : null }; });
-  const summary = { found: plan.length, new_items: plan.filter(p => !p.existing_id).length, updated: plan.filter(p => p.existing_id).length, skipped: read.skipped.slice(0, 50), skipped_count: read.skipped.length, columns: read.columns,
-    sample: plan.slice(0, 12).map(p => ({ name: p.name, price: p.price, category: p.category || '', is_new: !p.existing_id })) };
+  const sumup = read.format === 'sumup';
+  const { data: have } = await supabase.from('repository_items').select('*').eq('org_id', org.id);
+  const byVar = new Map(), byBarcode = new Map(), bySku = new Map(), byName = new Map();
+  for (const h of have || []) { if (h.sumup_variant_id) byVar.set(h.sumup_variant_id, h); if (h.barcode) byBarcode.set(h.barcode, h); if (h.sku) bySku.set(h.sku.toLowerCase(), h); byName.set(String(h.name).toLowerCase(), h); }
+  const reserved = sumup ? await shopReservedByItem(org.id) : new Map();
+  const matched = new Set();
+  const plan = read.items.map(it => {
+    let hit = (it.sumup_variant_id && byVar.get(it.sumup_variant_id)) || (it.barcode && byBarcode.get(it.barcode)) || (it.sku && bySku.get(it.sku.toLowerCase())) || byName.get(it.name.toLowerCase()) || null;
+    if (hit && matched.has(hit.id)) hit = null;   // two lines of the file never claim the same item
+    if (hit) matched.add(hit.id);
+    const held = hit ? (reserved.get(hit.id) || 0) : 0;
+    return { ...it, existing: hit, existing_id: hit ? hit.id : null, held, new_stock: sumup ? (it.stock === null ? null : Math.max(0, it.stock - held)) : undefined };
+  });
+  const gone = sumup ? (have || []).filter(h => h.sumup_variant_id && !matched.has(h.id) && h.available !== false) : [];
+  const priceChanges = plan.filter(p => p.existing && Number(p.existing.price) !== p.price);
+  const stockChanges = sumup ? plan.filter(p => p.existing && !shopSameStock(p.existing.stock, p.new_stock)) : [];
+  const pictures = new Set(plan.filter(p => p.image_src && (!p.existing || p.existing.image_done_src !== p.image_src)).map(p => p.image_src));
+  const summary = {
+    format: read.format || 'plain', found: plan.length, new_items: plan.filter(p => !p.existing_id).length, updated: plan.filter(p => p.existing_id).length,
+    stock_changed: stockChanges.length, price_changed: priceChanges.length, missing: gone.length, not_repository: read.not_repository || 0, pictures_to_prepare: pictures.size,
+    held_back: plan.reduce((s, p) => s + p.held, 0),
+    skipped: read.skipped.slice(0, 50), skipped_count: read.skipped.length, columns: read.columns,
+    sample: plan.slice(0, 12).map(p => ({ name: p.name, price: p.price, category: p.category || '', is_new: !p.existing_id })),
+    new_names: plan.filter(p => !p.existing_id).slice(0, 12).map(p => p.name),
+    stock_changes: stockChanges.slice(0, 15).map(p => ({ name: p.name, from: p.existing.stock === undefined ? null : p.existing.stock, to: p.new_stock })),
+    price_changes: priceChanges.slice(0, 10).map(p => ({ name: p.name, from: Number(p.existing.price), to: p.price })),
+    missing_names: gone.slice(0, 15).map(h => h.name),
+  };
   if (!commit) return { ok: true, committed: false, ...summary };
   const now = new Date().toISOString();
-  const fresh = plan.filter(p => !p.existing_id).map((p, i) => ({ org_id: org.id, name: p.name, price: p.price, category: p.category, sku: p.sku, description: p.description, available: true, sort: i, created_at: now, updated_at: now }));
+  const fresh = plan.filter(p => !p.existing_id).map((p, i) => ({
+    org_id: org.id, name: p.name, price: p.price, category: p.category, sku: p.sku, barcode: p.barcode || null, description: p.description, stock: sumup ? p.new_stock : null, available: sumup ? p.available : true, sort: i,
+    sumup_item_id: p.sumup_item_id || null, sumup_variant_id: p.sumup_variant_id || null, image_src: p.image_src || null, featured: false, added_at: now, seen_at: now, created_at: now, updated_at: now }));
   if (fresh.length) { const { error } = await supabase.from('repository_items').insert(fresh); if (error) throw httpError(400, error.message); }
-  for (const p of plan.filter(x => x.existing_id)) {   // an item already here keeps its stock and its on/off setting; only what SumUp knows is refreshed
-    const patch = { name: p.name, price: p.price, updated_at: now };
-    if (p.category) patch.category = p.category;
-    if (p.sku) patch.sku = p.sku;
-    if (p.description) patch.description = p.description;
-    const { error } = await supabase.from('repository_items').update(patch).eq('id', p.existing_id).eq('org_id', org.id);
-    if (error) throw httpError(400, error.message);
+  const seenIds = [];
+  for (const p of plan.filter(x => x.existing_id)) {   // only what really changed is written, so a weekly sync is quick
+    const h = p.existing, patch = {};
+    if (h.name !== p.name) patch.name = p.name;
+    if (Number(h.price) !== p.price) patch.price = p.price;
+    if (p.category && h.category !== p.category) patch.category = p.category;
+    if (p.sku && h.sku !== p.sku) patch.sku = p.sku;
+    if (p.barcode && h.barcode !== p.barcode) patch.barcode = p.barcode;
+    if (p.description && h.description !== p.description) patch.description = p.description;
+    if (sumup && !shopSameStock(h.stock, p.new_stock)) patch.stock = p.new_stock;
+    if (p.sumup_variant_id && h.sumup_variant_id !== p.sumup_variant_id) patch.sumup_variant_id = p.sumup_variant_id;
+    if (p.sumup_item_id && h.sumup_item_id !== p.sumup_item_id) patch.sumup_item_id = p.sumup_item_id;
+    if (p.image_src && h.image_src !== p.image_src) patch.image_src = p.image_src;
+    seenIds.push(h.id);
+    if (Object.keys(patch).length) { patch.updated_at = now; const { error } = await supabase.from('repository_items').update(patch).eq('id', h.id).eq('org_id', org.id); if (error) throw httpError(400, error.message); }
   }
-  return { ok: true, committed: true, ...summary };
+  for (let i = 0; i < seenIds.length; i += 100) await supabase.from('repository_items').update({ seen_at: now }).eq('org_id', org.id).in('id', seenIds.slice(i, i + 100));
+  let switchedOff = 0;
+  if (sumup && switch_off_missing !== false && gone.length) {   // no longer in SumUp: taken off sale, never deleted
+    await supabase.from('repository_items').update({ available: false, updated_at: now }).eq('org_id', org.id).in('id', gone.map(g => g.id));
+    switchedOff = gone.length;
+  }
+  const note = `${summary.new_items} new, ${summary.stock_changed} stock changes, ${summary.price_changed} price changes${switchedOff ? `, ${switchedOff} taken off sale` : ''}`;
+  await shopSettings(org.id, { create: true });
+  await supabase.from('repository_settings').update({ last_sync_at: now, last_sync_note: note }).eq('org_id', org.id);
+  return { ok: true, committed: true, switched_off: switchedOff, note, ...summary };
+}
+
+// ----- small product pictures. The office's browser makes them (SumUp's own pictures are about 650 KB each, far too heavy for a phone), and
+// the server only checks and stores them. Each is named by what is in it, so it can be kept by every browser for a year.
+const shopImageUrl = (p) => (p ? `${String(process.env.SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1/object/public/repository/${p}` : null);
+const shopImageBase = () => `${String(process.env.SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1/object/public/repository/`;
+async function shopImageSave(session, { src, data }) {
+  const org = await shopOrgOfSession(session);
+  const s = String(src == null ? '' : src);
+  if (!/^https:\/\/[^\s]{5,290}$/.test(s)) throw httpError(400, 'The picture address is missing.');
+  const b64 = String(data == null ? '' : data);
+  if (!b64 || b64.length > 140000) throw httpError(400, 'That picture is too large.');
+  const buf = Buffer.from(b64, 'base64');
+  if (!buf.length || buf.length > 100000) throw httpError(400, 'That picture is too large (100 KB at most).');
+  const isWebp = buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  if (!isWebp && !isJpeg) throw httpError(400, 'The picture must be a WebP or a JPEG.');
+  const { data: users } = await supabase.from('repository_items').select('id').eq('org_id', org.id).eq('image_src', s);
+  if (!users || !users.length) throw httpError(404, 'No item uses that picture any more.');
+  const path = `${org.id}/${crypto.createHash('sha256').update(buf).digest('hex').slice(0, 24)}.${isWebp ? 'webp' : 'jpg'}`;
+  const { error } = await supabase.storage.from('repository').upload(path, buf, { contentType: isWebp ? 'image/webp' : 'image/jpeg', upsert: true, cacheControl: '31536000' });
+  if (error) throw httpError(500, 'Could not store the picture: ' + error.message);
+  await supabase.from('repository_items').update({ image_path: path, image_done_src: s }).eq('org_id', org.id).eq('image_src', s);
+  return { ok: true, items: users.length, bytes: buf.length };
+}
+
+// ----- what to show first. A shop of 200 things sells better when the likely things come first: what the parish has been selling lately, what is
+// in season (Christmas from mid-October, Communion in spring...), what the office picked, and what is new. Nothing is hidden: everything is still
+// in its category, and search finds anything. The seasons are guesses at the usual parish year and are easy to change here.
+const SHOP_SEASONS = [
+  { match: /christmas|advent|nativity/i, label: 'Christmas', from: '10-15', to: '01-06', boost: 4 },
+  { match: /easter|lent/i, label: 'Easter', from: '02-10', to: '04-30', boost: 4 },
+  { match: /communion/i, label: 'First Communion', from: '03-01', to: '07-15', boost: 3 },
+  { match: /confirmation/i, label: 'Confirmation', from: '03-01', to: '06-30', boost: 3 },
+];
+const shopInWindow = (md, from, to) => (from <= to ? (md >= from && md <= to) : (md >= from || md <= to));
+function shopSeason(category, today) {   // { label, boost } if this category is in season on this date, else null
+  const md = String(today).slice(5);
+  for (const s of SHOP_SEASONS) if (s.match.test(String(category || '')) && shopInWindow(md, s.from, s.to)) return { label: s.label, boost: s.boost };
+  return null;
+}
+async function shopPopularity(orgId, now, days = 120) {   // units sold per item in paid orders over the last few months
+  const since = new Date(now.getTime() - days * 864e5).toISOString();
+  const { data: os } = await supabase.from('repository_orders').select('id, status, created_at').eq('org_id', orgId).gte('created_at', since).limit(5000);
+  const ids = (os || []).filter(o => ['paid', 'prepared', 'collected'].includes(o.status)).map(o => o.id), units = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data } = await supabase.from('repository_order_lines').select('item_id, qty').in('order_id', ids.slice(i, i + 100));
+    for (const l of data || []) if (l.item_id) units.set(l.item_id, (units.get(l.item_id) || 0) + l.qty);
+  }
+  return units;
 }
 
 // ----- the orders list
@@ -4412,8 +4610,10 @@ Object.assign(actions, {
   shop_item_save: (s, b) => shopItemSave(s, b),
   shop_item_delete: (s, b) => shopItemDelete(s, b),
   shop_item_set_available: (s, b) => shopItemSetAvailable(s, b),
+  shop_item_set_featured: (s, b) => shopItemSetFeatured(s, b),
   shop_set_settings: (s, b) => shopSetSettings(s, b),
   shop_import: (s, b) => shopImport(s, b),
+  shop_image_save: (s, b) => shopImageSave(s, b),
   shop_orders: (s, b) => shopOrders(s, b),
   shop_order_mark: (s, b) => shopOrderMark(s, b),
   shop_order_cancel: (s, b) => shopOrderCancel(s, b),

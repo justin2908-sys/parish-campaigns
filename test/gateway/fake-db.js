@@ -8,9 +8,9 @@ function createFakeDb(clock) {
   const T = (n) => (tables[n] = tables[n] || []);
   const joins = { ticket_blocks: 'block_id' };   // tickets.block_id -> ticket_blocks, for "ticket_blocks!inner(type)"
   const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']],
-    repository_weekends: [['org_id', 'weekend']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
+    repository_weekends: [['org_id', 'weekend']], repository_items: [['org_id', 'sumup_variant_id']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
   const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
-    repository_items: () => ({ available: true, stock: null, sort: 0 }),
+    repository_items: () => ({ available: true, stock: null, sort: 0, featured: false }),
     repository_settings: () => ({ enabled: false, slots: [], cutoff_weekday: 3, cutoff_time: '23:59', intro_text: null, next_ref: 1 }) };
   let seq = 0;
   const faults = [];   // { table, op, when? }: the next matching write fails once, so tests can see what the code does when the database refuses
@@ -227,7 +227,10 @@ function createFakeDb(clock) {
     return { data: null, error: null };   // rate_reset, rate_prune
   };
 
-  return { client: { from: builder, rpc }, tables, T, faults };
+  // Supabase Storage: only the upload the Repository uses; what was stored is kept in `uploads` so tests can look at it
+  const uploads = [];
+  const storage = { from: (bucket) => ({ upload: async (path, buf, opts) => { uploads.push({ bucket, path, bytes: buf.length, opts }); return { data: { path }, error: null }; } }) };
+  return { client: { from: builder, rpc, storage }, tables, T, faults, uploads };
 }
 
 module.exports = { createFakeDb };

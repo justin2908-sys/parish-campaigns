@@ -1486,3 +1486,31 @@ volunteer makes each order up under its reference and name and hands it out at t
 - Tests: `test/gateway/shop.test.js` (42 server tests), `test/gateway/ui-shop.js` (browser checks of the shop, the order page and the office screens).
 - **Not built (by decision or for later):** item photos; a separate login for the repository volunteer (the office prints the list instead); a phone alert
   to the volunteer; refunds sent to SumUp from our screen (recorded only, as for tickets); holiday weekends closed in advance.
+
+### 61b. Repository: the real SumUp export, the weekly sync, small pictures, what shows first, search — 2026-11-09
+
+Built after reading the real export (`Downloads/2026-11-09_..._items-export_*.csv`, 250 lines): 214 repository items ("R-" categories, 10 of them), 29 lines
+for other campaigns (BBQ, Tambola, Food Fair…) which are not brought across, 208 distinct pictures, 22 items at zero stock, 2 lines with no price (Donation, Sale).
+- **Reading the file:** an item with options is a parent line (no price) followed by one line per option; each option becomes its own item, "Name (Option)", with its own
+  stock and price. SumUp's permanent ids (variant id, item id) and the barcode are kept, so next week's file updates the same item. Names are tidied (stray tabs), "R-" is
+  dropped from categories, a minus stock becomes 0, items SumUp does not track have no count. (`netlify/functions/api.js`: `shopReadSumup`.)
+- **Weekly sync (the "Weekly stock update from SumUp" card):** export from SumUp, open the file, check it (a preview: what is new, stock and price changes, what is no longer in
+  SumUp), press Update. SumUp is the truth for name, price and stock; what the office decided here (on/off, "our pick") stays. Stock = SumUp's count minus what is promised in orders not
+  yet made up (awaiting payment or paid; made-up and collected orders have already left the shelf). Items no longer in SumUp are taken off sale, never deleted (a tick lets the office keep
+  them on). Items made by hand are never switched off by a sync, and a hand-made item with the same name or barcode is adopted, not copied. The header says when the stock was last updated and warns
+  after 7 days. (There is no API, so this is a weekly file, by design; it could be a 2-minute job on Tuesday or Wednesday.)
+- **Pictures:** SumUp's are about 650 KB each and cannot be resized by SumUp. The office's browser makes a small copy of each distinct picture (240 px, WebP, a few KB; JPEG if the browser
+  cannot make WebP) and sends it to the server, which checks and stores it in the public `repository` storage bucket under a content-based name (kept a year by browsers). The shop loads
+  only those, lazily, at fixed sizes (no jumping), and shows a plain icon if one is missing. It carries on where it stopped if the page is closed; a changed picture in SumUp is redone
+  on the next sync. No outside image service is used (no per-image cost).
+- **What shows first:** shelves you swipe along, then every category (season first). "Our picks" (the office stars items), "In season" (Christmas from mid-October to 6 January, Easter
+  mid-Feb to April, First Communion March to mid-July, Confirmation March to June: guesses at the usual parish year, easy to change in `SHOP_SEASONS`), "Popular right now" (units sold in
+  paid orders over 120 days; appears once there are sales), "New in" (arrived in a later sync, for two weeks; the first import is not "new"). Sold-out items go last in their category and never on a
+  shelf. Nothing is hidden: every item is in its category and in search.
+- **Search:** instant, in the phone, over name, category and description. Handles plurals, a short list of synonyms (beads/rosary, necklace/pendant…), small typos ("rosry"), several words that must
+  all match, and "did you mean". Category chips filter. Each category shows its first 8 with "Show all".
+- **Speed:** the shop window for the real file is about 38 KB (about 10 KB compressed), cached for 30 seconds; pictures are not part of it (each is fetched only as it comes into view).
+- Migration `20261109020000_repository_sync_images.sql` (applied to the live database; additive).
+- Tests: `test/gateway/shop-sync.test.js` (27), `test/gateway/fixtures/sumup-items-export-sample.csv` (a trimmed real export), and the browser checks in `ui-shop.js`.
+- **Not done:** a seed of "popular" from SumUp's own sales report (not in the item export; an Items-sold report could be loaded later); item photos beyond the first; grouping options of one item
+  under a single card (each option is its own item for now).

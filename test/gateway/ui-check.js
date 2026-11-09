@@ -96,7 +96,8 @@ async function open(url, waitFor) {
   for (let i = 0; i < 60; i++) { await sleep(250); try { if (await ev(`!!(${waitFor})`)) return true; } catch { /* page loading */ } }
   return false;
 }
-async function shot(name, full) {
+async function shot(...a) { try { return await shotRaw(...a); } catch (e) { console.log('  (screenshot skipped: ' + e.message + ')'); } }   // pictures are a courtesy; a slow screenshot must not fail the checks
+async function shotRaw(name, full) {
   const m = await send('Page.getLayoutMetrics');
   const h = Math.ceil(m.result.cssContentSize.height), w = Math.ceil(m.result.cssContentSize.width);
   const r = await send('Page.captureScreenshot', full ? { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: w, height: h, scale: 1 } } : { format: 'png' });
