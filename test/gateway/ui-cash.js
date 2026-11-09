@@ -106,6 +106,7 @@ const MEASURE = `(() => {
   };
   await view(390, 844);
   await loginAs(AD, { id: 'uA-ad', name: 'Admin Anne', role: 'admin', org_id: 'org-A', mobile: '07000000002' });
+  await click('[data-group=money]');   // the Money section has Cash Recon
   await click('[data-tab=cash]');
   check('the Cash Recon tab lists the sellers with what each is holding, biggest first', await waitFor(`document.querySelector('.cash-row')`));
   const rows = await ev(`[...document.querySelectorAll('.cash-row')].map(r => r.innerText.replace(/\\s+/g, ' '))`);

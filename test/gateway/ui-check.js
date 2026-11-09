@@ -148,27 +148,32 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   await shot('public-390-light-seeall', true);
 
   // ---- the picture-only shortcuts (WhatsApp, email) and the "Today in the Church" card, above the three big buttons
-  const wt = await ev(`(() => { const wa = document.querySelector('a.ic[href*="whatsapp.com"]'), em = document.querySelector('button.ic[data-copy]'), td = document.querySelector('section.today'), door = document.querySelector('.door'); const before = (a, b) => !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
-    const r = (e) => e ? e.getBoundingClientRect() : { width: 0, height: 0 };
+  const wt = await ev(`(() => { const wa = document.querySelector('a.ic[href*="whatsapp.com"]'), em = document.querySelector('button.ic[data-copy]'), bell = document.getElementById('dayBtn'), door = document.querySelector('.door'); const before = (a, b) => !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const r = (e) => e ? e.getBoundingClientRect() : { width: 0, height: 0, top: 0 };
     return { waHref: wa && wa.getAttribute('href'), waText: wa && wa.textContent.trim(), waAria: wa && wa.getAttribute('aria-label'), waNew: wa && wa.target === '_blank' && /noopener/.test(wa.rel), waSvg: !!(wa && wa.querySelector('svg')), waSize: [r(wa).width, r(wa).height],
       emText: em && em.textContent.trim(), emAria: em && em.getAttribute('aria-label'), emSvg: !!(em && em.querySelector('svg')), mastWords: /Email us|WhatsApp/.test(document.querySelector('.mast').textContent),
-      order: before(wa, td) && before(em, td) && before(td, door),
-      head: td && td.querySelector('h2').textContent, sub: td && td.querySelector('.sub').textContent, k: td && td.querySelector('.k').textContent, cls: td && td.className,
-      btns: td ? [...td.querySelectorAll('.acts a')].map(a => a.textContent.trim() + '|' + a.getAttribute('aria-label') + '>' + a.getAttribute('href')) : [] }; })()`);
+      bellText: bell && bell.textContent.trim(), bellAria: bell && bell.getAttribute('aria-label'), bellSize: [r(bell).width, r(bell).height], bellFirst: bell && bell === document.querySelector('.iconrow > *'),
+      order: before(bell, wa) && before(wa, em) && before(em, door), noCard: !document.querySelector('section.today'), doorTop: r(door).top, icons: document.querySelectorAll('.iconrow > .ic').length, rowOneLine: new Set([...document.querySelectorAll('.iconrow > .ic')].map(e => Math.round(e.getBoundingClientRect().top))).size === 1 }; })()`);
   const tdy = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }), tdn = tdy.replace(/-/g, ''), [, tm, tdd] = tdy.split('-');
   check('WhatsApp is a picture only (no words on screen), 44px or larger, opens the channel in a new tab, and still has its words for screen readers', wt.waHref === 'https://whatsapp.com/channel/0029VaAbCdEf12345' && wt.waText === '' && wt.waSvg && /Join our WhatsApp channel/.test(wt.waAria) && wt.waNew && wt.waSize[0] >= 44 && wt.waSize[1] >= 44, JSON.stringify([wt.waHref, wt.waText, wt.waAria, wt.waSize]));
   check('Email is a picture only, with its words for screen readers, and nothing but the name is left in the top bar', wt.emText === '' && wt.emSvg && /Copy the parish email address/.test(wt.emAria) && !wt.mastWords, JSON.stringify([wt.emText, wt.emAria, wt.mastWords]));
-  check('the two shortcuts, then the Today card, then the three big buttons', wt.order);
-  check('the Today card shows the date, the name of the day, its rank, season and colour', wt.head === 'Saint Leo the Great, pope and doctor' && wt.sub === 'Memorial · Ordinary Time' && /^[A-Za-z]+day [0-9]+ [A-Za-z]+$/.test(wt.k.trim()) && /c-white/.test(wt.cls), JSON.stringify([wt.head, wt.sub, wt.k, wt.cls]));
-  check('…with a book (readings, Universalis) and a halo figure (about today, Vatican News), both pictures only', wt.btns.length === 2 && wt.btns[0] === `|Today’s Mass readings>https://universalis.com/europe.england.westminster/${tdn}/mass.htm` && wt.btns[1] === `|About today’s saint or feast>https://www.vaticannews.va/en/saints/${tm}/${tdd}.html`, wt.btns.join(' || '));
-  await shot('public-390-light-top', false);
-  // switched off in the parish's settings: no WhatsApp and no card
+  check('the bell is a picture only (first in the row, 44px or larger), named for screen readers; the Today card no longer takes up the page', wt.bellText === '' && wt.bellFirst && /Notifications/.test(wt.bellAria) && wt.bellSize[0] >= 44 && wt.bellSize[1] >= 44 && wt.noCard, JSON.stringify([wt.bellText, wt.bellFirst, wt.bellAria, wt.bellSize, wt.noCard]));
+  check('the shortcuts sit on one line, then the three big buttons come straight after them', wt.order && wt.rowOneLine && wt.doorTop < 260, JSON.stringify([wt.order, wt.rowOneLine, wt.doorTop, wt.icons]));
+  await ev(`document.getElementById('dayBtn').click()`);
+  const dp = await ev(`(() => { const s = document.getElementById('daySheet'), a = [...s.querySelectorAll('a.dl')]; return { open: !s.hidden, title: s.querySelector('h2').textContent, when: s.querySelector('.daysub').textContent, links: a.map(x => x.querySelector('b').textContent + '|' + x.querySelector('small').textContent + '>' + x.getAttribute('href') + '|' + x.target + '|' + x.rel), cls: a[1] && a[1].className, focus: document.activeElement && document.activeElement.id }; })()`);
+  check('the bell opens a small panel naming the day, with two links: the readings, and today in the Church (the feast, its rank and season)', dp.open && dp.title === 'Today' && /^[A-Za-z]+day [0-9]+ [A-Za-z]+$/.test(dp.when) && dp.links.length === 2 && dp.links[0] === `Readings for the day|The Mass readings>https://universalis.com/europe.england.westminster/${tdn}/mass.htm|_blank|noopener` && dp.links[1] === `Today in the Church|Saint Leo the Great, pope and doctor — Memorial · Ordinary Time>https://www.vaticannews.va/en/saints/${tm}/${tdd}.html|_blank|noopener` && /c-white/.test(dp.cls) && dp.focus === 'daySheetCard', JSON.stringify(dp));
+  await shot('public-390-light-bell', false);
+  await ev(`document.getElementById('daySheetClose').click()`);
+  check('Close closes the panel', await ev(`document.getElementById('daySheet').hidden === true && document.body.style.overflow === ''`));
+  await ev(`document.getElementById('dayBtn').click(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+  check('Escape closes it too', await ev(`document.getElementById('daySheet').hidden === true`));
+  // switched off in the parish's settings: no WhatsApp and no bell
   T('organizations').find(o => o.id === 'org-A').gateway_whatsapp = null; T('organizations').find(o => o.id === 'org-A').gateway_daily = false;
   await open(page, "document.querySelector('.door')");
-  check('with no WhatsApp link and the card switched off, neither appears', await ev(`!document.querySelector('a.ic[href*="whatsapp.com"]') && !document.querySelector('section.today')`));
+  check('with no WhatsApp link and the daily readings switched off, neither the WhatsApp picture nor the bell appears', await ev(`!document.querySelector('a.ic[href*="whatsapp.com"]') && !document.getElementById('dayBtn') && !document.getElementById('daySheet')`));
   T('organizations').find(o => o.id === 'org-A').gateway_whatsapp = 'https://whatsapp.com/channel/0029VaAbCdEf12345'; T('organizations').find(o => o.id === 'org-A').gateway_daily = true;
   await open(page, "document.querySelector('.door')");
-  await view(390, 844, true); await open(page, "document.querySelector('section.today')"); await shot('public-390-dark-top', false); await view(390, 844, false);
+  await view(390, 844, true); await open(page, "document.getElementById('dayBtn')"); await ev(`document.getElementById('dayBtn').click()`); await shot('public-390-dark-top', false); await view(390, 844, false);
 
   // ---- notices: a normal one opens a panel; an urgent one puts its message in the bar
   await ev(`document.getElementById('notices').click()`);
@@ -217,6 +222,7 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
 
   await view(390, 844, false);
   await loginAs(sessions.ad, { id: 'uA-ad', name: 'admin', role: 'admin', org_id: 'org-A', mobile: '07000000002' });
+  await click('[data-group=page]');   // the Parish page section
   check('Admin sees a "Parish page" tab', await waitFor(`document.querySelector('[data-tab=parishpage]')`));
   await click('[data-tab=parishpage]');
   check('the tab opens (links, notice, what is on the page)', await waitFor(`document.querySelector('.gw-linkrow') && document.querySelector('#gwAnnMsg') && document.querySelector('.gw-arow')`));

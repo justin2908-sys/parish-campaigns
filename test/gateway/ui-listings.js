@@ -285,6 +285,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   };
   await view(390, 844);
   await loginAs(AD, { id: 'uA-ad', name: 'admin', role: 'admin', org_id: 'org-A', mobile: '07000000002' });
+  await click('[data-group=page]');   // the Parish page section has the Listings tab
   const sawTab = await waitFor(`document.querySelector('[data-tab=listings]')`);
   check('the admin sees a Listings tab', sawTab);
   if (!sawTab) console.log('  (the screen shows: ' + JSON.stringify(await ev(`({ tabs: [...document.querySelectorAll('.tabs button')].map(b => b.textContent.trim()), mode: typeof viewMode !== 'undefined' ? viewMode : '?', role: typeof state !== 'undefined' && state.user ? state.user.role : '?', body: document.getElementById('app').innerText.slice(0, 120) })`)) + ')');
@@ -309,7 +310,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   const rejected = T('listings').find(l => l.email === 'sparky@example.org');
   check('refusing with a reason says so, and notes the refund of a paid fee', rejected.status === 'rejected' && rejected.review_note === 'We cannot list trades without a reference' && T('payments')[0].refund_amount === wantAmt && /refund is recorded/.test(await toastText()), await toastText());
   check('the lister sees why on their own page', (await call('public_listing_manage', { token: rejected.token })).body.review_note === 'We cannot list trades without a reference');
-  await click('.rp-pills button', 'Live'); await waitFor(`document.querySelector('#adminContent .rp-order')`);
+  await click('.seg button', 'Live'); await waitFor(`document.querySelector('#adminContent .rp-order')`);
   const lv = await ev(`document.getElementById('adminContent').innerText`);
   check('Live shows the numbers (looked, asked) and the reported listing with its reason', /looked/.test(lv) && /asked for the email/.test(lv) && /This looks like a scam to me/.test(lv) && /1 report/.test(lv));
   await click('#adminContent button', '☆ Pick'); await waitFor(`document.getElementById('toast').textContent.includes('near the top')`);
@@ -319,7 +320,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   await click('#adminContent button', 'Take down…'); await waitFor(`document.getElementById('lstTake')`);
   await typeIn('#lstTake', 'Not suitable for the parish noticeboard'); await click('#adminContent button', 'Yes, take it down'); await waitFor(`document.getElementById('toast').textContent.includes('Taken down')`);
   check('taking one down needs a reason, says so, and it is gone from the public page', T('listings').filter(l => l.status === 'removed').length === 1 && (await call('public_listings', { slug: 'svp-osterley' })).body.listings.length === 6);
-  await click('.rp-pills button', 'Settings'); await waitFor(`document.getElementById('lstBase')`);
+  await click('.seg button', 'Settings'); await waitFor(`document.getElementById('lstBase')`);
   await typeIn('#lstBase', '4'); await typeIn('#lstWeek', '2'); await click('#adminContent button', 'Save'); await waitFor(`document.getElementById('toast').textContent === '✓ Saved'`);
   check('saving the three numbers says "✓ Saved" and the suggestions follow', T('listings_settings').find(s => s.org_id === 'org-A').price_base === 4 && (await call('public_listings', { slug: 'svp-osterley' })).body.new_listing.quotes.find(q => q.days === 14 && q.images === 0).suggested === 6);
   const sm = await ev(MEASURE_ADMIN);

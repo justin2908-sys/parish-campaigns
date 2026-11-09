@@ -186,12 +186,13 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   };
   await view(390, 844);
   await loginAs(AD, { id: 'uA-ad', name: 'admin', role: 'admin', org_id: 'org-A', mobile: '07000000002' });
+  await click('[data-group=page]');   // the Parish page section has the Candles tab
   const sawTab = await waitFor(`document.querySelector('[data-tab=candles]')`);
   check('the admin sees a Candles tab', sawTab);
   if (!sawTab) console.log('  (the screen shows: ' + JSON.stringify(await ev(`({ tabs: [...document.querySelectorAll('.tabs button')].map(b => b.textContent.trim()), mode: typeof viewMode !== 'undefined' ? viewMode : '?', body: document.getElementById('app').innerText.slice(0, 120) })`)) + ')');
   await ev(CLIP);
   await click('[data-tab=candles]');
-  check('it opens on the requests', await waitFor(`document.querySelector('#adminContent .gw-status') && document.querySelector('#adminContent .rp-pills')`));
+  check('it opens on the requests', await waitFor(`document.querySelector('#adminContent .gw-status') && document.querySelector('#adminContent .seg')`));
   await ev(`cndGoWeek(${JSON.stringify(monday)}); 'ok'`);
   check('the week list groups the paid requests by day and candle stand, with names and counts', await waitFor(`document.querySelectorAll('#adminContent .rp-order').length === 2`) && await ev(`(() => { const t = document.getElementById('adminContent').innerText; return /Altar of Our Lady/.test(t) && /Altar of St Anthony of Padua/.test(t) && /Mary Murphy/.test(t) && /Joseph Okafor/.test(t) && /5 candles/.test(t) && /still to light/.test(t); })()`));
   check('the office (and only the office) can read the private “who it is for”', await ev(`(() => { const t = document.getElementById('adminContent').innerText; return /For my mother, who is unwell/.test(t) && /Thanksgiving/.test(t) && /private to the office/.test(t); })()`));
@@ -219,7 +220,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('Close closes the print list', await ev(`!document.getElementById('repoPrintPanel')`));
 
   // ---- settings
-  await click('.rp-pills button', 'Settings'); await waitFor(`document.getElementById('caN0')`);
+  await click('.seg button', 'Settings'); await waitFor(`document.getElementById('caN0')`);
   const sm = await ev(MEASURE_ADMIN);
   check('the settings screen: no sideways scroll, tap targets 44px or larger', !sm.hscroll && !sm.smallTargets.length, JSON.stringify([sm.scrollWidth, sm.smallTargets.slice(0, 5)]));
   await shot('admin-390-candles-settings');
@@ -236,13 +237,13 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('two stands are kept', T('candle_settings').find(s => s.org_id === 'org-A').altars.length === 2);
 
   // ---- the Thursday email: not set up at first, then set up
-  await click('.rp-pills button', 'Thursday email'); await waitFor(`document.getElementById('cnTo')`);
+  await click('.seg button', 'Thursday email'); await waitFor(`document.getElementById('cnTo')`);
   const noMail = await ev(`document.getElementById('adminContent').innerText`);
   check('before email is set up, the screen says so and lists the steps (Gmail app password, Netlify variables)', /not set up yet/i.test(noMail) && /App passwords/.test(noMail) && /MAIL_APP_PASSWORD/.test(noMail), JSON.stringify(noMail.slice(0, 120)));
   await click('#adminContent button', 'Send it now'); await sleep(400);
   check('“Send it now” without email set up explains why instead of failing quietly', /not been set up/i.test(await toastText()) && mails.length === 0, await toastText());
   api.setMailer(async (m) => { mails.push(m); return { ok: true }; });
-  await click('.rp-pills button', 'Requests'); await click('.rp-pills button', 'Thursday email'); await waitFor(`document.getElementById('cnTo')`);
+  await click('.seg button', 'Requests'); await click('.seg button', 'Thursday email'); await waitFor(`document.getElementById('cnTo')`);
   await typeIn('#cnTo', 'not an email'); await click('#adminContent button', 'Save the address'); await sleep(300);
   check('a bad address is refused in words', /email/i.test(await toastText()) && !T('weekly_digest')[0].to_email, await toastText());
   await typeIn('#cnTo', 'office@example.org'); await click('#adminContent button', 'Save the address'); await waitFor(`/It will go to office@example.org/.test(document.getElementById('toast').textContent)`);
@@ -260,7 +261,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   await shot('admin-390-candles-email');
 
   // ---- closing it hides the shortcut on the parish page
-  await click('.rp-pills button', 'Requests');
+  await click('.seg button', 'Requests');
   await ev(`document.querySelector('#adminContent .gw-switchrow input').click(); 'ok'`); await waitFor(`/now closed/.test(document.getElementById('toast').textContent)`);
   await open(base + '/go/svp-osterley', "document.querySelector('.door')");
   check('once closed, the candle shortcut is gone from the parish page', await ev(`!document.querySelector('a.ic[href^="/candles/"]')`));

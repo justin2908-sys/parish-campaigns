@@ -260,6 +260,7 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
   };
   await view(390, 844);
   await loginAs(AD, { id: 'uA-ad', name: 'admin', role: 'admin', org_id: 'org-A', mobile: '07000000002' });
+  await click('[data-group=page]');   // the Parish page section has the Repository tab
   check('the admin sees a Repository tab', await waitFor(`document.querySelector('[data-tab=repository]')`));
   await click('[data-tab=repository]');
   check('the Repository tab opens on the orders', await waitFor(`document.querySelector('.rp-order')`));
@@ -289,7 +290,7 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
   check('cancelled with a recorded refund: the stock goes back and it says so', /cancelled/.test(await toastText()) && T('repository_orders')[0].status === 'cancelled' && T('payments')[0].refund_amount === 11 && T('repository_items').find(i => i.id === rosary).stock === 4, await toastText());
 
   // items
-  await click('.rp-pills button', 'Items'); await waitFor(`document.getElementById('repoFile')`);
+  await click('.seg button', 'Items'); await waitFor(`document.getElementById('repoFile')`);
   await setVal('#repoPaste', 'Item name,Variations,Category,SKU,Price\nCrucifix,Small,Devotional,CR1,£7.50\nCrucifix,Large,Devotional,CR2,12\nBible,,Books,B1,\nPrayer card,,Devotional,PC1,0.60\n');
   await click('#adminContent button', 'Check the file'); await waitFor(`document.querySelector('#repoImportOut .rp-box')`);
   const pv = await ev(`document.getElementById('repoImportOut').textContent`);
@@ -307,7 +308,7 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
 
   // the weekly update with SumUp's own file, and the small pictures made in this browser
   const sumupFile = require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'sumup-items-export-sample.csv'), 'utf8');
-  await click('.rp-pills button', 'Items'); await waitFor(`document.getElementById('repoPaste')`);
+  await click('.seg button', 'Items'); await waitFor(`document.getElementById('repoPaste')`);
   await ev(`(() => { const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d'); const gr = g.createLinearGradient(0, 0, 640, 480); gr.addColorStop(0, '#c33'); gr.addColorStop(1, '#36c'); g.fillStyle = gr; g.fillRect(0, 0, 640, 480);
     for (let i = 0; i < 400; i++) { g.fillStyle = 'rgba(' + (i * 7 % 255) + ',' + (i * 13 % 255) + ',' + (i * 29 % 255) + ',.5)'; g.fillRect((i * 37) % 640, (i * 53) % 480, 30, 30); }
     c.toBlob(b => { window.__bigPng = b; const of = window.fetch; window.fetch = (u, o) => (/images\\.sumup\\.com/.test(String(u)) ? Promise.resolve(new Response(window.__bigPng, { status: 200 })) : of(u, o)); }, 'image/png'); return 'ok'; })()`);
@@ -338,7 +339,7 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
   await click('.rp-item button', '☆ Pick'); await waitFor(`document.getElementById('toast').textContent.includes('near the top')`);
   check('"☆ Pick" says so and puts the item near the top of the shop', T('repository_items').some(i => i.featured === true && i.org_id === 'org-A'), await toastText());
   // settings
-  await click('.rp-pills button', 'Mass times'); await waitFor(`document.getElementById('rsL0')`);
+  await click('.seg button', 'Mass times'); await waitFor(`document.getElementById('rsL0')`);
   await click('#adminContent button', '+ Add a Mass'); await waitFor(`document.getElementById('rsL3')`);
   await setVal('#rsL3', 'Evening Mass'); await ev(`document.getElementById('rsD3').value = '0'; document.getElementById('rsD3').dispatchEvent(new Event('change', { bubbles: true })); 'ok'`); await setVal('#rsT3', '18:30');
   await click('#adminContent button', 'Save Mass times'); await waitFor(`document.getElementById('toast').textContent === '✓ Saved'`);
