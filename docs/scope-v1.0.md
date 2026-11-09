@@ -1556,3 +1556,16 @@ every listing before it appears.
   ("One person's spare is another's blessing." / "Skilled with a spade, a spanner or a sponge cake?" / "Got something to give away? Someone nearby is hoping for it."), or "Be among the first on our parish
   noticeboard." while there are fewer than 4 listings; how many are listed already; "The more of us list, the better this gets for everyone"; that it takes about two minutes, that £0 is a perfectly good price and that
   the office checks every listing. Buttons: "Add a listing" (straight to the form) and "Just looking" (remembered on that phone). It never appears over the form.
+
+## 63. Cash Recon shows exactly what a seller is holding — 2026-11-10 (on dev; preview only)
+
+Before this, the Cash Recon tab asked the Admin to pick a campaign and a seller and type an amount, with no way to see what that seller should hand over. Now:
+- **Who holds what:** the tab opens on every seller with their unreconciled cash (total, number of sales, number of campaigns), biggest first; a seller with nothing says so, and a deactivated
+  seller who still holds cash is not lost. Money is summed in pence, so there is no rounding drift.
+- **A seller's detail:** a big "Mary should hand over £25.50", per campaign (the one with the oldest sale first), and every sale oldest first with what it was for (tickets), the time and a **running total**,
+  so a part-payment can be seen to cover the first few sales. Only cash still pending counts: not already reconciled, voided, card, online, binned campaigns or another parish.
+- **Live check as the Admin types the counted cash:** "Exactly right" (all sales reconciled), "£X short" (what it would cover, what stays pending and what the next sale needs), or "£X more" (a surplus). A
+  mismatch needs a tick, "I have checked this difference with Mary", before the button (labelled "Reconcile £14.00 anyway") turns on.
+- **Safe against a moving figure:** the screen sends the total it showed. If it has changed by the time the button is pressed (another sale, a void) the server refuses (409) and says what it is now, and the
+  screen refreshes. The amount handed over must be a real amount above £0. A seller's recent reconciliations (when, which campaign, how much, by whom, surplus or shortfall) are listed to avoid counting the same cash twice.
+- Server: `cash_pending` (new), `cash_recon` (checks the amount and the expected figure). Admin, Superadmin and Finance only, own parish only. Tests: `test/gateway/cash.test.js` (12) and `test/gateway/ui-cash.js`.

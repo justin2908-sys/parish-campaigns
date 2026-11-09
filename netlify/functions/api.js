@@ -1916,15 +1916,22 @@ async function recordRefund(session, { payment_id, amount, note }) {
 }
 
 // Lump-sum cash reconciliation: oldest-first greedy match against a seller's pending cash payments
-async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
+async function cashRecon(session, { seller_id, campaign_id, amount_received, expected_pending }) {
   requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   if (!campaign_id) throw httpError(400, 'A campaign must be selected — cash is reconciled per campaign, not lumped together');
   await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const handed = Math.round(Number(amount_received) * 100) / 100;
+  if (amount_received === '' || amount_received === null || amount_received === undefined || !Number.isFinite(handed) || handed <= 0) throw httpError(400, 'Enter the amount of cash handed over (more than £0).');
   const { data: pending } = await supabase.from('payments')
     .select('*').eq('seller_id', seller_id).eq('campaign_id', campaign_id).eq('method', 'cash').eq('status', 'pending')
     .order('created_at', { ascending: true });
+  // The screen showed what this seller was holding when it was opened. If that has moved (more sales, a void) the amount being counted is checked against the wrong figure, so stop and say so.
+  if (expected_pending !== undefined && expected_pending !== null) {
+    const nowTotal = Math.round((pending || []).reduce((t, p) => t + Math.round(Number(p.amount) * 100), 0)) / 100;
+    if (Math.abs(nowTotal - Number(expected_pending)) > 0.004) throw httpError(409, `The cash this seller is holding has changed since you opened this screen (it is now £${nowTotal.toFixed(2)}). Please look at the new amount and try again.`);
+  }
 
-  let remaining = Number(amount_received);
+  let remaining = handed;
   const matched = [];
   for (const p of pending || []) {
     if (remaining + 1e-9 >= Number(p.amount)) {
@@ -1941,7 +1948,7 @@ async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
   const isShortfall = remaining > 0 && stillPendingRows.length > 0;
 
   const { data: reconRow, error } = await supabase.from('cash_recon').insert({
-    seller_id, campaign_id, amount_received, confirmed_by: session.uid,
+    seller_id, campaign_id, amount_received: handed, confirmed_by: session.uid,
     fully_matched: remaining === 0,
     surplus_amount: isSurplus ? remaining : 0,
     shortfall_amount: isShortfall ? remaining : 0,
@@ -5039,3 +5046,46 @@ Object.assign(actions, {
   listings_set_settings: (s, b) => listingsSetSettings(s, b),
 });
 READ_ONLY_PUBLIC.add('public_listings');
+
+// ---------- Cash Recon: exactly what a seller should hand over ----------
+// Before an Admin takes a seller's cash, this says how much that seller is holding that has not been reconciled: in total, per campaign, and sale by sale
+// (oldest first, with a running total, so a part-payment can be seen to cover the first few sales). It also lists every seller who is holding cash, and what
+// was reconciled with this seller lately, so the same cash is not counted twice.
+async function cashPending(session, { seller_id } = {}) {
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
+  const { data: camps } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id).eq('binned', false);
+  const campById = new Map((camps || []).map(c => [c.id, c])), campIds = [...campById.keys()];
+  const { data: users } = await supabase.from('users').select('id, name, active').eq('org_id', session.org_id);
+  const userBy = new Map((users || []).map(u => [u.id, u]));
+  if (seller_id && !userBy.has(seller_id)) throw httpError(404, 'Seller not found');
+  const pending = campIds.length ? await fetchAll(() => supabase.from('payments').select('id, seller_id, campaign_id, amount, created_at, payer_name, ticket_snapshot').eq('method', 'cash').eq('status', 'pending').in('campaign_id', campIds).order('created_at', { ascending: true }).order('id')) : [];
+  const pennies = (n) => Math.round(Number(n) * 100);
+  const by = new Map();   // seller -> { pennies, count, campaigns }
+  for (const p of pending) {
+    if (!p.seller_id || !userBy.has(p.seller_id)) continue;
+    const e = by.get(p.seller_id) || { pennies: 0, count: 0, campaigns: new Set() };
+    e.pennies += pennies(p.amount); e.count++; e.campaigns.add(p.campaign_id); by.set(p.seller_id, e);
+  }
+  const sellers = (users || []).filter(u => u.active !== false || by.has(u.id)).map(u => { const e = by.get(u.id); return { id: u.id, name: u.name, active: u.active !== false, total: e ? e.pennies / 100 : 0, count: e ? e.count : 0, campaigns: e ? e.campaigns.size : 0 }; })
+    .sort((a, b) => (b.total - a.total) || String(a.name).localeCompare(String(b.name)));
+  if (!seller_id) return { sellers };
+
+  const mine = pending.filter(p => p.seller_id === seller_id);
+  const tickets = await ticketsForPayments(mine.map(p => p.id), 'payment_id, ticket_number, tier_id, block_id');
+  const { data: tiers } = campIds.length ? await supabase.from('tiers').select('id, name').in('campaign_id', campIds) : { data: [] };
+  const { data: blocks } = campIds.length ? await supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', campIds) : { data: [] };
+  const groups = new Map();
+  for (const p of mine) {
+    if (!groups.has(p.campaign_id)) groups.set(p.campaign_id, { campaign_id: p.campaign_id, name: campById.get(p.campaign_id).name, pennies: 0, sales: [] });
+    const g = groups.get(p.campaign_id);
+    g.pennies += pennies(p.amount);
+    g.sales.push({ id: p.id, amount: Number(p.amount), created_at: p.created_at, buyer: p.payer_name || '', what: groupTicketsForDisplay(p, tickets, tiers || [], blocks || []), running: g.pennies / 100 });
+  }
+  const campaigns = [...groups.values()].map(g => ({ campaign_id: g.campaign_id, name: g.name, total: g.pennies / 100, count: g.sales.length, oldest: g.sales[0].created_at, sales: g.sales })).sort((a, b) => String(a.oldest).localeCompare(String(b.oldest)));
+  const { data: recs } = campIds.length ? await supabase.from('cash_recon').select('*').eq('seller_id', seller_id).in('campaign_id', campIds).order('created_at', { ascending: false }).limit(5) : { data: [] };
+  const recIds = (recs || []).map(r => r.id);
+  const { data: matched } = recIds.length ? await supabase.from('payments').select('cash_recon_batch_id, amount').in('cash_recon_batch_id', recIds) : { data: [] };
+  const recent = (recs || []).map(r => { const ms = (matched || []).filter(m => m.cash_recon_batch_id === r.id); return { id: r.id, created_at: r.created_at, campaign: (campById.get(r.campaign_id) || {}).name || '', received: Number(r.amount_received), by: (userBy.get(r.confirmed_by) || {}).name || '', sales: ms.length, matched: Math.round(ms.reduce((s, m) => s + pennies(m.amount), 0)) / 100, surplus: Number(r.surplus_amount || 0), shortfall: Number(r.shortfall_amount || 0) }; });
+  return { sellers, seller: { id: seller_id, name: userBy.get(seller_id).name, total: campaigns.reduce((s, c) => s + pennies(c.total), 0) / 100, count: mine.length, campaigns, recent } };
+}
+Object.assign(actions, { cash_pending: (s, b) => cashPending(s, b) });

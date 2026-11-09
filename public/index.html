@@ -2908,35 +2908,110 @@ async function doVoid(paymentId) {
 }
 
 // ---- Cash Recon tab ----
+// The Admin picks whose cash they are taking and is shown exactly what that person is holding (in total, per campaign, and sale by sale), then types
+// what was counted and is told straight away whether it matches, what it would reconcile and what would be left. If the figure shown has moved by the
+// time they press the button (a new sale, a void) the server refuses and says so.
+let cash = null;
+const cashMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
 async function renderCashTab() {
   const seq = adminSeq;
-  const { campaigns } = await call('list_campaigns', { include_inactive: true });   // cash from a closed campaign still needs reconciling
-  const { users } = await call('list_users');
-  const sellers = users.filter(u => u.active); // anyone active can have cash to reconcile
+  let d;
+  try { d = await call('cash_pending'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
+  cash = { sellers: d.sellers, sel: null, detail: null, camp: null, amt: '', ack: false, result: '' };
+  cashDraw();
+}
+async function cashPick(id) {
+  try {
+    const d = await call('cash_pending', { seller_id: id });
+    cash.sellers = d.sellers; cash.sel = id; cash.detail = d.seller; cash.camp = d.seller.campaigns.length ? d.seller.campaigns[0].campaign_id : null; cash.amt = ''; cash.ack = false; cash.result = '';
+    cashDraw();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function cashCampaign() { return cash.detail ? cash.detail.campaigns.find(c => c.campaign_id === cash.camp) || null : null; }
+function cashPreview(c, handed) {   // the same oldest-first rule the server uses
+  let rem = Math.round(handed * 100), n = 0, matched = 0;
+  for (const s of c.sales) { const p = Math.round(s.amount * 100); if (rem >= p) { rem -= p; n++; matched += p; } else break; }
+  return { n, matched: matched / 100, rem: rem / 100, left: c.sales.length - n };
+}
+function cashWhen(iso) { return new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); }
+function cashFeedback() {
+  const c = cashCampaign(); if (!c) return '';
+  if (cash.amt === '' || isNaN(Number(cash.amt))) return { cls: 'info', html: `Count the cash, then type the total here. <b>Expected: ${cashMoney(c.total)}</b> from ${c.count} sale${c.count === 1 ? '' : 's'}.`, exact: false, ok: false };
+  const h = Math.round(Number(cash.amt) * 100) / 100;
+  if (!(h > 0)) return { cls: 'error', html: 'The amount must be more than £0.', exact: false, ok: false };
+  const p = cashPreview(c, h), diff = Math.round((h - c.total) * 100) / 100;
+  if (diff === 0) return { cls: 'good', html: `<b>✓ Exactly right.</b> All ${c.count} sale${c.count === 1 ? '' : 's'} (${cashMoney(c.total)}) will be reconciled.`, exact: true, ok: true };
+  if (diff > 0) return { cls: 'warn', html: `<b>${cashMoney(diff)} more than expected</b> (${cashMoney(h)} counted, ${cashMoney(c.total)} expected). All ${c.count} sale${c.count === 1 ? '' : 's'} will be reconciled and ${cashMoney(diff)} will be recorded as a surplus. Check with ${esc(cash.detail.name)}.`, exact: false, ok: true };
+  const next = c.sales[p.n];
+  return { cls: 'bad', html: `<b>${cashMoney(-diff)} short</b> (${cashMoney(h)} counted, ${cashMoney(c.total)} expected). ${p.n ? `This covers the first ${p.n} sale${p.n === 1 ? '' : 's'} (${cashMoney(p.matched)}).` : 'This does not cover even the oldest sale.'} ${p.left} sale${p.left === 1 ? '' : 's'} (${cashMoney(c.total - p.matched)}) will stay pending${next ? `; the next one needs ${cashMoney(next.amount)}` : ''}${p.rem > 0 ? `, and ${cashMoney(p.rem)} is not enough for it, so nothing more is confirmed` : ''}.`, exact: false, ok: true };
+}
+function cashDraw() {
+  const el = document.getElementById('adminContent'); if (!el || adminTab !== 'cash' || !cash) return;
+  const d = cash.detail, rows = cash.sellers.map(s => `<button type="button" class="cash-row ${cash.sel === s.id ? 'on' : ''}" onclick="cashPick('${s.id}')" aria-pressed="${cash.sel === s.id}"><span><b>${esc(s.name)}</b>${s.active ? '' : ' <span class="muted">(no longer active)</span>'}<br><span class="muted">${s.count ? `${s.count} sale${s.count === 1 ? '' : 's'}${s.campaigns > 1 ? ' · ' + s.campaigns + ' campaigns' : ''}` : 'nothing held'}</span></span><span class="amt ${s.total ? '' : 'muted'}">${cashMoney(s.total)}</span></button>`).join('');
+  let detail = '';
+  if (d) {
+    const c = cashCampaign();
+    const tabs = d.campaigns.length > 1 ? `<div class="gw-pills" style="margin-bottom:10px" role="group" aria-label="Campaign">${d.campaigns.map(x => `<button type="button" class="gw-pill" aria-checked="${x.campaign_id === cash.camp}" onclick="cashCamp('${x.campaign_id}')" style="min-height:48px">${esc(x.name)} · ${cashMoney(x.total)}</button>`).join('')}</div>` : '';
+    const recent = d.recent.length ? `<h4 style="margin:16px 0 6px">Reconciled with ${esc(d.name)} lately</h4>${d.recent.map(r => `<div class="muted" style="padding:6px 0;border-top:1px solid var(--line)">${esc(cashWhen(r.created_at))} · ${esc(r.campaign)} · <b style="color:var(--ink)">${cashMoney(r.received)}</b> received, ${r.sales} sale${r.sales === 1 ? '' : 's'} (${cashMoney(r.matched)})${r.surplus ? ` · surplus ${cashMoney(r.surplus)}` : ''}${r.shortfall ? ` · short ${cashMoney(r.shortfall)}` : ''}${r.by ? ` · by ${esc(r.by)}` : ''}</div>`).join('')}` : '';
+    detail = d.total > 0 ? `<div class="cash-hold"><span class="muted">${esc(d.name)} should hand over</span><b>${cashMoney(d.total)}</b><span class="muted">from ${d.count} sale${d.count === 1 ? '' : 's'} not yet reconciled${d.campaigns.length > 1 ? ' in ' + d.campaigns.length + ' campaigns' : ''}</span></div>
+      ${tabs}${c ? `<div class="muted" style="margin:0 0 6px">${esc(c.name)}: ${cashMoney(c.total)} from ${c.count} sale${c.count === 1 ? '' : 's'}, oldest first</div>
+      <div style="overflow-x:auto"><table class="cash-sales"><tr><th>When</th><th>What</th><th>Amount</th><th>Running</th></tr>${c.sales.map(s => `<tr><td>${esc(cashWhen(s.created_at))}</td><td>${s.what.length ? s.what.map(esc).join('<br>') : '<span class="muted">—</span>'}${s.buyer ? `<br><span class="muted">${esc(s.buyer)}</span>` : ''}</td><td>${cashMoney(s.amount)}</td><td>${cashMoney(s.running)}</td></tr>`).join('')}</table></div>
+      <label for="reconAmount" style="margin-top:12px">Cash counted (£)</label><input id="reconAmount" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(cash.amt)}" oninput="cash.amt=this.value; cash.ack=false; cashFeed()" autocomplete="off">
+      <div id="cashFeed"></div><div id="reconResult">${cash.result}</div>` : ''}`
+      : `<div class="info" style="margin-top:12px"><b>${esc(d.name)} is not holding any cash.</b> Nothing is waiting to be reconciled.</div>${cash.result ? `<div id="reconResult">${cash.result}</div>` : ''}`;
+    detail += recent;
+  }
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Cash Reconciliation</h3>
-    <label>Campaign</label><select id="reconCampaign">${campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-    <label>Seller</label><select id="reconSeller">${sellers.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
-    <label>Cash amount handed over (£)</label><input id="reconAmount" type="number" step="0.01">
-    <button class="primary" onclick="doCashRecon()">Confirm & Reconcile</button>
-    <div id="reconResult"></div>
-  </div>`;
+    <p class="muted" style="margin:0 0 10px">Choose whose cash you are taking. You will see exactly what they should hand over, so you can count it against the right figure.</p>
+    <div class="cash-list" role="group" aria-label="Sellers">${rows || '<p class="muted">No sellers yet.</p>'}</div></div>
+    ${d ? `<div class="card" id="cashDetail">${detail}</div>` : ''}`;
+  cashStyle(); cashFeed();
+}
+function cashCamp(id) { cash.camp = id; cash.amt = ''; cash.ack = false; cash.result = ''; cashDraw(); }
+function cashFeed() {
+  const box = document.getElementById('cashFeed'); if (!box) return;
+  const c = cashCampaign(), f = cashFeedback(); if (!c || !f) { box.innerHTML = ''; return; }
+  const needsAck = f.ok && !f.exact;
+  box.innerHTML = `<div class="${f.cls === 'good' ? 'info' : f.cls}" ${f.cls === 'good' ? 'style="border-left:4px solid var(--good)"' : ''}>${f.html}</div>
+    ${needsAck ? `<label class="cash-ack"><input type="checkbox" id="cashAck" ${cash.ack ? 'checked' : ''} onchange="cash.ack=this.checked; cashFeed()"> I have checked this difference with ${esc(cash.detail.name)}</label>` : ''}
+    <button class="primary" id="cashGo" style="${needsAck ? 'background:var(--warn)' : ''}" ${f.ok && (!needsAck || cash.ack) ? '' : 'disabled'} onclick="doCashRecon()">${f.ok ? (needsAck ? `Reconcile ${cashMoney(Number(cash.amt))} anyway` : `Confirm & Reconcile ${cashMoney(Number(cash.amt))}`) : 'Confirm & Reconcile'}</button>`;
+}
+function cashStyle() {
+  if (document.getElementById('cashStyle')) return;
+  const st = document.createElement('style'); st.id = 'cashStyle';
+  st.textContent = `
+  .cash-list { display:grid; gap:8px; }
+  .cash-row { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:56px; padding:8px 12px; text-align:left; font:inherit; font-size:16px; border:1.5px solid var(--stone); border-radius:12px; background:var(--surface); color:var(--ink); }
+  .cash-row.on { border-color:var(--accent); background:var(--accent-dim); }
+  .cash-row .amt { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .cash-hold { display:grid; gap:2px; padding:12px; border-radius:12px; background:var(--accent-dim); border:1.5px solid var(--accent); margin-bottom:12px; }
+  .cash-hold b { font-size:34px; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .cash-sales td, .cash-sales th { vertical-align:top; font-variant-numeric:tabular-nums; }
+  .cash-ack { display:flex; gap:10px; align-items:center; margin:8px 0; font-weight:600; min-height:44px; }
+  .cash-ack input { width:24px; height:24px; margin:0; flex:none; }`;
+  document.head.appendChild(st);
 }
 async function doCashRecon() {
-  const resEl = document.getElementById('reconResult');
+  const c = cashCampaign(); if (!c) return;
+  const btn = document.getElementById('cashGo'); if (btn) btn.disabled = true;
   try {
-    const data = await call('cash_recon', {
-      seller_id: document.getElementById('reconSeller').value,
-      campaign_id: document.getElementById('reconCampaign').value,
-      amount_received: Number(document.getElementById('reconAmount').value),
-    });
-    let msg = `Matched ${data.matched_count} sale(s) totalling £${data.matched_amount.toFixed(2)}.`;
-    if (data.surplus > 0) msg += `<br><b style="color:var(--warn)">£${data.surplus.toFixed(2)} surplus — everything's matched, this is extra. Check with seller.</b>`;
-    if (data.shortfall > 0) msg += `<br><b style="color:var(--bad)">£${data.shortfall.toFixed(2)} short of the next pending sale — nothing more confirmed until the rest is handed over.</b>`;
-    if (data.still_pending.length) msg += `<br>${data.still_pending.length} sale(s) still pending for this seller.`;
-    resEl.innerHTML = `<div class="info">${msg}</div>`;
-    toast(`✓ Cash reconciled — ${data.matched_count} sale(s), £${data.matched_amount.toFixed(2)}`);
-  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+    const data = await call('cash_recon', { seller_id: cash.sel, campaign_id: cash.camp, amount_received: Number(cash.amt), expected_pending: c.total });
+    let msg = `Matched ${data.matched_count} sale${data.matched_count === 1 ? '' : 's'} totalling ${cashMoney(data.matched_amount)}.`;
+    if (data.surplus > 0) msg += `<br><b style="color:var(--warn)">${cashMoney(data.surplus)} surplus — everything's matched, this is extra. Check with the seller.</b>`;
+    if (data.shortfall > 0) msg += `<br><b style="color:var(--bad)">${cashMoney(data.shortfall)} short of the next pending sale — nothing more confirmed until the rest is handed over.</b>`;
+    if (data.still_pending.length) msg += `<br>${data.still_pending.length} sale${data.still_pending.length === 1 ? '' : 's'} still pending for this seller in this campaign.`;
+    toast(`✓ Cash reconciled — ${data.matched_count} sale${data.matched_count === 1 ? '' : 's'}, ${cashMoney(data.matched_amount)}`);
+    const name = cash.detail.name, sel = cash.sel;
+    await cashPick(sel);
+    cash.result = `<div class="info" style="border-left:4px solid var(--good)"><b>✓ Done for ${esc(name)}.</b><br>${msg}</div>`; cashDraw();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    const r = document.getElementById('reconResult'); if (r) r.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    toast(e.message, 'error');
+    if (/changed since you opened/.test(e.message)) { const sel = cash.sel, msg = e.message; await cashPick(sel); cash.result = `<div class="error">${esc(msg)}</div>`; cashDraw(); }
+  }
 }
 
 // ---- Needs Attention tab: Pay-by-Link sales not yet paid (or whose link expired) ----
