@@ -1437,11 +1437,11 @@ Two additions to the public page `/go/<address>`, both switched by the parish it
 Migration `20261109000000_gateway_whatsapp_daily.sql` (two new columns on organizations: `gateway_whatsapp`, `gateway_daily`; applied to the
 live database, baseline re-verified).
 
-- **WhatsApp channel.** A "Join our WhatsApp channel" bar at the very top of the page. The admin pastes the channel link; only a real
+- **WhatsApp channel.** A WhatsApp icon (a round picture button, no words; the words are kept for screen readers and the tooltip) at the very top of the page, next to an envelope icon for the parish email (it replaced the old "Email us" chip). Owner rule (2026-11-09): permanent shortcuts are pictures, not words; only campaigns and daily content use text. The admin pastes the channel link; only a real
   `https://whatsapp.com/channel/<code>` address is accepted (anything else is refused with a plain explanation) and tracking parts are removed.
-  Empty = no bar. The page draws the bar only for such an address.
+  Empty = no icon. The page draws it only for such an address.
 - **Today in the Church.** A card under it, new every day with nothing to maintain: today's date, the name of the celebration (feast, memorial,
-  solemnity, Sunday or the weekday) with its season and liturgical colour, and two buttons. "Today's readings" opens the day's Mass readings on
+  solemnity, Sunday or the weekday) with its season and liturgical colour, and two picture buttons: an open book (opens the day's Mass readings on
   **Universalis** (as read at Mass in England and Wales, Westminster diocese). "About today" opens **Vatican News'** Saint of the Day for the date.
   The readings text is copyrighted, so it is linked, never copied.
 - **Where the day's name comes from:** the open General Roman Calendar data at calapi.inadiutorium.cz (plain http, a community service),
