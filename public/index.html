@@ -1207,12 +1207,12 @@ function shareMenuHtml(a) {
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
 // Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
-const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', listings: 'Listings', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
 const ADMIN_TABS_BY_ROLE = {
-  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'users', 'bin', 'privacy'],
-  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage', 'repository'],
-  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository'],
-  priest: ['registrations', 'parishpage', 'repository'],
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage', 'repository', 'listings'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings'],
+  priest: ['registrations', 'parishpage', 'repository', 'listings'],
 };
 async function renderAdmin() {
   const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
@@ -1241,7 +1241,7 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, listings: renderListingsTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -3982,6 +3982,123 @@ function repoAddSlot() { if (repo.draft.slots.length >= 8) { toast('Up to eight 
 function repoRemoveSlot(i) { repo.draft.slots.splice(i, 1); repoPaint(); toast('Removed — press Save to keep this change'); }
 async function repoSaveSettings() {
   try { await call('shop_set_settings', { slots: repo.draft.slots, cutoff_weekday: repo.draft.cutoff_weekday, cutoff_time: repo.draft.cutoff_time, intro_text: repo.draft.intro_text }); toast('✓ Saved'); await repoReload(['slots', 'cutoff_weekday', 'cutoff_time', 'intro_text']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+</script>
+<script>
+// ================= LISTINGS (the parish classifieds) — Admin tab =================
+// Waiting for approval (read each one, approve or refuse), Live (what people are looking at; pick, take down), Ended, and the settings (open/closed,
+// welcome line, the three numbers the suggested fee comes from). Every button says what it did, in words, where the person is looking.
+let lst = null;
+const lstMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
+async function renderListingsTab() {
+  const seq = adminSeq;
+  let d;
+  try { d = await call('listings_get'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
+  gwStyle(); repoStyle();
+  lst = { d, view: d.counts.waiting ? 'waiting' : 'live', rejectId: null, takeId: null, draft: lstDraftFrom(d) };
+  if (adminSeq === seq) lstPaint();
+}
+function lstDraftFrom(d) { return { intro_text: d.settings.intro_text || '', price_base: String(d.settings.price_base), price_per_extra_week: String(d.settings.price_per_extra_week), price_per_image: String(d.settings.price_per_image) }; }
+async function lstReload(parts) {
+  lst.d = await call('listings_get');
+  const fresh = lstDraftFrom(lst.d);
+  for (const p of parts || []) lst.draft[p] = fresh[p];
+  lstPaint();
+}
+function lstPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'listings' || !lst) return;
+  const y = window.scrollY;
+  el.innerHTML = lstHeadHtml() + (lst.view === 'waiting' ? lstWaitingHtml() : lst.view === 'live' ? lstLiveHtml() : lst.view === 'ended' ? lstEndedHtml() : lstSettingsHtml());
+  window.scrollTo(0, y);
+}
+function lstHeadHtml() {
+  const { d } = lst, o = d.org, s = d.settings, c = d.counts, url = o.page_path ? location.origin + o.page_path : '';
+  const pill = (v, label) => `<button type="button" aria-pressed="${lst.view === v}" onclick="lst.view='${v}'; lstPaint()">${label}</button>`;
+  return `<div class="card"><h3 style="margin-top:0">Listings ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
+    <p class="gw-lede">A noticeboard for parishioners: things for sale, things given away, and services. People contact the lister by email only (the address is never shown on the page). You approve every listing before it appears. The church takes no part in any deal and the page says so.</p>
+    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="lstCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="lstSeePage()">See the page</button></div>` : '<div class="hint">The parish page has no address yet, so Listings cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
+    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for listings</b><div class="muted">Switch off to hide the page and stop new listings. A shortcut appears on the parish page while it is open.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for listings" onchange="lstSetEnabled(this)"><span></span></label></div>
+    ${c.waiting ? `<div class="hint" style="margin-top:10px"><b>${c.waiting} listing${c.waiting === 1 ? ' is' : 's are'} waiting for you to approve.</b></div>` : ''}
+    <div class="rp-pills" role="group" aria-label="Listings sections">${pill('waiting', 'Waiting' + (c.waiting ? ' (' + c.waiting + ')' : ''))}${pill('live', 'Live (' + c.live + ')' + (c.reported ? ' ⚑' + c.reported : ''))}${pill('ended', 'Ended')}${pill('settings', 'Settings')}</div></div>`;
+}
+function lstCopyLink() { const url = location.origin + lst.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
+function lstSeePage() { if (!lst.d.settings.enabled) toast('Listings is closed, so visitors would see “not open”.', 'error'); window.open(lst.d.org.page_path, '_blank', 'noopener'); }
+async function lstSetEnabled(box) {
+  const want = box.checked;
+  try { await call('listings_set_settings', { enabled: want }); toast(want ? '✓ Listings is now open' : '✓ Listings is now closed'); await lstReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+function lstCopyEmail(id) {
+  const l = [...lst.d.waiting, ...lst.d.live, ...lst.d.ended].find(x => x.id === id); if (!l || !l.email) { toast('That address has been cleared.', 'error'); return; }
+  try { navigator.clipboard.writeText(l.email).then(() => toast('✓ Email address copied'), () => toast('Email: ' + l.email)); } catch { toast('Email: ' + l.email); }
+}
+const lstKind = { sell: 'For sale', free: 'Free', service: 'Service' };
+function lstPics(l) { return l.thumbs.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">${l.thumbs.map((t, i) => `<a href="${esc(l.images[i] || t)}" target="_blank" rel="noopener" aria-label="Open picture ${i + 1} full size"><img src="${esc(t)}" alt="" width="72" height="72" loading="lazy" style="width:72px;height:72px;object-fit:cover;border-radius:10px;background:var(--paper)"></a>`).join('')}</div>` : ''; }
+function lstWaitingHtml() {
+  const w = lst.d.waiting;
+  if (!w.length) return '<div class="card"><p class="muted" style="margin:0">Nothing is waiting. New listings appear here as soon as they are sent (and, if there is a fee, paid).</p></div>';
+  return `<div class="card"><h3 style="margin-top:0">Waiting for approval</h3><p class="gw-lede">Read each one. Approving starts the lister's days. Look for anything unsuitable for a parish: things that are not an exchange of goods or services, anything unkind, or anything that looks like a scam.</p>${w.map(l => `
+    <div class="rp-order" style="margin-bottom:12px"><div class="rp-top"><b class="rp-name">${esc(l.title)}</b></div>
+      <div class="muted">${esc(lstKind[l.kind])} · ${esc(l.category)}${l.price ? ' · ' + esc(l.price) : ''} · ${l.days} days · sent ${esc(l.created)}${l.name ? ' · by ' + esc(l.name) : ''}</div>
+      <div class="rp-lines" style="white-space:pre-wrap">${esc(l.description)}</div>${lstPics(l)}
+      <div class="muted">${l.fee > 0 ? `Fee ${lstMoney(l.fee)} ${l.paid ? 'paid' : '(not shown as paid)'}` : 'No fee (£0)'} · ${esc(l.email)}</div>
+      <div class="rp-act"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="lstApprove('${l.id}')">✓ Approve</button><button class="small" onclick="lst.rejectId='${l.id}'; lstPaint()">Not suitable…</button><button class="small" onclick="lstCopyEmail('${l.id}')">Copy their email</button></div>
+      ${lst.rejectId === l.id ? `<div class="rp-cancel"><b>Not accepting “${esc(l.title)}”</b><div><label for="lstWhy">Why? (the lister will see this)</label><input id="lstWhy" maxlength="300" placeholder="e.g. We can't list this on the parish noticeboard" autocomplete="off"></div>
+        ${l.fee > 0 && l.paid ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lstRefund" style="width:auto;margin:0" checked> Note that I have refunded ${lstMoney(l.fee)} in SumUp</label><div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it, so the books agree.</div>` : ''}
+        <div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="lstReject('${l.id}', ${l.fee > 0 && l.paid ? l.fee : 0})">Yes, don't accept it</button><button class="small" onclick="lst.rejectId=null; lstPaint()">Keep it waiting</button></div></div>` : ''}</div>`).join('')}</div>`;
+}
+async function lstApprove(id) {
+  const l = lst.d.waiting.find(x => x.id === id);
+  try { await call('listings_review', { id, decision: 'approve' }); toast(`✓ Approved. It is live for ${l ? l.days : ''} days`); lst.view = 'waiting'; await lstReload(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function lstReject(id, fee) {
+  const why = (document.getElementById('lstWhy') || {}).value || '';
+  if (why.trim().length < 3) { toast('Please say why, so the lister understands.', 'error'); return; }
+  const body = { id, decision: 'reject', note: why }, box = document.getElementById('lstRefund');
+  if (fee > 0 && box && box.checked) body.refund_amount = fee;
+  try { const r = await call('listings_review', body); toast(r.refunded ? `✓ Not accepted, and the ${lstMoney(r.refunded)} refund is recorded` : '✓ Not accepted. The lister can see why'); lst.rejectId = null; await lstReload(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function lstLiveHtml() {
+  const L = lst.d.live;
+  if (!L.length) return '<div class="card"><p class="muted" style="margin:0">Nothing is live yet.</p></div>';
+  return `<div class="card"><h3 style="margin-top:0">Live now</h3><p class="gw-lede">In the order visitors see them (newest and most looked-at first; a fee never buys a place). “★ Pick” puts one near the top.</p>${L.map(l => `
+    <div class="rp-order ${l.reports ? '' : ''}" style="margin-bottom:12px"><div class="rp-top"><b class="rp-name">${esc(l.title)}</b>${l.featured ? '<span class="gw-status live">★ Pick</span>' : ''}${l.reports ? `<span class="gw-status" style="background:var(--bad-dim);color:var(--bad)">⚑ ${l.reports} report${l.reports === 1 ? '' : 's'}</span>` : ''}</div>
+      <div class="muted">${esc(lstKind[l.kind])} · ${esc(l.category)}${l.price ? ' · ' + esc(l.price) : ''} · ends ${esc(l.ends)} (${l.days_left} day${l.days_left === 1 ? '' : 's'} left) · ${l.views} looked · ${l.contacts} asked for the email</div>
+      ${l.reasons && l.reasons.length ? `<div class="hint" style="margin:4px 0"><b>Reported:</b> ${l.reasons.map(r => '“' + esc(r) + '”').join(' · ')}<div class="rp-act" style="margin-top:6px"><button class="small" onclick="lstDismiss('${l.id}')">Dismiss the reports</button></div></div>` : ''}
+      <div class="rp-act"><button class="small" aria-pressed="${l.featured}" onclick="lstPick('${l.id}', ${!l.featured})">${l.featured ? '★ Picked' : '☆ Pick'}</button><button class="small" onclick="lst.takeId='${l.id}'; lstPaint()">Take down…</button><button class="small" onclick="lstCopyEmail('${l.id}')">Copy their email</button></div>
+      ${lst.takeId === l.id ? `<div class="rp-cancel"><b>Take down “${esc(l.title)}”?</b><div><label for="lstTake">Why? (the lister will see this)</label><input id="lstTake" maxlength="300" placeholder="e.g. This is not suitable for the parish noticeboard" autocomplete="off"></div><div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="lstTakedown('${l.id}')">Yes, take it down</button><button class="small" onclick="lst.takeId=null; lstPaint()">Keep it</button></div></div>` : ''}</div>`).join('')}</div>`;
+}
+async function lstPick(id, on) { try { await call('listings_set_featured', { id, featured: on }); toast(on ? '✓ Picked: it shows near the top' : '✓ No longer a pick'); await lstReload(); } catch (e) { toast(e.message, 'error'); } }
+async function lstDismiss(id) { try { await call('listings_dismiss_reports', { id }); toast('✓ Reports dismissed'); await lstReload(); } catch (e) { toast(e.message, 'error'); } }
+async function lstTakedown(id) {
+  const why = (document.getElementById('lstTake') || {}).value || '';
+  if (why.trim().length < 3) { toast('Please say why, so the lister understands.', 'error'); return; }
+  try { await call('listings_takedown', { id, note: why }); toast('✓ Taken down'); lst.takeId = null; await lstReload(); } catch (e) { toast(e.message, 'error'); }
+}
+function lstEndedHtml() {
+  const E = lst.d.ended, names = { rejected: 'Not accepted', withdrawn: 'Withdrawn by the lister', removed: 'Taken down', expired: 'Ended', cancelled: 'Not paid', live: 'Ended' };
+  if (!E.length) return '<div class="card"><p class="muted" style="margin:0">Nothing has ended yet.</p></div>';
+  return `<div class="card"><h3 style="margin-top:0">Recently ended</h3><p class="gw-lede">The lister's email, text and pictures are cleared from the system two weeks after a listing ends.</p>${E.map(l => `<div class="rp-order" style="margin-bottom:8px"><div class="rp-top"><b class="rp-name">${esc(l.title)}</b><span class="gw-status">${esc(names[l.status] || l.status)}</span></div><div class="muted">${esc(lstKind[l.kind])} · ${esc(l.category)} · ${l.views} looked · ${l.contacts} asked${l.fee > 0 ? ' · fee ' + lstMoney(l.fee) + (l.refunded ? ' (refunded ' + lstMoney(l.refunded) + ')' : '') : ''}${l.review_note ? ' · ' + esc(l.review_note) : ''}</div></div>`).join('')}</div>`;
+}
+function lstSettingsHtml() {
+  const dr = lst.draft, q = lst.d.quotes, at = (d, n) => q.find(x => x.days === d && x.images === n) || { suggested: 0, supporter: 0 };
+  const field = (id, label, key, help) => `<div><label for="${id}">${label}</label><input id="${id}" inputmode="decimal" value="${esc(dr[key])}" autocomplete="off" oninput="lst.draft.${key}=this.value">${help ? `<div class="muted" style="font-size:13.5px">${help}</div>` : ''}</div>`;
+  return `<div class="card"><h3 style="margin-top:0">The suggested fee</h3>
+    <p class="gw-lede">When someone lists, they are shown two suggested amounts worked out from these three numbers, and they may always choose another amount, including £0. A fee is paid by card on the page and is not tied to where a listing appears.</p>
+    <div class="gw-two">${field('lstBase', 'Starting price (£)', 'price_base', 'for one week, with no pictures')}${field('lstWeek', 'For each extra week (£)', 'price_per_extra_week', '')}</div>
+    <div class="gw-two">${field('lstImg', 'For each picture (£)', 'price_per_image', '')}<div></div></div>
+    <label for="lstIntro" style="margin-top:10px">A line of welcome at the top (optional)</label><input id="lstIntro" maxlength="300" value="${esc(dr.intro_text)}" placeholder="e.g. A noticeboard for our parish family." autocomplete="off" oninput="lst.draft.intro_text=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="lstSaveSettings()">Save</button></div></div>
+    <div class="card"><h4 style="margin:0 0 6px">What a lister is shown (saved numbers)</h4><div style="overflow-x:auto"><table><tr><th>Length</th><th>No pictures</th><th>2 pictures</th><th>4 pictures</th></tr>${[[7, '1 week'], [14, '2 weeks'], [21, '3 weeks'], [30, '1 month']].map(([d, label]) => `<tr><td>${label}</td>${[0, 2, 4].map(n => `<td>${lstMoney(at(d, n).suggested)} or ${lstMoney(at(d, n).supporter)}</td>`).join('')}</tr>`).join('')}</table></div></div>
+    <div class="card"><h4 style="margin:0 0 6px">The notice every visitor sees</h4><p class="muted" style="margin:0">${esc(lst.d.disclaimer)}</p></div>`;
+}
+async function lstSaveSettings() {
+  try { await call('listings_set_settings', { intro_text: lst.draft.intro_text, price_base: lst.draft.price_base, price_per_extra_week: lst.draft.price_per_extra_week, price_per_image: lst.draft.price_per_image }); toast('✓ Saved'); await lstReload(['intro_text', 'price_base', 'price_per_extra_week', 'price_per_image']); }
   catch (e) { toast(e.message, 'error'); }
 }
 </script>

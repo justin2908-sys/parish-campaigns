@@ -256,7 +256,7 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
     await open(base + '/theme.css', 'document.body');
     await ev(`localStorage.setItem('pc_session', JSON.stringify({ session: ${JSON.stringify(token)}, user: ${JSON.stringify(user)}, campaigns: [], org: null, lastCampaignId: null })); window.__old = true; 'ok'`);
     await open(base + '/index.html', "!window.__old && document.querySelector('#headerRight button')");
-    await ev(`viewMode = 'admin'; render(); 'ok'`);
+    for (let k = 0; k < 6; k++) { await ev(`viewMode = 'admin'; render(); 'ok'`); if (await waitFor(`document.querySelector('.tabs button')`, 2500)) break; }   // the app may still be starting: ask again
   };
   await view(390, 844);
   await loginAs(AD, { id: 'uA-ad', name: 'admin', role: 'admin', org_id: 'org-A', mobile: '07000000002' });

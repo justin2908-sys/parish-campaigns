@@ -44,3 +44,9 @@
   from = "/shop/*"
   to = "/shop.html"
   status = 200
+
+# Listings (the parish classifieds), at /listings/<address>. A lister's own page is /listings.html?manage=<private link>.
+[[redirects]]
+  from = "/listings/*"
+  to = "/listings.html"
+  status = 200

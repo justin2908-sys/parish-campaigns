@@ -1514,3 +1514,37 @@ for other campaigns (BBQ, Tambola, Food Fair…) which are not brought across, 2
 - Tests: `test/gateway/shop-sync.test.js` (27), `test/gateway/fixtures/sumup-items-export-sample.csv` (a trimmed real export), and the browser checks in `ui-shop.js`.
 - **Not done:** a seed of "popular" from SumUp's own sales report (not in the item export; an Items-sold report could be loaded later); item photos beyond the first; grouping options of one item
   under a single card (each option is its own item for now).
+
+## 62. Listings: the parish classifieds — 2026-11-10 (on dev; preview only)
+
+An exchange of goods and services between parishioners (furniture, bulk food, cakes, free clothes, plumbing, electrical, gardening…), as an engagement and a small
+income for the parish. Decisions (Justin): the page is open to anyone with the link (not advertised, kept out of search engines: no access code), and the office approves
+every listing before it appears.
+- **Public page `/listings/<address>`:** a permanent "Between parishioners" notice at the top of every screen (and in the form and in each listing's sheet): the church does
+  not check, recommend or guarantee any listing, takes no payment from and has no part in any deal, and is not responsible for the goods or services; check things yourself with the
+  person who listed them. Search (plurals, synonyms like plumbing/plumber, typos, "did you mean"), group chips (For sale / Free to a good home / Service offered, and six categories),
+  shelves (picked by the office, just added, most viewed, most asked about), and the full list. A listing opens in a sheet with its pictures and description.
+- **Email only, never shown.** The lister gives an email (no mobile number is accepted, and phone numbers, email addresses and web links are refused in the title, description,
+  price and name, with a plain message). A visitor presses "Copy email address" (or "Write an email"); only then does the server hand the address over, to one visitor at a time (40 an hour),
+  and the press is counted. The address is in no page data. "Copy" works in the same press on phones; if a phone refuses, the address is shown in a box to copy by hand.
+- **Making a listing:** kind (for sale, free, service), group, title, description, optional price, up to 4 pictures, 1 week / 2 weeks / 3 weeks / 1 month, email (+ optional first name),
+  a tick that they understand the church does not check or guarantee listings (the version and time are stored). Pictures are made small in the phone before anything is sent (a thumbnail of about
+  8 KB and a viewing size of about 50 KB, from a photo of several MB). The days start when the office approves.
+- **The suggested fee:** worked out by the server from the length and the number of pictures (default £3 for a week, £1.50 for each extra week, £0.50 for each picture, in half pounds), shown as two
+  amounts ("Suggested" and "With thanks", about 50% more) plus "Other", where **£0 is allowed**. The office sets the three numbers (Admin → Listings → Settings). What is paid never affects where a
+  listing appears. A fee is an ordinary SumUp card payment (a row in `payments`; refunds, the SumUp check and Needs Attention all work), held in one hidden campaign per month that is never listed
+  anywhere; its names and contacts are cleared by the normal retention job.
+- **The office (Admin → Listings; Superadmin, Admin, Finance, Priest):** *Waiting* (read each one with its pictures and the lister's email; Approve, or "Not suitable" with a reason the lister sees, and a
+  paid fee can be noted as refunded: refunds themselves are made in SumUp, and only Admin, Superadmin and Finance may record one); *Live* (views, "asked for the email", reports with their reasons, ★ Pick, take down
+  with a reason); *Ended*; *Settings* (open/closed, welcome line, the three numbers, and a table of what a lister is shown).
+- **The lister's own page** (a private link, shown after they send it): where it stands (waiting for payment, waiting for approval, live until a date, not accepted with the reason, ended), how many have looked and
+  asked for the email, and "Take it down". There is no account and nothing is emailed (Campaigns sends no email), so they are told to keep the link.
+- **What shows first:** a score from how new it is (strongest in the first 3 days), the office's picks, and views and email requests per day it has been up (so a new listing is not buried by an old one); counted
+  once per visitor per day (the visitor is a scrambled value, never an IP). Not influenced by payment.
+- **Ending and privacy:** a listing ends by itself when its days are up. Two weeks after it ends (or is refused, withdrawn or taken down) its email address, name, text and pictures are cleared and the files
+  removed; only the title and the counts stay for the office's history. Views and contacts markers older than 90 days are deleted. Limits: 3 open listings per email, 8 new listings a day per connection,
+  a hidden spam-trap field.
+- Migration `20261110000000_listings.sql` (applied to the live database; additive; the counting function tested there in a rolled-back transaction). Baseline section 11.
+- Tests: `test/gateway/listings.test.js` (36) and the browser checks in `test/gateway/ui-listings.js`.
+- **Not built:** email verification (nothing is emailed), an access code (declined), the lister editing a listing after sending it (they take it down and list again), saving a half-made form, a swap/wanted kind,
+  a listing renewal button, and the Priest/Admin getting an alert when something waits (the tab shows a count and a banner).
