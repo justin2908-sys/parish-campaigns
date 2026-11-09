@@ -1207,12 +1207,12 @@ function shareMenuHtml(a) {
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
 // Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
-const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', listings: 'Listings', candles: 'Candles', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
 const ADMIN_TABS_BY_ROLE = {
-  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'users', 'bin', 'privacy'],
-  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage'],
-  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage'],
-  priest: ['registrations', 'parishpage'],
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage', 'repository', 'listings', 'candles'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles'],
+  priest: ['registrations', 'parishpage', 'repository', 'listings', 'candles'],
 };
 async function renderAdmin() {
   const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
@@ -1241,7 +1241,7 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, listings: renderListingsTab, candles: renderCandlesTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -2908,35 +2908,110 @@ async function doVoid(paymentId) {
 }
 
 // ---- Cash Recon tab ----
+// The Admin picks whose cash they are taking and is shown exactly what that person is holding (in total, per campaign, and sale by sale), then types
+// what was counted and is told straight away whether it matches, what it would reconcile and what would be left. If the figure shown has moved by the
+// time they press the button (a new sale, a void) the server refuses and says so.
+let cash = null;
+const cashMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
 async function renderCashTab() {
   const seq = adminSeq;
-  const { campaigns } = await call('list_campaigns', { include_inactive: true });   // cash from a closed campaign still needs reconciling
-  const { users } = await call('list_users');
-  const sellers = users.filter(u => u.active); // anyone active can have cash to reconcile
+  let d;
+  try { d = await call('cash_pending'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
+  cash = { sellers: d.sellers, sel: null, detail: null, camp: null, amt: '', ack: false, result: '' };
+  cashDraw();
+}
+async function cashPick(id) {
+  try {
+    const d = await call('cash_pending', { seller_id: id });
+    cash.sellers = d.sellers; cash.sel = id; cash.detail = d.seller; cash.camp = d.seller.campaigns.length ? d.seller.campaigns[0].campaign_id : null; cash.amt = ''; cash.ack = false; cash.result = '';
+    cashDraw();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function cashCampaign() { return cash.detail ? cash.detail.campaigns.find(c => c.campaign_id === cash.camp) || null : null; }
+function cashPreview(c, handed) {   // the same oldest-first rule the server uses
+  let rem = Math.round(handed * 100), n = 0, matched = 0;
+  for (const s of c.sales) { const p = Math.round(s.amount * 100); if (rem >= p) { rem -= p; n++; matched += p; } else break; }
+  return { n, matched: matched / 100, rem: rem / 100, left: c.sales.length - n };
+}
+function cashWhen(iso) { return new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); }
+function cashFeedback() {
+  const c = cashCampaign(); if (!c) return '';
+  if (cash.amt === '' || isNaN(Number(cash.amt))) return { cls: 'info', html: `Count the cash, then type the total here. <b>Expected: ${cashMoney(c.total)}</b> from ${c.count} sale${c.count === 1 ? '' : 's'}.`, exact: false, ok: false };
+  const h = Math.round(Number(cash.amt) * 100) / 100;
+  if (!(h > 0)) return { cls: 'error', html: 'The amount must be more than £0.', exact: false, ok: false };
+  const p = cashPreview(c, h), diff = Math.round((h - c.total) * 100) / 100;
+  if (diff === 0) return { cls: 'good', html: `<b>✓ Exactly right.</b> All ${c.count} sale${c.count === 1 ? '' : 's'} (${cashMoney(c.total)}) will be reconciled.`, exact: true, ok: true };
+  if (diff > 0) return { cls: 'warn', html: `<b>${cashMoney(diff)} more than expected</b> (${cashMoney(h)} counted, ${cashMoney(c.total)} expected). All ${c.count} sale${c.count === 1 ? '' : 's'} will be reconciled and ${cashMoney(diff)} will be recorded as a surplus. Check with ${esc(cash.detail.name)}.`, exact: false, ok: true };
+  const next = c.sales[p.n];
+  return { cls: 'bad', html: `<b>${cashMoney(-diff)} short</b> (${cashMoney(h)} counted, ${cashMoney(c.total)} expected). ${p.n ? `This covers the first ${p.n} sale${p.n === 1 ? '' : 's'} (${cashMoney(p.matched)}).` : 'This does not cover even the oldest sale.'} ${p.left} sale${p.left === 1 ? '' : 's'} (${cashMoney(c.total - p.matched)}) will stay pending${next ? `; the next one needs ${cashMoney(next.amount)}` : ''}${p.rem > 0 ? `, and ${cashMoney(p.rem)} is not enough for it, so nothing more is confirmed` : ''}.`, exact: false, ok: true };
+}
+function cashDraw() {
+  const el = document.getElementById('adminContent'); if (!el || adminTab !== 'cash' || !cash) return;
+  const d = cash.detail, rows = cash.sellers.map(s => `<button type="button" class="cash-row ${cash.sel === s.id ? 'on' : ''}" onclick="cashPick('${s.id}')" aria-pressed="${cash.sel === s.id}"><span><b>${esc(s.name)}</b>${s.active ? '' : ' <span class="muted">(no longer active)</span>'}<br><span class="muted">${s.count ? `${s.count} sale${s.count === 1 ? '' : 's'}${s.campaigns > 1 ? ' · ' + s.campaigns + ' campaigns' : ''}` : 'nothing held'}</span></span><span class="amt ${s.total ? '' : 'muted'}">${cashMoney(s.total)}</span></button>`).join('');
+  let detail = '';
+  if (d) {
+    const c = cashCampaign();
+    const tabs = d.campaigns.length > 1 ? `<div class="gw-pills" style="margin-bottom:10px" role="group" aria-label="Campaign">${d.campaigns.map(x => `<button type="button" class="gw-pill" aria-checked="${x.campaign_id === cash.camp}" onclick="cashCamp('${x.campaign_id}')" style="min-height:48px">${esc(x.name)} · ${cashMoney(x.total)}</button>`).join('')}</div>` : '';
+    const recent = d.recent.length ? `<h4 style="margin:16px 0 6px">Reconciled with ${esc(d.name)} lately</h4>${d.recent.map(r => `<div class="muted" style="padding:6px 0;border-top:1px solid var(--line)">${esc(cashWhen(r.created_at))} · ${esc(r.campaign)} · <b style="color:var(--ink)">${cashMoney(r.received)}</b> received, ${r.sales} sale${r.sales === 1 ? '' : 's'} (${cashMoney(r.matched)})${r.surplus ? ` · surplus ${cashMoney(r.surplus)}` : ''}${r.shortfall ? ` · short ${cashMoney(r.shortfall)}` : ''}${r.by ? ` · by ${esc(r.by)}` : ''}</div>`).join('')}` : '';
+    detail = d.total > 0 ? `<div class="cash-hold"><span class="muted">${esc(d.name)} should hand over</span><b>${cashMoney(d.total)}</b><span class="muted">from ${d.count} sale${d.count === 1 ? '' : 's'} not yet reconciled${d.campaigns.length > 1 ? ' in ' + d.campaigns.length + ' campaigns' : ''}</span></div>
+      ${tabs}${c ? `<div class="muted" style="margin:0 0 6px">${esc(c.name)}: ${cashMoney(c.total)} from ${c.count} sale${c.count === 1 ? '' : 's'}, oldest first</div>
+      <div style="overflow-x:auto"><table class="cash-sales"><tr><th>When</th><th>What</th><th>Amount</th><th>Running</th></tr>${c.sales.map(s => `<tr><td>${esc(cashWhen(s.created_at))}</td><td>${s.what.length ? s.what.map(esc).join('<br>') : '<span class="muted">—</span>'}${s.buyer ? `<br><span class="muted">${esc(s.buyer)}</span>` : ''}</td><td>${cashMoney(s.amount)}</td><td>${cashMoney(s.running)}</td></tr>`).join('')}</table></div>
+      <label for="reconAmount" style="margin-top:12px">Cash counted (£)</label><input id="reconAmount" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(cash.amt)}" oninput="cash.amt=this.value; cash.ack=false; cashFeed()" autocomplete="off">
+      <div id="cashFeed"></div><div id="reconResult">${cash.result}</div>` : ''}`
+      : `<div class="info" style="margin-top:12px"><b>${esc(d.name)} is not holding any cash.</b> Nothing is waiting to be reconciled.</div>${cash.result ? `<div id="reconResult">${cash.result}</div>` : ''}`;
+    detail += recent;
+  }
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Cash Reconciliation</h3>
-    <label>Campaign</label><select id="reconCampaign">${campaigns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-    <label>Seller</label><select id="reconSeller">${sellers.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
-    <label>Cash amount handed over (£)</label><input id="reconAmount" type="number" step="0.01">
-    <button class="primary" onclick="doCashRecon()">Confirm & Reconcile</button>
-    <div id="reconResult"></div>
-  </div>`;
+    <p class="muted" style="margin:0 0 10px">Choose whose cash you are taking. You will see exactly what they should hand over, so you can count it against the right figure.</p>
+    <div class="cash-list" role="group" aria-label="Sellers">${rows || '<p class="muted">No sellers yet.</p>'}</div></div>
+    ${d ? `<div class="card" id="cashDetail">${detail}</div>` : ''}`;
+  cashStyle(); cashFeed();
+}
+function cashCamp(id) { cash.camp = id; cash.amt = ''; cash.ack = false; cash.result = ''; cashDraw(); }
+function cashFeed() {
+  const box = document.getElementById('cashFeed'); if (!box) return;
+  const c = cashCampaign(), f = cashFeedback(); if (!c || !f) { box.innerHTML = ''; return; }
+  const needsAck = f.ok && !f.exact;
+  box.innerHTML = `<div class="${f.cls === 'good' ? 'info' : f.cls}" ${f.cls === 'good' ? 'style="border-left:4px solid var(--good)"' : ''}>${f.html}</div>
+    ${needsAck ? `<label class="cash-ack"><input type="checkbox" id="cashAck" ${cash.ack ? 'checked' : ''} onchange="cash.ack=this.checked; cashFeed()"> I have checked this difference with ${esc(cash.detail.name)}</label>` : ''}
+    <button class="primary" id="cashGo" style="${needsAck ? 'background:var(--warn)' : ''}" ${f.ok && (!needsAck || cash.ack) ? '' : 'disabled'} onclick="doCashRecon()">${f.ok ? (needsAck ? `Reconcile ${cashMoney(Number(cash.amt))} anyway` : `Confirm & Reconcile ${cashMoney(Number(cash.amt))}`) : 'Confirm & Reconcile'}</button>`;
+}
+function cashStyle() {
+  if (document.getElementById('cashStyle')) return;
+  const st = document.createElement('style'); st.id = 'cashStyle';
+  st.textContent = `
+  .cash-list { display:grid; gap:8px; }
+  .cash-row { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:56px; padding:8px 12px; text-align:left; font:inherit; font-size:16px; border:1.5px solid var(--stone); border-radius:12px; background:var(--surface); color:var(--ink); }
+  .cash-row.on { border-color:var(--accent); background:var(--accent-dim); }
+  .cash-row .amt { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .cash-hold { display:grid; gap:2px; padding:12px; border-radius:12px; background:var(--accent-dim); border:1.5px solid var(--accent); margin-bottom:12px; }
+  .cash-hold b { font-size:34px; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .cash-sales td, .cash-sales th { vertical-align:top; font-variant-numeric:tabular-nums; }
+  .cash-ack { display:flex; gap:10px; align-items:center; margin:8px 0; font-weight:600; min-height:44px; }
+  .cash-ack input { width:24px; height:24px; margin:0; flex:none; }`;
+  document.head.appendChild(st);
 }
 async function doCashRecon() {
-  const resEl = document.getElementById('reconResult');
+  const c = cashCampaign(); if (!c) return;
+  const btn = document.getElementById('cashGo'); if (btn) btn.disabled = true;
   try {
-    const data = await call('cash_recon', {
-      seller_id: document.getElementById('reconSeller').value,
-      campaign_id: document.getElementById('reconCampaign').value,
-      amount_received: Number(document.getElementById('reconAmount').value),
-    });
-    let msg = `Matched ${data.matched_count} sale(s) totalling £${data.matched_amount.toFixed(2)}.`;
-    if (data.surplus > 0) msg += `<br><b style="color:var(--warn)">£${data.surplus.toFixed(2)} surplus — everything's matched, this is extra. Check with seller.</b>`;
-    if (data.shortfall > 0) msg += `<br><b style="color:var(--bad)">£${data.shortfall.toFixed(2)} short of the next pending sale — nothing more confirmed until the rest is handed over.</b>`;
-    if (data.still_pending.length) msg += `<br>${data.still_pending.length} sale(s) still pending for this seller.`;
-    resEl.innerHTML = `<div class="info">${msg}</div>`;
-    toast(`✓ Cash reconciled — ${data.matched_count} sale(s), £${data.matched_amount.toFixed(2)}`);
-  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+    const data = await call('cash_recon', { seller_id: cash.sel, campaign_id: cash.camp, amount_received: Number(cash.amt), expected_pending: c.total });
+    let msg = `Matched ${data.matched_count} sale${data.matched_count === 1 ? '' : 's'} totalling ${cashMoney(data.matched_amount)}.`;
+    if (data.surplus > 0) msg += `<br><b style="color:var(--warn)">${cashMoney(data.surplus)} surplus — everything's matched, this is extra. Check with the seller.</b>`;
+    if (data.shortfall > 0) msg += `<br><b style="color:var(--bad)">${cashMoney(data.shortfall)} short of the next pending sale — nothing more confirmed until the rest is handed over.</b>`;
+    if (data.still_pending.length) msg += `<br>${data.still_pending.length} sale${data.still_pending.length === 1 ? '' : 's'} still pending for this seller in this campaign.`;
+    toast(`✓ Cash reconciled — ${data.matched_count} sale${data.matched_count === 1 ? '' : 's'}, ${cashMoney(data.matched_amount)}`);
+    const name = cash.detail.name, sel = cash.sel;
+    await cashPick(sel);
+    cash.result = `<div class="info" style="border-left:4px solid var(--good)"><b>✓ Done for ${esc(name)}.</b><br>${msg}</div>`; cashDraw();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    const r = document.getElementById('reconResult'); if (r) r.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    toast(e.message, 'error');
+    if (/changed since you opened/.test(e.message)) { const sel = cash.sel, msg = e.message; await cashPick(sel); cash.result = `<div class="error">${esc(msg)}</div>`; cashDraw(); }
+  }
 }
 
 // ---- Needs Attention tab: Pay-by-Link sales not yet paid (or whose link expired) ----
@@ -3291,7 +3366,7 @@ function gwDraftFrom(d) {
   return {
     links: d.links.map(l => ({ position: l.position, label: l.label, sub: l.sub, url: l.url })),
     ann: a ? { message: a.message, link_url: a.link_url, urgent: a.urgent, starts_at: a.starts_at, ends_at: a.ends_at } : { message: '', link_url: '', urgent: false, starts_at: '', ends_at: '' },
-    details: { phone: d.org.phone, hours: d.org.hours },
+    details: { phone: d.org.phone, hours: d.org.hours, whatsapp: d.org.whatsapp || '', daily: d.org.daily !== false },
     address: { slug: d.org.slug, display_name: d.org.display_name },
   };
 }
@@ -3335,6 +3410,12 @@ function gwHeadHtml() {
       <div id="gwSlugWarn"></div>
       <div class="gw-btns"><button class="primary" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwSaveAddress()">Save address and name</button></div>`
       : `<p class="muted" style="margin:10px 0 0">Only the SuperAdmin can change the address or switch the page on or off.</p>`}
+    <h4 style="margin:18px 0 0;font-size:16px">WhatsApp channel</h4>
+    <p class="muted" style="margin:2px 0 0">Paste your parish's WhatsApp channel link and a “Join our WhatsApp channel” button appears at the top of the page. Leave it empty for no button. In WhatsApp, open your channel, tap its name, then tap “Share” or “Copy link”.</p>
+    <label for="gwWhatsapp">Channel link</label><input id="gwWhatsapp" value="${esc(draft.details.whatsapp)}" maxlength="200" autocomplete="off" autocapitalize="off" inputmode="url" placeholder="https://whatsapp.com/channel/…" oninput="gw.draft.details.whatsapp=this.value">
+    <h4 style="margin:18px 0 0;font-size:16px">Today in the Church</h4>
+    <div class="gw-switchrow" style="margin-top:6px"><div><b>Show today's feast and Mass readings</b><div class="muted">A card near the top of the page, new every day. It names the day or saint being celebrated and links to the readings (Universalis, England and Wales) and to more about the day (Vatican News). You do nothing each day.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${draft.details.daily ? 'checked' : ''} aria-label="Show today's feast and Mass readings" onchange="gw.draft.details.daily=this.checked"><span></span></label></div>
+    <div class="gw-btns"><button class="small" onclick="gwSaveDetails()">Save WhatsApp and daily card</button></div>
     <h4 style="margin:18px 0 0;font-size:16px">Parish office details</h4>
     <p class="muted" style="margin:2px 0 0">The address and email on the page come from Church details. These two are shown under “Parish office”.</p>
     <label for="gwPhone">Phone</label><input id="gwPhone" value="${esc(draft.details.phone)}" maxlength="40" autocomplete="off" inputmode="tel" oninput="gw.draft.details.phone=this.value">
@@ -3372,7 +3453,7 @@ async function gwSaveAddress() {
   }
 }
 async function gwSaveDetails() {
-  try { await call('gateway_set_details', gw.draft.details); toast('✓ Office details saved'); await gwReload(['details']); } catch (e) { toast(e.message, 'error'); }
+  try { await call('gateway_set_details', gw.draft.details); toast('✓ Saved'); await gwReload(['details']); } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---- the three permanent links
@@ -3597,6 +3678,681 @@ render();
 startUpdateWatcher();
 // Lets the app open with no signal (see sw.js) — sales themselves always need the network.
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+</script>
+<script>
+// ================= THE REPOSITORY (parish shop) — Admin tab =================
+// Orders (who, what, which Mass; tick prepared and collected; print the Thursday list), Items (bring them across from SumUp's export, then
+// keep them here), and Mass times and the order cut-off. Every button says what it did, in words, where the person is looking.
+let repo = null;
+const REPO_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const repoMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
+function repoStyle() {
+  if (document.getElementById('repoStyle')) return;
+  const st = document.createElement('style'); st.id = 'repoStyle';
+  st.textContent = `
+  .rp-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+  .rp-pills button { min-height:48px; padding:0 16px; border-radius:999px; border:1.5px solid var(--stone); background:var(--surface); font-size:15px; font-weight:700; color:var(--ink); }
+  .rp-pills button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .rp-weeks { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 12px; }
+  .rp-weeks button { min-height:44px; padding:0 14px; border-radius:10px; border:1.5px solid var(--stone); background:var(--surface); font-weight:600; font-size:14.5px; color:var(--ink); }
+  .rp-weeks button[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-dim); }
+  .rp-sum { display:flex; flex-wrap:wrap; gap:6px 16px; margin:0 0 10px; font-weight:600; }
+  .rp-slot { margin:16px 0 6px; font-size:16.5px; }
+  .rp-order { border:1.5px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:10px; background:var(--paper); display:grid; gap:6px; }
+  .rp-order.cancelled { opacity:.6; }
+  .rp-order.collected { background:var(--good-dim); }
+  .rp-top { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; }
+  .rp-ref { font-size:20px; letter-spacing:.04em; }
+  .rp-name { font-weight:700; font-size:16.5px; overflow-wrap:anywhere; }
+  .rp-lines { font-size:15.5px; overflow-wrap:anywhere; }
+  .rp-act { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .rp-act button { min-height:44px; }
+  .rp-cancel { border:1.5px solid var(--bad); border-radius:10px; padding:10px; background:var(--surface); display:grid; gap:8px; }
+  .rp-item { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+  .rp-item b.nm { overflow-wrap:anywhere; }
+  .rp-item.off { opacity:.62; }
+  .rp-main { display:flex; gap:10px; align-items:center; min-width:0; }
+  .rp-thumb { width:44px; height:44px; flex:none; border-radius:8px; background:var(--paper); overflow:hidden; display:grid; place-items:center; color:var(--slate); }
+  .rp-thumb img { width:100%; height:100%; object-fit:contain; background:#fff; }
+  .rp-cat { margin:14px 0 2px; font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--slate); }
+  .rp-chip { display:inline-block; font-size:12.5px; font-weight:700; padding:1px 8px; border-radius:999px; background:var(--line); color:var(--ink); margin-left:4px; vertical-align:middle; }
+  .rp-chip.low { background:var(--warn-dim); color:var(--warn); } .rp-chip.out { background:var(--bad-dim); color:var(--bad); }
+  .rp-slotrow { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1.2fr) minmax(0,1fr) auto; gap:8px; align-items:end; margin-bottom:8px; }
+  @media (max-width:520px) { .rp-slotrow { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } }
+  .rp-box { border:1.5px solid var(--line); border-radius:12px; padding:12px; background:var(--paper); margin-top:12px; }
+  .rp-skip { margin:6px 0 0; padding-left:18px; font-size:14px; color:var(--slate); }
+  #repoPrintPanel table { width:100%; border-collapse:collapse; margin:6px 0 14px; font-size:14px; }
+  #repoPrintPanel th, #repoPrintPanel td { border:1px solid #999; padding:6px 8px; text-align:left; vertical-align:top; }
+  #repoPrintPanel .tick { width:26px; height:18px; display:inline-block; border:1.5px solid #333; border-radius:3px; vertical-align:middle; }
+  @media print {
+    body > *:not(#repoPrintPanel):not(#regTablePanel) { display:none !important; }
+    #repoPrintPanel { position:static !important; inset:auto !important; overflow:visible !important; padding:0 !important; background:#fff !important; color:#000 !important; }
+    #repoPrintPanel .noprint { display:none !important; }
+    #repoPrintPanel .slotblock { break-inside:avoid; }
+  }`;
+  document.head.appendChild(st);
+}
+function repoDraftFrom(d) {
+  return { slots: d.settings.slots.map(s => ({ id: s.id, label: s.label, weekday: s.weekday, time: s.time })), cutoff_weekday: d.settings.cutoff_weekday, cutoff_time: d.settings.cutoff_time, intro_text: d.settings.intro_text || '' };
+}
+async function renderRepositoryTab() {
+  const seq = adminSeq;
+  let d;
+  try { d = await call('shop_get'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
+  gwStyle(); repoStyle();
+  repo = { d, view: 'orders', orders: null, weekend: null, imp: { text: '', result: null, busy: false }, pic: null, limit: 60, form: null, filter: '', draft: repoDraftFrom(d), cancelId: null, removeArm: null };
+  try { repo.orders = await call('shop_orders', {}); repo.weekend = repo.orders.weekend; } catch (e) { repo.orders = { weekends: [], orders: [], totals: { orders: 0, to_prepare: 0, taken: 0 }, weekend: null, weekend_label: '' }; }
+  if (adminSeq === seq) repoPaint();
+}
+async function repoReload(parts) {   // refetch; only the parts just saved take the server's version, so nothing typed elsewhere is lost
+  repo.d = await call('shop_get');
+  const fresh = repoDraftFrom(repo.d);
+  for (const p of parts || []) repo.draft[p] = fresh[p];
+  repoPaint();
+}
+async function repoLoadOrders(weekend) {
+  repo.orders = await call('shop_orders', weekend ? { weekend } : {});
+  repo.weekend = repo.orders.weekend; repo.cancelId = null;
+  repoPaint();
+}
+function repoPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'repository' || !repo) return;
+  const y = window.scrollY;
+  el.innerHTML = repoHeadHtml() + (repo.view === 'orders' ? repoOrdersHtml() : repo.view === 'items' ? repoItemsHtml() : repoSettingsHtml());
+  window.scrollTo(0, y);
+}
+function repoHeadHtml() {
+  const { d } = repo, o = d.org, s = d.settings, url = o.page_path ? location.origin + o.page_path : '';
+  const pill = (v, label) => `<button type="button" aria-pressed="${repo.view === v}" onclick="repo.view='${v}'; repoPaint()">${label}</button>`;
+  return `<div class="card"><h3 style="margin-top:0">Repository ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
+    <p class="gw-lede">Parishioners choose items, pick the Mass where they will collect, and pay by card. You see the orders here; the repository volunteer makes each one up and hands it out after Mass.</p>
+    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="repoCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="repoSeeShop()">See the shop</button></div>` : '<div class="hint">The parish page has no address yet, so the shop cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
+    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for online orders</b><div class="muted">Switch off to stop new orders at once. Orders already made stay on the list.${!o.slug ? '' : ' A shopping-bag shortcut appears on the parish page while it is open.'}</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for online orders" onchange="repoSetEnabled(this)"><span></span></label></div>
+    ${(() => { const sl = repoSyncLine(); return `<div class="${sl.warn ? 'hint' : 'muted'}" style="margin-top:10px">${esc(sl.text)}${sl.warn ? ` <button class="small" style="min-height:44px;margin-top:6px" onclick="repo.view='items'; repoPaint()">Update the stock from SumUp</button>` : ''}</div>`; })()}
+    <div class="rp-pills" role="group" aria-label="Repository sections">${pill('orders', 'Orders')}${pill('items', 'Items (' + d.items.length + ')')}${pill('settings', 'Mass times &amp; cut-off')}</div></div>`;
+}
+function repoCopyLink() { const url = location.origin + repo.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
+function repoSeeShop() { if (!repo.d.settings.enabled) toast('The shop is closed, so visitors would see “not taking orders”.', 'error'); window.open(repo.d.org.page_path, '_blank', 'noopener'); }
+async function repoSetEnabled(box) {
+  const want = box.checked;
+  try { await call('shop_set_settings', { enabled: want }); toast(want ? '✓ The repository is now open for orders' : '✓ The repository is now closed to new orders'); await repoReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+
+// ---- Orders
+const REPO_STATUS = { paid: ['To prepare', 'sched'], prepared: ['Prepared', 'live'], collected: ['Collected', 'live'], awaiting_payment: ['Not paid yet', ''], cancelled: ['Cancelled', ''] };
+function repoOrderHtml(o) {
+  const st = REPO_STATUS[o.status] || [o.status, ''], paid = ['paid', 'prepared', 'collected'].includes(o.status);
+  const lines = o.lines.map(l => `${l.qty} × ${esc(l.name)}`).join(', ');
+  const acts = [];
+  if (o.status === 'paid') acts.push(`<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoMark('${o.id}','prepared')">✓ Prepared</button>`);
+  if (o.status === 'prepared') acts.push(`<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoMark('${o.id}','collected')">✓ Collected</button>`, `<button class="small" onclick="repoMark('${o.id}','paid')">Not prepared after all</button>`);
+  if (o.status === 'collected') acts.push(`<button class="small" onclick="repoMark('${o.id}','prepared')">Not collected after all</button>`);
+  if (o.status !== 'cancelled') acts.push(`<button class="small" onclick="repo.cancelId='${o.id}'; repoPaint()">Cancel this order…</button>`);
+  const cancel = repo.cancelId === o.id ? `<div class="rp-cancel"><b>Cancel ${esc(o.ref)}?</b>
+      <div><label for="rpWhy">Why? (kept on the record)</label><input id="rpWhy" maxlength="150" placeholder="e.g. item damaged, asked to cancel" autocomplete="off"></div>
+      ${paid ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="rpRefund" style="width:auto;margin:0" checked> Note that I have refunded this in SumUp</label>
+        <div><label for="rpAmt">Amount refunded (£)</label><input id="rpAmt" inputmode="decimal" value="${o.total.toFixed(2)}" autocomplete="off"></div>
+        <div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it on the payment, so the books agree.</div>` : ''}
+      <div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="repoCancel('${o.id}', ${paid})">Yes, cancel the order</button><button class="small" onclick="repo.cancelId=null; repoPaint()">Keep it</button></div></div>` : '';
+  return `<div class="rp-order ${o.status}"><div class="rp-top"><b class="rp-ref">${esc(o.ref)}</b><span class="rp-name">${esc(o.name || '—')}</span><span class="gw-status ${st[1]}">${esc(st[0])}</span></div>
+    <div class="rp-lines">${lines}</div>
+    <div class="muted">${repoMoney(o.total)}${o.contact ? ' · ' + esc(o.contact) : ''}${o.status === 'cancelled' && o.cancel_reason ? ' · ' + esc(o.cancel_reason) : ''}${o.refunded ? ' · refunded ' + repoMoney(o.refunded) : ''}</div>
+    ${acts.length ? `<div class="rp-act">${acts.join('')}</div>` : ''}${cancel}</div>`;
+}
+function repoOrdersHtml() {
+  const od = repo.orders;
+  const weeks = od.weekends.length ? `<div class="rp-weeks" role="group" aria-label="Collection weekend">${od.weekends.map(w => `<button type="button" aria-pressed="${w.weekend === od.weekend}" onclick="repoLoadOrders('${w.weekend}')">${esc(w.label.replace(/^\w+ /, 'Sat '))} · ${w.orders}${w.to_prepare ? ` (${w.to_prepare} to prepare)` : ''}</button>`).join('')}</div>` : '';
+  const bySlot = new Map();
+  for (const o of od.orders) { if (!bySlot.has(o.slot_label)) bySlot.set(o.slot_label, []); bySlot.get(o.slot_label).push(o); }
+  const slots = [...bySlot.entries()].sort((a, b) => String(a[1][0].collect_date).localeCompare(String(b[1][0].collect_date)) || a[0].localeCompare(b[0]));
+  return `<div class="card"><h3 style="margin-top:0">Orders${od.weekend_label ? ' for the weekend of ' + esc(od.weekend_label) : ''}</h3>
+    <p class="gw-lede">Orders made by Wednesday midnight are for that weekend (the cut-off can be changed under Mass times &amp; cut-off). Each order is made up under its reference with the person's name, and handed out at the church door after the Mass they chose.</p>
+    ${weeks}
+    ${od.orders.length ? `<div class="rp-sum"><span>${od.totals.orders} order${od.totals.orders === 1 ? '' : 's'}</span><span>${od.totals.to_prepare} still to prepare</span><span>${repoMoney(od.totals.taken)} paid</span></div>
+      <div class="gw-btns" style="margin:0 0 6px"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoPrint()">🖨 Print the list for the volunteer</button><button class="small" onclick="repoLoadOrders('${od.weekend || ''}'); toast('✓ List refreshed')">Refresh</button></div>
+      ${slots.map(([label, list]) => `<h4 class="rp-slot">${esc(label)}</h4>${list.map(repoOrderHtml).join('')}`).join('')}`
+      : `<p class="muted" style="margin:6px 0 0">No orders yet${od.weekend_label ? ' for this weekend' : ''}. They appear here as soon as someone orders and pays.</p>`}</div>`;
+}
+async function repoMark(id, status) {
+  try {
+    await call('shop_order_mark', { order_id: id, status });
+    toast(status === 'prepared' ? '✓ Marked as prepared' : status === 'collected' ? '✓ Marked as collected' : '✓ Put back to “to prepare”');
+    await repoLoadOrders(repo.weekend);
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function repoCancel(id, paid) {
+  const why = (document.getElementById('rpWhy') || {}).value || '';
+  if (!why.trim()) { toast('Please say why, so it is on the record.', 'error'); return; }
+  const body = { order_id: id, reason: why };
+  const refundBox = document.getElementById('rpRefund');
+  if (paid && refundBox && refundBox.checked) body.refund_amount = (document.getElementById('rpAmt') || {}).value;
+  try {
+    const r = await call('shop_order_cancel', body);
+    toast(r.refunded ? `✓ Order cancelled, and the ${repoMoney(r.refunded)} refund is recorded` : '✓ Order cancelled and the stock put back');
+    repo.cancelId = null; await repoLoadOrders(repo.weekend); await repoReload();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function repoPrint() {
+  const od = repo.orders, live = od.orders.filter(o => ['paid', 'prepared', 'collected'].includes(o.status));
+  if (!live.length) { toast('There are no paid orders to print for this weekend.', 'error'); return; }
+  let el = document.getElementById('repoPrintPanel');
+  if (!el) { el = document.createElement('div'); el.id = 'repoPrintPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:44;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const bySlot = new Map();
+  for (const o of live) { if (!bySlot.has(o.slot_label)) bySlot.set(o.slot_label, []); bySlot.get(o.slot_label).push(o); }
+  const slots = [...bySlot.entries()].sort((a, b) => String(a[1][0].collect_date).localeCompare(String(b[1][0].collect_date)) || a[0].localeCompare(b[0]));
+  const pick = new Map();
+  for (const o of live) for (const l of o.lines) pick.set(l.name, (pick.get(l.name) || 0) + l.qty);
+  el.innerHTML = `<div style="max-width:900px;margin:0 auto">
+    <div class="noprint" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap"><h3 style="margin:0">Print the list</h3>
+      <div class="tiny-actions"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="window.print(); toast('✓ Print window opened — choose a printer, or “Save as PDF”')">🖨 Print</button> <button class="small" onclick="repoClosePrint()">Close</button></div></div>
+    <h2 style="margin:0 0 2px">Repository orders — collect the weekend of ${esc(od.weekend_label)}</h2>
+    <div class="muted" style="margin-bottom:10px">${live.length} paid order${live.length === 1 ? '' : 's'} · printed ${esc(new Date().toLocaleDateString('en-GB'))} · put each order in an envelope or bag marked with its reference and the name</div>
+    <div class="slotblock"><b>All the items to get out (every Mass together)</b><table><tr><th>Item</th><th>Total</th></tr>${[...pick.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([n, q]) => `<tr><td>${esc(n)}</td><td>${q}</td></tr>`).join('')}</table></div>
+    ${slots.map(([label, list]) => `<div class="slotblock"><h3 style="margin:10px 0 0">${esc(label)}</h3><table><tr><th>Ref</th><th>Name</th><th>Items</th><th>Made up</th><th>Collected</th></tr>${list.map(o => `<tr><td><b>${esc(o.ref)}</b></td><td>${esc(o.name || '')}</td><td>${o.lines.map(l => `${l.qty} × ${esc(l.name)}`).join('<br>')}</td><td><span class="tick"></span></td><td><span class="tick"></span></td></tr>`).join('')}</table></div>`).join('')}
+  </div>`;
+}
+function repoClosePrint() { const el = document.getElementById('repoPrintPanel'); if (el) el.remove(); }
+
+// ---- Items
+function repoStockChip(i) {
+  if (i.stock === null) return '';
+  if (i.stock === 0) return '<span class="rp-chip out">Sold out</span>';
+  return `<span class="rp-chip ${i.stock <= 3 ? 'low' : ''}">${i.stock} in stock</span>`;
+}
+function repoItemRows() {
+  const q = repo.filter.trim().toLowerCase();
+  const all = repo.d.items.filter(i => !q || [i.name, i.category, i.sku, i.barcode].join(' ').toLowerCase().includes(q));
+  if (!all.length) return `<p class="muted" style="margin:8px 0 0">${repo.d.items.length ? 'No item matches that.' : 'No items yet. Bring them across from SumUp above, or add one by hand.'}</p>`;
+  const list = all.slice(0, q ? 200 : repo.limit);
+  let last = null, out = '';
+  for (const i of list) {
+    if ((i.category || '') !== last) { last = i.category || ''; out += `<div class="rp-cat">${esc(last || 'No category')}</div>`; }
+    const thumb = i.image ? `<img src="${esc(i.image)}" alt="" width="44" height="44" loading="lazy" decoding="async">` : (i.has_picture ? '…' : '');
+    out += `<div class="rp-item ${i.available ? '' : 'off'}"><div class="rp-main"><span class="rp-thumb">${thumb}</span><div style="min-width:0"><b class="nm">${esc(i.name)}</b> <span>${repoMoney(i.price)}</span>${repoStockChip(i)}${i.featured ? '<span class="rp-chip">★ Our pick</span>' : ''}${i.barcode || i.sku ? `<div class="muted" style="font-size:13.5px">Code ${esc(i.sku || i.barcode)}${i.from_sumup ? ' · from SumUp' : ''}</div>` : ''}</div></div>
+      <div class="rp-act"><label class="gw-onpage" style="margin:0"><span class="gw-switch" style="width:48px;height:28px"><input type="checkbox" ${i.available ? 'checked' : ''} aria-label="${esc(i.name)} is on sale" onchange="repoToggleItem('${i.id}', this)"><span></span></span><span class="muted" style="font-weight:600">${i.available ? 'On sale' : 'Off'}</span></label>
+      <button class="small" aria-pressed="${i.featured}" title="Show this near the top of the shop" onclick="repoTogglePick('${i.id}')">${i.featured ? '★ Picked' : '☆ Pick'}</button>
+      <button class="small" onclick="repoEditItem('${i.id}')">Edit</button>
+      ${repo.removeArm === i.id ? `<button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="repoRemoveItem('${i.id}')">Yes, remove</button><button class="small" onclick="repo.removeArm=null; repoDrawItems()">Keep</button>` : `<button class="small" onclick="repo.removeArm='${i.id}'; repoDrawItems()">Remove</button>`}</div></div>`;
+  }
+  if (!q && all.length > repo.limit) out += `<button class="small" style="margin-top:10px;min-height:44px" onclick="repo.limit += 100; repoDrawItems()">Show more (${all.length - repo.limit} more)</button>`;
+  return out;
+}
+async function repoTogglePick(id) {
+  const i = repo.d.items.find(x => x.id === id); if (!i) return;
+  try { await call('shop_item_set_featured', { id, featured: !i.featured }); i.featured = !i.featured; toast(i.featured ? `✓ ${i.name} will show near the top of the shop` : `✓ ${i.name} is no longer a pick`); repoDrawItems(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function repoDrawItems() { const box = document.getElementById('repoItemRows'); if (box) box.innerHTML = repoItemRows(); }
+// ---- the weekly update from SumUp (stock, prices, new items), and the small pictures
+const repoDaysAgo = (iso) => (iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 864e5) : null);
+function repoSyncLine() {
+  const s = repo.d.settings, n = repoDaysAgo(s.last_sync_at);
+  if (!s.last_sync_at) return { text: 'Stock has not been brought across from SumUp yet.', warn: true };
+  const when = new Date(s.last_sync_at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  return { text: `Stock last updated from SumUp on ${when} (${n <= 0 ? 'today' : n === 1 ? 'yesterday' : n + ' days ago'}).${s.last_sync_note ? ' ' + s.last_sync_note + '.' : ''}`, warn: n >= 7 };
+}
+function repoImportHtml() {
+  const imp = repo.imp, r = imp.result, sl = repoSyncLine();
+  return `<div class="card"><h3 style="margin-top:0">Weekly stock update from SumUp</h3>
+    <p class="gw-lede">SumUp cannot send its item list to us, but it can export it as a file. Once a week (best on a Tuesday or Wednesday, before orders close), bring the stock across: in SumUp open <b>Catalog</b>, then <b>Items</b>, press <b>Export</b>, and open that file here. New items arrive, stock and prices are refreshed, and anything removed in SumUp goes off sale. Orders still waiting to be made up are taken off the count, so the shop never offers something already promised.</p>
+    <div class="${sl.warn ? 'hint' : 'muted'}" style="margin:0 0 8px"><b>${esc(sl.text)}</b>${sl.warn ? ' Please do the weekly update before orders close.' : ''}</div>
+    <label for="repoFile">The exported file (.csv)</label><input id="repoFile" type="file" accept=".csv,.txt,text/csv,text/plain" onchange="repoPickFile(this)">
+    <label for="repoPaste" style="margin-top:10px">…or paste its contents</label><textarea id="repoPaste" rows="3" placeholder="Item name,Variations,…" oninput="repo.imp.text=this.value; repo.imp.result=null">${esc(imp.text)}</textarea>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" ${imp.busy ? 'disabled' : ''} onclick="repoImportCheck()">Check the file</button></div>
+    <div id="repoImportOut">${r ? repoImportResultHtml(r) : ''}</div>
+    <div id="repoPicBox">${repoPicturesHtml()}</div></div>`;
+}
+function repoListHtml(title, rows) { return rows.length ? `<div style="margin-top:6px"><b>${esc(title)}</b><ul class="rp-skip" style="margin-top:2px">${rows.join('')}</ul></div>` : ''; }
+function repoImportResultHtml(r) {
+  const skipped = r.skipped_count ? `<div class="muted" style="margin-top:6px">${r.skipped_count} line${r.skipped_count === 1 ? '' : 's'} left out:</div><ul class="rp-skip">${r.skipped.slice(0, 8).map(s => `<li>line ${s.line}${s.name ? ' (' + esc(s.name) + ')' : ''}: ${esc(s.reason)}</li>`).join('')}${r.skipped_count > 8 ? `<li>and ${r.skipped_count - 8} more</li>` : ''}</ul>` : '';
+  const other = r.not_repository ? `<div class="muted" style="margin-top:4px">${r.not_repository} line${r.not_repository === 1 ? '' : 's'} belong to other campaigns (BBQ, Tambola and so on, not in an “R-” category), so they are not brought across.</div>` : '';
+  if (r.committed) return `<div class="rp-box" style="border-color:var(--good)"><b>✓ Done.</b> ${r.new_items} new item${r.new_items === 1 ? '' : 's'}, ${r.updated} refreshed (${r.stock_changed} stock change${r.stock_changed === 1 ? '' : 's'}, ${r.price_changed} price change${r.price_changed === 1 ? '' : 's'})${r.switched_off ? `, ${r.switched_off} taken off sale` : ''}.${skipped}${other}</div>`;
+  if (!r.found) return `<div class="rp-box"><b>I found no items I could use.</b>${other}${skipped}</div>`;
+  const isSumup = r.format === 'sumup';
+  const lists = isSumup ? repoListHtml('New items', r.new_names.map(n => `<li>${esc(n)}</li>`)) +
+      repoListHtml('Stock changes', r.stock_changes.map(c => `<li>${esc(c.name)}: ${c.from === null ? 'not counted' : c.from} → ${c.to === null ? 'not counted' : c.to}</li>`).concat(r.stock_changed > r.stock_changes.length ? [`<li>and ${r.stock_changed - r.stock_changes.length} more</li>`] : [])) +
+      repoListHtml('Price changes', r.price_changes.map(c => `<li>${esc(c.name)}: ${repoMoney(c.from)} → ${repoMoney(c.to)}</li>`)) +
+      repoListHtml('No longer in SumUp', r.missing_names.map(n => `<li>${esc(n)}</li>`).concat(r.missing > r.missing_names.length ? [`<li>and ${r.missing - r.missing_names.length} more</li>`] : []))
+    : `<ul class="rp-skip">${r.sample.map(s => `<li>${esc(s.name)} — ${repoMoney(s.price)}${s.category ? ' · ' + esc(s.category) : ''}${s.is_new ? '' : ' (already here)'}</li>`).join('')}${r.found > r.sample.length ? `<li>and ${r.found - r.sample.length} more</li>` : ''}</ul>`;
+  return `<div class="rp-box"><b>I found ${r.found} item${r.found === 1 ? '' : 's'}:</b> ${r.new_items} new, ${r.updated} already here${isSumup ? ` (${r.stock_changed} stock change${r.stock_changed === 1 ? '' : 's'}, ${r.price_changed} price change${r.price_changed === 1 ? '' : 's'}${r.missing ? `, ${r.missing} no longer in SumUp` : ''})` : ' (their name and price will be refreshed; stock and on/off kept)'}.
+    ${isSumup && r.held_back ? `<div class="muted" style="margin-top:4px">${r.held_back} unit${r.held_back === 1 ? ' is' : 's are'} held back for orders waiting to be made up, and are taken off SumUp's count.</div>` : ''}
+    ${lists}${skipped}${other}
+    ${isSumup && r.missing ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500;margin-top:8px"><input type="checkbox" id="repoOffMissing" style="width:auto;margin:0" checked> Take the ${r.missing} item${r.missing === 1 ? '' : 's'} no longer in SumUp off sale (they are not deleted)</label>` : ''}
+    ${r.pictures_to_prepare ? `<div class="muted" style="margin-top:6px">${r.pictures_to_prepare} picture${r.pictures_to_prepare === 1 ? '' : 's'} will be made small for phones straight afterwards (about a minute).</div>` : ''}
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoImportCommit()">Update these ${r.found} items</button></div></div>`;
+}
+function repoPickFile(input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  if (f.size > 1500000) { toast('That file is too large (1.5 MB at most).', 'error'); return; }
+  const rd = new FileReader();
+  rd.onload = () => { repo.imp.text = String(rd.result || ''); repo.imp.result = null; const ta = document.getElementById('repoPaste'); if (ta) ta.value = repo.imp.text; toast('✓ File opened — now press “Check the file”'); };
+  rd.onerror = () => toast('I could not read that file.', 'error');
+  rd.readAsText(f);
+}
+async function repoImportCheck() {
+  if (!repo.imp.text.trim()) { toast('Choose the exported file first, or paste its contents.', 'error'); return; }
+  try { repo.imp.busy = true; repo.imp.result = await call('shop_import', { text: repo.imp.text }, 60000); toast('✓ File checked — nothing is saved yet'); }
+  catch (e) { repo.imp.result = null; toast(e.message, 'error'); }
+  repo.imp.busy = false; const o = document.getElementById('repoImportOut'); if (o) o.innerHTML = repo.imp.result ? repoImportResultHtml(repo.imp.result) : '';
+}
+async function repoImportCommit() {
+  try {
+    const off = document.getElementById('repoOffMissing');
+    const r = await call('shop_import', { text: repo.imp.text, commit: true, switch_off_missing: off ? off.checked : true }, 90000);
+    repo.imp.result = r; repo.imp.text = ''; toast(`✓ Updated: ${r.new_items} new, ${r.updated} refreshed`);
+    await repoReload(); repo.view = 'items'; repoPaint();
+    if (repo.d.pictures_todo.length) repoPrepPictures();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- small pictures. SumUp's own are about 650 KB each; this browser makes a small copy of each (240 pixels, a few kilobytes), the server stores it,
+// and the shop only ever loads the small ones. It carries on where it left off if the page is closed.
+function repoPicturesHtml() {
+  const d = repo.d, p = repo.pic, todo = d.pictures_todo.length, have = d.items.filter(i => i.image).length;
+  if (p && p.running) return `<div class="rp-box"><b>Preparing pictures: ${p.done} of ${p.total}</b>${p.failed ? ` (${p.failed} could not be made)` : ''}<div style="height:10px;border-radius:6px;background:var(--line);margin:8px 0;overflow:hidden"><div style="height:100%;width:${Math.round(100 * p.done / Math.max(1, p.total))}%;background:var(--accent)"></div></div><div class="muted" style="font-size:13.5px">You can leave this page open and carry on; if you close it, it picks up where it stopped next time.</div></div>`;
+  if (todo) return `<div class="rp-box"><b>${todo} picture${todo === 1 ? '' : 's'} still to make small for phones.</b> ${have} ${have === 1 ? 'is' : 'are'} ready.<div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoPrepPictures()">Prepare the pictures</button></div></div>`;
+  return have ? `<div class="muted" style="margin-top:10px">✓ All ${have} pictures are ready (small and quick on a phone).</div>` : '';
+}
+function repoDrawPictures() { const b = document.getElementById('repoPicBox'); if (b) b.innerHTML = repoPicturesHtml(); }
+async function repoMakePicture(src) {
+  const res = await fetch(src, { mode: 'cors', cache: 'no-store' });
+  if (!res.ok) throw new Error('picture not found (' + res.status + ')');
+  const bmp = await createImageBitmap(await res.blob());
+  const MAX = 240, scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(bmp, 0, 0, w, h); if (bmp.close) bmp.close();
+  const toBlob = (type, q) => new Promise(r => c.toBlob(r, type, q));
+  let out = await toBlob('image/webp', 0.6);
+  if (!out || out.type !== 'image/webp') out = await toBlob('image/jpeg', 0.62);   // some browsers cannot make WebP
+  for (let q = 0.5; out && out.size > 95000 && q > 0.2; q -= 0.1) out = await toBlob(out.type, q);
+  if (!out || out.size > 100000) throw new Error('could not be made small enough');
+  return await new Promise((ok, no) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(',')[1]); rd.onerror = no; rd.readAsDataURL(out); });
+}
+async function repoPrepPictures() {
+  if (repo.pic && repo.pic.running) return;
+  const queue = repo.d.pictures_todo.slice();
+  if (!queue.length) { toast('✓ All the pictures are already ready'); return; }
+  repo.pic = { running: true, done: 0, total: queue.length, failed: 0 };
+  repoDrawPictures();
+  let okCount = 0;
+  const worker = async () => {
+    while (queue.length && repo && repo.pic && repo.pic.running) {
+      const src = queue.shift();
+      try { await call('shop_image_save', { src, data: await repoMakePicture(src) }, 40000); okCount++; }
+      catch (e) { repo.pic.failed++; }
+      repo.pic.done++;
+      repoDrawPictures();
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  const failed = repo.pic.failed; repo.pic = null;
+  toast(failed ? `Pictures: ${okCount} ready, ${failed} could not be made (they will show a plain icon)` : `✓ ${okCount} picture${okCount === 1 ? '' : 's'} ready`, failed ? 'error' : undefined);
+  try { await repoReload(); } catch { /* the screen will refresh on the next visit */ }
+}
+function repoFormHtml() {
+  const f = repo.form; if (!f) return '';
+  return `<div class="gw-mform"><h4>${f.id ? 'Change this item' : 'Add an item'}</h4>
+    <label for="rfName">Name</label><input id="rfName" maxlength="120" value="${esc(f.name)}" autocomplete="off" oninput="repo.form.name=this.value">
+    <div class="gw-two"><div><label for="rfPrice">Price (£)</label><input id="rfPrice" inputmode="decimal" value="${esc(f.price)}" autocomplete="off" oninput="repo.form.price=this.value"></div>
+    <div><label for="rfStock">How many in stock</label><input id="rfStock" inputmode="numeric" value="${esc(f.stock)}" placeholder="leave empty if you do not count it" autocomplete="off" oninput="repo.form.stock=this.value"></div></div>
+    <div class="gw-two"><div><label for="rfCat">Category</label><input id="rfCat" maxlength="60" value="${esc(f.category)}" placeholder="e.g. Rosaries, Books" autocomplete="off" oninput="repo.form.category=this.value"></div>
+    <div><label for="rfSku">Code (optional)</label><input id="rfSku" maxlength="60" value="${esc(f.sku)}" autocomplete="off" oninput="repo.form.sku=this.value"></div></div>
+    <label for="rfDesc">A short description (optional)</label><input id="rfDesc" maxlength="300" value="${esc(f.description)}" autocomplete="off" oninput="repo.form.description=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoSaveItem()">${f.id ? 'Save changes' : 'Add this item'}</button><button class="small" onclick="repo.form=null; repoPaint()">Cancel</button></div></div>`;
+}
+function repoEditItem(id) {
+  const i = repo.d.items.find(x => x.id === id); if (!i) return;
+  repo.form = { id: i.id, name: i.name, price: i.price.toFixed(2), stock: i.stock === null ? '' : String(i.stock), category: i.category, sku: i.sku, description: i.description, available: i.available };
+  repoPaint(); const e = document.getElementById('rfName'); if (e) { e.scrollIntoView({ block: 'center' }); e.focus(); }
+}
+function repoNewItem() { repo.form = { id: null, name: '', price: '', stock: '', category: '', sku: '', description: '', available: true }; repoPaint(); const e = document.getElementById('rfName'); if (e) { e.scrollIntoView({ block: 'center' }); e.focus(); } }
+async function repoSaveItem() {
+  const f = repo.form;
+  try {
+    await call('shop_item_save', { id: f.id || undefined, name: f.name, price: f.price, stock: f.stock, category: f.category, sku: f.sku, description: f.description, available: f.available });
+    toast(f.id ? `✓ ${f.name.trim()} saved` : `✓ ${f.name.trim()} added`); repo.form = null; await repoReload();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function repoToggleItem(id, box) {
+  const want = box.checked, i = repo.d.items.find(x => x.id === id);
+  try { await call('shop_item_set_available', { id, available: want }); if (i) i.available = want; toast(want ? `✓ ${i ? i.name : 'Item'} is on sale` : `✓ ${i ? i.name : 'Item'} is off sale`); repoDrawItems(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+async function repoRemoveItem(id) {
+  const i = repo.d.items.find(x => x.id === id);
+  try { await call('shop_item_delete', { id }); repo.removeArm = null; toast(`✓ ${i ? i.name : 'Item'} removed`); await repoReload(); } catch (e) { toast(e.message, 'error'); }
+}
+function repoItemsHtml() {
+  return repoImportHtml() + `<div class="card"><div class="gw-group-head"><h3 style="margin:0">Items</h3><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine);min-height:44px" onclick="repoNewItem()">+ Add an item</button></div>
+    <p class="gw-lede">Switch an item off to hide it from the shop. Give it a stock number and it shows “Sold out” at zero, and the number goes down as people order; leave the stock empty if you do not count it.</p>
+    ${repoFormHtml()}
+    ${repo.d.items.length > 8 ? `<label for="repoSearch" style="margin-top:8px">Find an item</label><input id="repoSearch" value="${esc(repo.filter)}" placeholder="name, category or code" autocomplete="off" oninput="repo.filter=this.value; repoDrawItems()">` : ''}
+    <div id="repoItemRows">${repoItemRows()}</div></div>`;
+}
+
+// ---- Mass times and the cut-off
+function repoSettingsHtml() {
+  const dr = repo.draft, d = repo.d;
+  const slotRow = (s, i) => `<div class="rp-slotrow"><div><label for="rsL${i}">Name</label><input id="rsL${i}" maxlength="60" value="${esc(s.label)}" placeholder="e.g. Vigil Mass" autocomplete="off" oninput="repo.draft.slots[${i}].label=this.value"></div>
+    <div><label for="rsD${i}">Day</label><select id="rsD${i}" onchange="repo.draft.slots[${i}].weekday=Number(this.value)"><option value="6" ${s.weekday === 6 ? 'selected' : ''}>Saturday</option><option value="0" ${s.weekday === 0 ? 'selected' : ''}>Sunday</option></select></div>
+    <div><label for="rsT${i}">Time</label><input id="rsT${i}" type="time" value="${esc(s.time)}" oninput="repo.draft.slots[${i}].time=this.value"></div>
+    <div><button class="small" style="min-height:44px" onclick="repoRemoveSlot(${i})" aria-label="Remove this Mass">Remove</button></div></div>`;
+  return `<div class="card"><h3 style="margin-top:0">Mass times people can collect at</h3>
+    <p class="gw-lede">Add the Saturday evening Mass and each Sunday Mass. People choose one of these when they order. Collection is at the church door on the way out.</p>
+    ${dr.slots.length ? dr.slots.map(slotRow).join('') : '<p class="muted">No Mass times yet. Add the first one.</p>'}
+    <div class="gw-btns"><button class="small" onclick="repoAddSlot()">+ Add a Mass</button></div>
+    <h4 style="margin:18px 0 0;font-size:16px">When orders close each week</h4>
+    <div class="gw-two"><div><label for="rsCD">Day</label><select id="rsCD" onchange="repo.draft.cutoff_weekday=Number(this.value)">${REPO_DAYS.map((n, i) => `<option value="${i}" ${dr.cutoff_weekday === i ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div><label for="rsCT">At</label><input id="rsCT" type="time" value="${esc(dr.cutoff_time)}" oninput="repo.draft.cutoff_time=this.value"></div></div>
+    <div class="muted" style="margin-top:4px">An order placed before this is for the coming weekend. After it, the order is for the following weekend. Use 23:59 for “midnight”.</div>
+    <label for="rsIntro" style="margin-top:12px">A line of welcome at the top of the shop (optional)</label><input id="rsIntro" maxlength="400" value="${esc(dr.intro_text)}" placeholder="e.g. Collect your order after Mass, at the door." autocomplete="off" oninput="repo.draft.intro_text=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoSaveSettings()">Save Mass times and cut-off</button></div></div>
+    <div class="card"><h4 style="margin:0 0 4px">What people can choose right now</h4>${d.options_now.length ? `<ul class="rp-skip" style="margin-top:6px">${d.options_now.map(o => `<li>${esc(o.label)}</li>`).join('')}</ul>` : '<p class="muted" style="margin:0">Nothing yet. Add a Mass time and save.</p>'}</div>`;
+}
+function repoAddSlot() { if (repo.draft.slots.length >= 8) { toast('Up to eight Mass times.', 'error'); return; } repo.draft.slots.push({ id: '', label: '', weekday: repo.draft.slots.length ? 0 : 6, time: repo.draft.slots.length ? '09:30' : '18:00' }); repoPaint(); toast('Added — give it a name and a time, then press Save'); }
+function repoRemoveSlot(i) { repo.draft.slots.splice(i, 1); repoPaint(); toast('Removed — press Save to keep this change'); }
+async function repoSaveSettings() {
+  try { await call('shop_set_settings', { slots: repo.draft.slots, cutoff_weekday: repo.draft.cutoff_weekday, cutoff_time: repo.draft.cutoff_time, intro_text: repo.draft.intro_text }); toast('✓ Saved'); await repoReload(['slots', 'cutoff_weekday', 'cutoff_time', 'intro_text']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+</script>
+<script>
+// ================= LISTINGS (the parish classifieds) — Admin tab =================
+// Waiting for approval (read each one, approve or refuse), Live (what people are looking at; pick, take down), Ended, and the settings (open/closed,
+// welcome line, the three numbers the suggested fee comes from). Every button says what it did, in words, where the person is looking.
+let lst = null;
+const lstMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
+async function renderListingsTab() {
+  const seq = adminSeq;
+  let d;
+  try { d = await call('listings_get'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
+  gwStyle(); repoStyle();
+  lst = { d, view: d.counts.waiting ? 'waiting' : 'live', rejectId: null, takeId: null, draft: lstDraftFrom(d) };
+  if (adminSeq === seq) lstPaint();
+}
+function lstDraftFrom(d) { return { intro_text: d.settings.intro_text || '', price_base: String(d.settings.price_base), price_per_extra_week: String(d.settings.price_per_extra_week), price_per_image: String(d.settings.price_per_image) }; }
+async function lstReload(parts) {
+  lst.d = await call('listings_get');
+  const fresh = lstDraftFrom(lst.d);
+  for (const p of parts || []) lst.draft[p] = fresh[p];
+  lstPaint();
+}
+function lstPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'listings' || !lst) return;
+  const y = window.scrollY;
+  el.innerHTML = lstHeadHtml() + (lst.view === 'waiting' ? lstWaitingHtml() : lst.view === 'live' ? lstLiveHtml() : lst.view === 'ended' ? lstEndedHtml() : lstSettingsHtml());
+  window.scrollTo(0, y);
+}
+function lstHeadHtml() {
+  const { d } = lst, o = d.org, s = d.settings, c = d.counts, url = o.page_path ? location.origin + o.page_path : '';
+  const pill = (v, label) => `<button type="button" aria-pressed="${lst.view === v}" onclick="lst.view='${v}'; lstPaint()">${label}</button>`;
+  return `<div class="card"><h3 style="margin-top:0">Listings ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
+    <p class="gw-lede">A noticeboard for parishioners: things for sale, things given away, and services. People contact the lister by email only (the address is never shown on the page). You approve every listing before it appears. The church takes no part in any deal and the page says so.</p>
+    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="lstCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="lstSeePage()">See the page</button></div>` : '<div class="hint">The parish page has no address yet, so Listings cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
+    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for listings</b><div class="muted">Switch off to hide the page and stop new listings. A shortcut appears on the parish page while it is open.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for listings" onchange="lstSetEnabled(this)"><span></span></label></div>
+    ${c.waiting ? `<div class="hint" style="margin-top:10px"><b>${c.waiting} listing${c.waiting === 1 ? ' is' : 's are'} waiting for you to approve.</b></div>` : ''}
+    <div class="rp-pills" role="group" aria-label="Listings sections">${pill('waiting', 'Waiting' + (c.waiting ? ' (' + c.waiting + ')' : ''))}${pill('live', 'Live (' + c.live + ')' + (c.reported ? ' ⚑' + c.reported : ''))}${pill('ended', 'Ended')}${pill('settings', 'Settings')}</div></div>`;
+}
+function lstCopyLink() { const url = location.origin + lst.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
+function lstSeePage() { if (!lst.d.settings.enabled) toast('Listings is closed, so visitors would see “not open”.', 'error'); window.open(lst.d.org.page_path, '_blank', 'noopener'); }
+async function lstSetEnabled(box) {
+  const want = box.checked;
+  try { await call('listings_set_settings', { enabled: want }); toast(want ? '✓ Listings is now open' : '✓ Listings is now closed'); await lstReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+function lstCopyEmail(id) {
+  const l = [...lst.d.waiting, ...lst.d.live, ...lst.d.ended].find(x => x.id === id); if (!l || !l.email) { toast('That address has been cleared.', 'error'); return; }
+  try { navigator.clipboard.writeText(l.email).then(() => toast('✓ Email address copied'), () => toast('Email: ' + l.email)); } catch { toast('Email: ' + l.email); }
+}
+const lstKind = { sell: 'For sale', free: 'Free', service: 'Service' };
+function lstPics(l) { return l.thumbs.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">${l.thumbs.map((t, i) => `<a href="${esc(l.images[i] || t)}" target="_blank" rel="noopener" aria-label="Open picture ${i + 1} full size"><img src="${esc(t)}" alt="" width="72" height="72" loading="lazy" style="width:72px;height:72px;object-fit:cover;border-radius:10px;background:var(--paper)"></a>`).join('')}</div>` : ''; }
+function lstWaitingHtml() {
+  const w = lst.d.waiting;
+  if (!w.length) return '<div class="card"><p class="muted" style="margin:0">Nothing is waiting. New listings appear here as soon as they are sent (and, if there is a fee, paid).</p></div>';
+  return `<div class="card"><h3 style="margin-top:0">Waiting for approval</h3><p class="gw-lede">Read each one. Approving starts the lister's days. Look for anything unsuitable for a parish: things that are not an exchange of goods or services, anything unkind, or anything that looks like a scam.</p>${w.map(l => `
+    <div class="rp-order" style="margin-bottom:12px"><div class="rp-top"><b class="rp-name">${esc(l.title)}</b></div>
+      <div class="muted">${esc(lstKind[l.kind])} · ${esc(l.category)}${l.price ? ' · ' + esc(l.price) : ''} · ${l.days} days · sent ${esc(l.created)}${l.name ? ' · by ' + esc(l.name) : ''}</div>
+      <div class="rp-lines" style="white-space:pre-wrap">${esc(l.description)}</div>${lstPics(l)}
+      <div class="muted">${l.fee > 0 ? `Fee ${lstMoney(l.fee)} ${l.paid ? 'paid' : '(not shown as paid)'}` : 'No fee (£0)'} · ${esc(l.email)}</div>
+      <div class="rp-act"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="lstApprove('${l.id}')">✓ Approve</button><button class="small" onclick="lst.rejectId='${l.id}'; lstPaint()">Not suitable…</button><button class="small" onclick="lstCopyEmail('${l.id}')">Copy their email</button></div>
+      ${lst.rejectId === l.id ? `<div class="rp-cancel"><b>Not accepting “${esc(l.title)}”</b><div><label for="lstWhy">Why? (the lister will see this)</label><input id="lstWhy" maxlength="300" placeholder="e.g. We can't list this on the parish noticeboard" autocomplete="off"></div>
+        ${l.fee > 0 && l.paid ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lstRefund" style="width:auto;margin:0" checked> Note that I have refunded ${lstMoney(l.fee)} in SumUp</label><div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it, so the books agree.</div>` : ''}
+        <div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="lstReject('${l.id}', ${l.fee > 0 && l.paid ? l.fee : 0})">Yes, don't accept it</button><button class="small" onclick="lst.rejectId=null; lstPaint()">Keep it waiting</button></div></div>` : ''}</div>`).join('')}</div>`;
+}
+async function lstApprove(id) {
+  const l = lst.d.waiting.find(x => x.id === id);
+  try { await call('listings_review', { id, decision: 'approve' }); toast(`✓ Approved. It is live for ${l ? l.days : ''} days`); lst.view = 'waiting'; await lstReload(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function lstReject(id, fee) {
+  const why = (document.getElementById('lstWhy') || {}).value || '';
+  if (why.trim().length < 3) { toast('Please say why, so the lister understands.', 'error'); return; }
+  const body = { id, decision: 'reject', note: why }, box = document.getElementById('lstRefund');
+  if (fee > 0 && box && box.checked) body.refund_amount = fee;
+  try { const r = await call('listings_review', body); toast(r.refunded ? `✓ Not accepted, and the ${lstMoney(r.refunded)} refund is recorded` : '✓ Not accepted. The lister can see why'); lst.rejectId = null; await lstReload(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function lstLiveHtml() {
+  const L = lst.d.live;
+  if (!L.length) return '<div class="card"><p class="muted" style="margin:0">Nothing is live yet.</p></div>';
+  return `<div class="card"><h3 style="margin-top:0">Live now</h3><p class="gw-lede">In the order visitors see them (newest and most looked-at first; a fee never buys a place). “★ Pick” puts one near the top.</p>${L.map(l => `
+    <div class="rp-order ${l.reports ? '' : ''}" style="margin-bottom:12px"><div class="rp-top"><b class="rp-name">${esc(l.title)}</b>${l.featured ? '<span class="gw-status live">★ Pick</span>' : ''}${l.reports ? `<span class="gw-status" style="background:var(--bad-dim);color:var(--bad)">⚑ ${l.reports} report${l.reports === 1 ? '' : 's'}</span>` : ''}</div>
+      <div class="muted">${esc(lstKind[l.kind])} · ${esc(l.category)}${l.price ? ' · ' + esc(l.price) : ''} · ends ${esc(l.ends)} (${l.days_left} day${l.days_left === 1 ? '' : 's'} left) · ${l.views} looked · ${l.contacts} asked for the email</div>
+      ${l.reasons && l.reasons.length ? `<div class="hint" style="margin:4px 0"><b>Reported:</b> ${l.reasons.map(r => '“' + esc(r) + '”').join(' · ')}<div class="rp-act" style="margin-top:6px"><button class="small" onclick="lstDismiss('${l.id}')">Dismiss the reports</button></div></div>` : ''}
+      <div class="rp-act"><button class="small" aria-pressed="${l.featured}" onclick="lstPick('${l.id}', ${!l.featured})">${l.featured ? '★ Picked' : '☆ Pick'}</button><button class="small" onclick="lst.takeId='${l.id}'; lstPaint()">Take down…</button><button class="small" onclick="lstCopyEmail('${l.id}')">Copy their email</button></div>
+      ${lst.takeId === l.id ? `<div class="rp-cancel"><b>Take down “${esc(l.title)}”?</b><div><label for="lstTake">Why? (the lister will see this)</label><input id="lstTake" maxlength="300" placeholder="e.g. This is not suitable for the parish noticeboard" autocomplete="off"></div><div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="lstTakedown('${l.id}')">Yes, take it down</button><button class="small" onclick="lst.takeId=null; lstPaint()">Keep it</button></div></div>` : ''}</div>`).join('')}</div>`;
+}
+async function lstPick(id, on) { try { await call('listings_set_featured', { id, featured: on }); toast(on ? '✓ Picked: it shows near the top' : '✓ No longer a pick'); await lstReload(); } catch (e) { toast(e.message, 'error'); } }
+async function lstDismiss(id) { try { await call('listings_dismiss_reports', { id }); toast('✓ Reports dismissed'); await lstReload(); } catch (e) { toast(e.message, 'error'); } }
+async function lstTakedown(id) {
+  const why = (document.getElementById('lstTake') || {}).value || '';
+  if (why.trim().length < 3) { toast('Please say why, so the lister understands.', 'error'); return; }
+  try { await call('listings_takedown', { id, note: why }); toast('✓ Taken down'); lst.takeId = null; await lstReload(); } catch (e) { toast(e.message, 'error'); }
+}
+function lstEndedHtml() {
+  const E = lst.d.ended, names = { rejected: 'Not accepted', withdrawn: 'Withdrawn by the lister', removed: 'Taken down', expired: 'Ended', cancelled: 'Not paid', live: 'Ended' };
+  if (!E.length) return '<div class="card"><p class="muted" style="margin:0">Nothing has ended yet.</p></div>';
+  return `<div class="card"><h3 style="margin-top:0">Recently ended</h3><p class="gw-lede">The lister's email, text and pictures are cleared from the system two weeks after a listing ends.</p>${E.map(l => `<div class="rp-order" style="margin-bottom:8px"><div class="rp-top"><b class="rp-name">${esc(l.title)}</b><span class="gw-status">${esc(names[l.status] || l.status)}</span></div><div class="muted">${esc(lstKind[l.kind])} · ${esc(l.category)} · ${l.views} looked · ${l.contacts} asked${l.fee > 0 ? ' · fee ' + lstMoney(l.fee) + (l.refunded ? ' (refunded ' + lstMoney(l.refunded) + ')' : '') : ''}${l.review_note ? ' · ' + esc(l.review_note) : ''}</div></div>`).join('')}</div>`;
+}
+function lstSettingsHtml() {
+  const dr = lst.draft, q = lst.d.quotes, at = (d, n) => q.find(x => x.days === d && x.images === n) || { suggested: 0, supporter: 0 };
+  const field = (id, label, key, help) => `<div><label for="${id}">${label}</label><input id="${id}" inputmode="decimal" value="${esc(dr[key])}" autocomplete="off" oninput="lst.draft.${key}=this.value">${help ? `<div class="muted" style="font-size:13.5px">${help}</div>` : ''}</div>`;
+  return `<div class="card"><h3 style="margin-top:0">The suggested fee</h3>
+    <p class="gw-lede">When someone lists, they are shown two suggested amounts worked out from these three numbers, and they may always choose another amount, including £0. A fee is paid by card on the page and is not tied to where a listing appears.</p>
+    <div class="gw-two">${field('lstBase', 'Starting price (£)', 'price_base', 'for one week, with no pictures')}${field('lstWeek', 'For each extra week (£)', 'price_per_extra_week', '')}</div>
+    <div class="gw-two">${field('lstImg', 'For each picture (£)', 'price_per_image', '')}<div></div></div>
+    <label for="lstIntro" style="margin-top:10px">A line of welcome at the top (optional)</label><input id="lstIntro" maxlength="300" value="${esc(dr.intro_text)}" placeholder="e.g. A noticeboard for our parish family." autocomplete="off" oninput="lst.draft.intro_text=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="lstSaveSettings()">Save</button></div></div>
+    <div class="card"><h4 style="margin:0 0 6px">What a lister is shown (saved numbers)</h4><div style="overflow-x:auto"><table><tr><th>Length</th><th>No pictures</th><th>2 pictures</th><th>4 pictures</th></tr>${[[7, '1 week'], [14, '2 weeks'], [21, '3 weeks'], [30, '1 month']].map(([d, label]) => `<tr><td>${label}</td>${[0, 2, 4].map(n => `<td>${lstMoney(at(d, n).suggested)} or ${lstMoney(at(d, n).supporter)}</td>`).join('')}</tr>`).join('')}</table></div></div>
+    <div class="card"><h4 style="margin:0 0 6px">The notice every visitor sees</h4><p class="muted" style="margin:0">${esc(lst.d.disclaimer)}</p></div>`;
+}
+async function lstSaveSettings() {
+  try { await call('listings_set_settings', { intro_text: lst.draft.intro_text, price_base: lst.draft.price_base, price_per_extra_week: lst.draft.price_per_extra_week, price_per_image: lst.draft.price_per_image }); toast('✓ Saved'); await lstReload(['intro_text', 'price_base', 'price_per_extra_week', 'price_per_image']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+</script>
+<script>
+// ================= CANDLES (Light a Candle) + the Thursday email — Admin tab =================
+// Requests by day and candle stand (tick each candle once it is lit; cancel with a reason and a refund note), the settings (open/closed, the candle
+// stands, welcome line, closing time) and the Thursday email to the parish address. Every button says what it did, in words, where the person is looking.
+let cnd = null;
+const cndMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
+async function renderCandlesTab() {
+  const seq = adminSeq;
+  let d;
+  try { d = await call('candles_get'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
+  gwStyle(); repoStyle();
+  cnd = { d, view: 'requests', monday: d.next_monday, week: null, cancelId: null, preview: null, busy: false, draft: cndDraftFrom(d) };
+  try { cnd.week = await call('candles_week', { monday: cnd.monday }); } catch (e) { toast(e.message, 'error'); }
+  if (adminSeq === seq) cndPaint();
+}
+function cndDraftFrom(d) { return { intro_text: d.settings.intro_text || '', cutoff_weekday: d.settings.cutoff_weekday, cutoff_time: d.settings.cutoff_time, altars: d.settings.altars.map(a => ({ id: a.id, name: a.name, active: a.active !== false })), to_email: d.digest.to_email || '' }; }
+async function cndReload(parts) {
+  cnd.d = await call('candles_get');
+  const fresh = cndDraftFrom(cnd.d);
+  for (const p of parts || []) cnd.draft[p] = fresh[p];
+  cnd.week = await call('candles_week', { monday: cnd.monday });
+  cndPaint();
+}
+function cndPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'candles' || !cnd) return;
+  const y = window.scrollY;
+  el.innerHTML = cndHeadHtml() + (cnd.view === 'requests' ? cndRequestsHtml() : cnd.view === 'settings' ? cndSettingsHtml() : cndEmailHtml());
+  window.scrollTo(0, y);
+}
+function cndHeadHtml() {
+  const { d } = cnd, o = d.org, s = d.settings, url = o.page_path ? location.origin + o.page_path : '';
+  const pill = (v, label) => `<button type="button" aria-pressed="${cnd.view === v}" onclick="cnd.view='${v}'; cnd.cancelId=null; cndPaint()">${label}</button>`;
+  return `<div class="card"><h3 style="margin-top:0">Light a Candle ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
+    <p class="gw-lede">Parishioners choose a candle stand, a day (the coming week, Monday to Sunday) and a number of candles, and give an offering by card. A volunteer lights them; you tick each one as it is lit. Any “who is it for” note is seen here only and is never put in an email.</p>
+    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="cndCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="cndSeePage()">See the page</button></div>` : '<div class="hint">The parish page has no address yet, so Light a Candle cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
+    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for candle requests</b><div class="muted">Switch off to hide the page and stop new requests. A candle shortcut appears on the parish page while it is open.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for candle requests" onchange="cndSetEnabled(this)"><span></span></label></div>
+    <div class="rp-pills" role="group" aria-label="Candles sections">${pill('requests', 'Requests')}${pill('settings', 'Settings')}${pill('email', 'Thursday email')}</div></div>`;
+}
+function cndCopyLink() { const url = location.origin + cnd.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
+function cndSeePage() { if (!cnd.d.settings.enabled) toast('Light a Candle is closed, so visitors would see “not open”.', 'error'); window.open(cnd.d.org.page_path, '_blank', 'noopener'); }
+async function cndSetEnabled(box) {
+  const want = box.checked;
+  try { await call('candles_set_settings', { enabled: want }); toast(want ? '✓ Light a Candle is now open' : '✓ Light a Candle is now closed'); await cndReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+// ---- requests
+function cndWeekChips() {
+  const d = cnd.d, add = (iso, n) => { const t = new Date(iso + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  const list = [[add(d.this_monday, -7), 'Last week'], [d.this_monday, 'This week'], [d.next_monday === d.this_monday ? add(d.this_monday, 7) : d.next_monday, 'Next week'], [add(d.next_monday, 7), 'The week after']];
+  return `<div class="rp-pills" role="group" aria-label="Week">${list.map(([m, label]) => `<button type="button" aria-pressed="${cnd.monday === m}" onclick="cndGoWeek('${m}')">${label}</button>`).join('')}</div>`;
+}
+async function cndGoWeek(m) {
+  cnd.monday = m; cnd.cancelId = null;
+  try { cnd.week = await call('candles_week', { monday: m }); cndPaint(); toast('✓ Showing ' + cnd.week.label.replace(/^Week of/, 'the week of')); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function cndRequestsHtml() {
+  const w = cnd.week;
+  if (!w) return '<div class="card"><p class="muted" style="margin:0">Could not load the week. Press a week button to try again.</p></div>' ;
+  const live = w.requests.filter(r => r.status === 'paid' || r.status === 'lit'), other = w.requests.filter(r => r.status === 'cancelled' || r.status === 'awaiting_payment');
+  const days = new Map();
+  for (const r of live) { if (!days.has(r.date)) days.set(r.date, new Map()); const a = days.get(r.date); if (!a.has(r.altar)) a.set(r.altar, []); a.get(r.altar).push(r); }
+  const t = w.totals;
+  const row = (r) => `<div class="rp-order" style="margin:0 0 8px"><div class="rp-top"><b class="rp-name">${r.candles} × ${esc(r.name || '(details cleared)')}</b><span class="gw-status ${r.status === 'lit' ? 'live' : ''}">${r.status === 'lit' ? '✓ Lit' : 'To light'}</span></div>
+      <div class="muted">${esc(r.ref)} · offering ${cndMoney(r.total)}${r.contact ? ' · ' + esc(r.contact) : ''}${r.refunded ? ' · refunded ' + cndMoney(r.refunded) : ''}</div>
+      ${r.intention ? `<div class="rp-lines">For: ${esc(r.intention)} <span class="muted">(private to the office)</span></div>` : ''}
+      <div class="rp-act"><button class="small ${r.status === 'lit' ? '' : 'primary-ish'}" ${r.status === 'lit' ? '' : 'style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)"'} aria-pressed="${r.status === 'lit'}" onclick="cndMark('${r.id}', ${r.status !== 'lit'})">${r.status === 'lit' ? 'Undo: not lit yet' : '✓ Lit'}</button><button class="small" onclick="cnd.cancelId='${r.id}'; cndPaint()">Cancel…</button></div>
+      ${cnd.cancelId === r.id ? cndCancelHtml(r) : ''}</div>`;
+  const body = days.size ? [...days.keys()].sort().map(day => `<div class="card"><h3 style="margin-top:0">${esc(w.requests.find(r => r.date === day).date_label)}</h3>${[...days.get(day).entries()].map(([altar, list]) => `<h4 style="margin:10px 0 6px;font-size:16px">${esc(altar)} <span class="muted">· ${list.reduce((s, x) => s + x.candles, 0)} candle${list.reduce((s, x) => s + x.candles, 0) === 1 ? '' : 's'}</span></h4>${list.map(row).join('')}`).join('')}</div>`).join('')
+    : '<div class="card"><p class="muted" style="margin:0">No paid candle requests for this week yet.</p></div>';
+  const rest = other.length ? `<div class="card"><h4 style="margin:0 0 6px">Not on the list</h4><p class="gw-lede">Cancelled, or still waiting for the card payment (these are never taken off the list or charged until they are paid).</p>${other.map(r => `<div class="rp-order" style="margin:0 0 6px"><div class="rp-top"><b class="rp-name">${esc(r.ref)} · ${r.candles} × ${esc(r.name || '')}</b><span class="gw-status">${r.status === 'cancelled' ? 'Cancelled' : 'Waiting for payment'}</span></div><div class="muted">${esc(r.date_label)} · ${esc(r.altar)}${r.cancel_reason ? ' · ' + esc(r.cancel_reason) : ''}</div></div>`).join('')}</div>` : '';
+  return cndWeekChips() + `<div class="card"><h3 style="margin-top:0">${esc(w.label)}</h3>
+    <div class="muted">${t.requests} request${t.requests === 1 ? '' : 's'} · ${t.candles} candle${t.candles === 1 ? '' : 's'} · ${t.to_light} still to light · offerings ${cndMoney(t.offered)}</div>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="cndPrint()">🖨 Print the list for the volunteer</button><button class="small" onclick="cndRefresh()">Refresh</button></div></div>` + body + rest;
+}
+async function cndRefresh() { try { cnd.week = await call('candles_week', { monday: cnd.monday }); cndPaint(); toast('✓ List refreshed'); } catch (e) { toast(e.message, 'error'); } }
+async function cndMark(id, lit) {
+  try { await call('candles_mark', { id, lit }); toast(lit ? '✓ Marked as lit' : '✓ Back to “to light”'); cnd.week = await call('candles_week', { monday: cnd.monday }); cndPaint(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function cndCancelHtml(r) {
+  return `<div class="rp-cancel"><b>Cancel ${esc(r.ref)}?</b><div><label for="cndWhy">Why? (kept in the record)</label><input id="cndWhy" maxlength="150" placeholder="e.g. The person asked us to cancel" autocomplete="off"></div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="cndRefund" style="width:auto;margin:0"> Note that I have refunded ${cndMoney(r.total)} in SumUp</label>
+    <div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it, so the books agree.</div>
+    <div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="cndCancel('${r.id}', ${r.total})">Yes, cancel it</button><button class="small" onclick="cnd.cancelId=null; cndPaint()">Keep it</button></div></div>`;
+}
+async function cndCancel(id, total) {
+  const why = (document.getElementById('cndWhy') || {}).value || '';
+  if (why.trim().length < 3) { toast('Please say why.', 'error'); return; }
+  const body = { id, reason: why }, box = document.getElementById('cndRefund');
+  if (box && box.checked) body.refund_amount = total;
+  try { const r = await call('candles_cancel', body); toast(r.refunded ? `✓ Cancelled, and the ${cndMoney(r.refunded)} refund is recorded` : '✓ Cancelled'); cnd.cancelId = null; await cndReload(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function cndPrint() {
+  const w = cnd.week, live = w ? w.requests.filter(r => r.status === 'paid' || r.status === 'lit') : [];
+  if (!live.length) { toast('There are no paid candle requests to print for this week.', 'error'); return; }
+  let el = document.getElementById('repoPrintPanel');
+  if (!el) { el = document.createElement('div'); el.id = 'repoPrintPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:44;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const days = new Map();
+  for (const r of live) { if (!days.has(r.date)) days.set(r.date, new Map()); const a = days.get(r.date); if (!a.has(r.altar)) a.set(r.altar, []); a.get(r.altar).push(r); }
+  el.innerHTML = `<div style="max-width:900px;margin:0 auto">
+    <div class="noprint" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap"><h3 style="margin:0">Print the list</h3>
+      <div class="tiny-actions"><label style="display:inline-flex;gap:6px;align-items:center;font-weight:500;margin-right:8px"><input type="checkbox" id="cndPrintWhy" style="width:auto;margin:0" onchange="cndPrintRedraw()"> Include “who it is for”</label><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="window.print(); toast('✓ Print window opened — choose a printer, or “Save as PDF”')">🖨 Print</button> <button class="small" onclick="repoClosePrint()">Close</button></div></div>
+    <h2 style="margin:0 0 2px">Candles to light — ${esc(w.label)}</h2>
+    <div class="muted" style="margin-bottom:10px">${w.totals.candles} candle${w.totals.candles === 1 ? '' : 's'} · printed ${esc(new Date().toLocaleDateString('en-GB'))}</div>
+    <div id="cndPrintBody"></div></div>`;
+  window.__cndPrintDays = days; cndPrintRedraw();
+}
+function cndPrintRedraw() {
+  const days = window.__cndPrintDays, why = !!(document.getElementById('cndPrintWhy') || {}).checked, host = document.getElementById('cndPrintBody'); if (!days || !host) return;
+  host.innerHTML = [...days.keys()].sort().map(day => `<div class="slotblock"><h3 style="margin:10px 0 0">${esc([...days.get(day).values()][0][0].date_label)}</h3>${[...days.get(day).entries()].map(([altar, list]) => `<b>${esc(altar)}</b><table><tr><th>Ref</th><th>Name</th><th>Candles</th>${why ? '<th>For</th>' : ''}<th>Lit</th></tr>${list.map(r => `<tr><td><b>${esc(r.ref)}</b></td><td>${esc(r.name || '')}</td><td>${r.candles}</td>${why ? `<td>${esc(r.intention)}</td>` : ''}<td><span class="tick"></span></td></tr>`).join('')}</table>`).join('')}</div>`).join('');
+}
+// ---- settings
+function cndSettingsHtml() {
+  const dr = cnd.draft;
+  const altarRow = (a, i) => `<div class="rp-slotrow"><div><label for="caN${i}">Name of the candle stand</label><input id="caN${i}" maxlength="50" value="${esc(a.name)}" autocomplete="off" oninput="cnd.draft.altars[${i}].name=this.value"></div>
+    <div><label for="caA${i}">Offer it?</label><select id="caA${i}" onchange="cnd.draft.altars[${i}].active=this.value==='1'"><option value="1" ${a.active ? 'selected' : ''}>Yes</option><option value="0" ${a.active ? '' : 'selected'}>No (hidden)</option></select></div>
+    <div></div><div><button class="small" style="min-height:44px" onclick="cndRemoveAltar(${i})" aria-label="Remove this candle stand">Remove</button></div></div>`;
+  return `<div class="card"><h3 style="margin-top:0">Candle stands</h3>
+    <p class="gw-lede">The places in the church where a candle can be lit. People choose one when they ask. Up to four.</p>
+    ${dr.altars.map(altarRow).join('')}
+    <div class="gw-btns"><button class="small" onclick="cndAddAltar()">+ Add a candle stand</button></div>
+    <h4 style="margin:18px 0 0;font-size:16px">When requests close each week</h4>
+    <div class="gw-two"><div><label for="cnCD">Day</label><select id="cnCD" onchange="cnd.draft.cutoff_weekday=Number(this.value)">${REPO_DAYS.map((n, i) => `<option value="${i}" ${dr.cutoff_weekday === i ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div><label for="cnCT">At</label><input id="cnCT" type="time" value="${esc(dr.cutoff_time)}" oninput="cnd.draft.cutoff_time=this.value"></div></div>
+    <div class="muted" style="margin-top:4px">Before this, people can ask for any day of the coming week. After it, only the following week. Use 23:59 for “midnight”.</div>
+    <label for="cnIntro" style="margin-top:12px">A line of welcome at the top (optional)</label><input id="cnIntro" maxlength="300" value="${esc(dr.intro_text)}" placeholder="e.g. A volunteer will light a candle for you, for your intentions." autocomplete="off" oninput="cnd.draft.intro_text=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="cndSaveSettings()">Save</button></div></div>
+    <div class="card"><h4 style="margin:0 0 6px">The offering</h4><p class="muted" style="margin:0">People choose £1.50, £2, £3, £5 or another amount for each candle, between £1.50 and £5.00, up to 10 candles in a request.</p></div>`;
+}
+function cndAddAltar() { if (cnd.draft.altars.length >= 4) { toast('Up to four candle stands.', 'error'); return; } cnd.draft.altars.push({ id: '', name: '', active: true }); cndPaint(); toast('Added — give it a name, then press Save'); }
+function cndRemoveAltar(i) { if (cnd.draft.altars.length <= 1) { toast('Keep at least one candle stand.', 'error'); return; } cnd.draft.altars.splice(i, 1); cndPaint(); toast('Removed — press Save to keep this change'); }
+async function cndSaveSettings() {
+  const dr = cnd.draft;
+  if (dr.altars.some(a => !String(a.name).trim())) { toast('Give every candle stand a name.', 'error'); return; }
+  try { await call('candles_set_settings', { altars: dr.altars.map(a => ({ id: a.id, name: a.name.trim(), active: a.active })), cutoff_weekday: dr.cutoff_weekday, cutoff_time: dr.cutoff_time, intro_text: dr.intro_text }); toast('✓ Saved'); await cndReload(['altars', 'cutoff_weekday', 'cutoff_time', 'intro_text']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+// ---- the Thursday email
+function cndEmailHtml() {
+  const g = cnd.d.digest, dr = cnd.draft, when = (iso) => iso ? new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: cnd.d.org.timezone }) : '';
+  const last = g.last_status ? `<div class="${g.last_status === 'sent' ? 'hint' : 'error'}" style="margin-top:10px"><b>${g.last_status === 'sent' ? 'Last email sent' : 'The last attempt did not work'}${g.last_attempt_at ? ' · ' + esc(when(g.last_attempt_at)) : ''}</b><div>${esc(g.last_note || '')}</div></div>` : '<div class="muted" style="margin-top:10px">Nothing has been sent yet.</div>';
+  const setup = g.mail_ready ? '' : `<div class="hint" style="margin-top:10px"><b>Email sending is not set up yet.</b> It needs a parish Gmail account, set up once:
+    <ol style="margin:6px 0 0 18px;padding:0"><li>Sign in to that Gmail account and turn on 2-Step Verification (Google Account → Security).</li><li>Search “App passwords” in that Google Account, create one named “Parish Campaigns”, and copy the 16 letters.</li><li>In Netlify → your site → Site configuration → Environment variables, add <code>MAIL_USER</code> (the Gmail address) and <code>MAIL_APP_PASSWORD</code> (the 16 letters). Optional: <code>MAIL_FROM_NAME</code>.</li><li>Redeploy the site once. Then press “Send it now” below to test.</li></ol></div>`;
+  return `<div class="card"><h3 style="margin-top:0">The Thursday email ${g.enabled ? '<span class="gw-status live">On</span>' : '<span class="gw-status">Off</span>'}</h3>
+    <p class="gw-lede">Every Thursday morning (after 8am) an email goes to the parish address with next week's candle requests and the weekend's Repository orders: names, references, candles and items only. No phone numbers, no email addresses and no intentions. You can always see the full lists here; the email is a reminder.</p>
+    <div class="gw-switchrow"><div><b>Send it every Thursday</b><div class="muted">${g.mail_ready ? 'Email sending is set up.' : 'Switch on once email sending is set up.'}</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${g.enabled ? 'checked' : ''} aria-label="Send the Thursday email" onchange="cndSetDigest(this)"><span></span></label></div>
+    <label for="cnTo" style="margin-top:12px">Send it to</label><input id="cnTo" type="email" inputmode="email" maxlength="254" value="${esc(dr.to_email)}" placeholder="${esc(g.sends_to || 'the parish email address')}" autocomplete="off" oninput="cnd.draft.to_email=this.value">
+    <div class="muted" style="font-size:13.5px">Leave empty to use the parish's contact address${g.sends_to && !g.to_email ? ' (' + esc(g.sends_to) + ')' : ''}.</div>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="cndSaveTo()">Save the address</button><button class="small" onclick="cndSendNow()" ${cnd.busy ? 'disabled' : ''}>${cnd.busy ? 'Sending…' : 'Send it now'}</button><button class="small" onclick="cndPreview()">See what it would say</button></div>
+    ${last}${setup}</div>${cnd.preview ? `<div class="card"><h4 style="margin:0 0 6px">What it would say today</h4><pre style="white-space:pre-wrap;margin:0;font-family:inherit">${esc(cnd.preview)}</pre></div>` : ''}`;
+}
+async function cndSetDigest(box) {
+  const want = box.checked;
+  try { await call('digest_set', { enabled: want }); toast(want ? '✓ The Thursday email is on' : '✓ The Thursday email is off'); await cndReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+async function cndSaveTo() {
+  try { await call('digest_set', { to_email: cnd.draft.to_email }); toast(cnd.draft.to_email.trim() ? '✓ Saved. It will go to ' + cnd.draft.to_email.trim() : '✓ Saved. It will go to the parish contact address'); await cndReload(['to_email']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function cndSendNow() {
+  cnd.busy = true; cndPaint();
+  try { const r = await call('digest_send_now'); toast(`✓ Sent to ${r.to}`); }
+  catch (e) { toast(e.message, 'error'); }
+  cnd.busy = false;
+  try { cnd.d = await call('candles_get'); } catch { /* keep what is shown */ }
+  cndPaint();
+}
+async function cndPreview() {
+  try { const r = await call('digest_preview'); cnd.preview = r.text; cndPaint(); toast('✓ This is what the email would say'); }
+  catch (e) { toast(e.message, 'error'); }
+}
 </script>
 </body>
 </html>

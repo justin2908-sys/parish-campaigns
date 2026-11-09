@@ -19,6 +19,10 @@ global.Date = FakeDate;
 const clock = { set(iso) { fixed = new RealDate(iso).getTime(); }, live() { fixed = null; }, now: () => FakeDate.now() };
 clock.set('2026-11-02T12:00:00Z');   // a Monday
 
+// ---- the network is off: any outside look-up (the liturgical calendar) fails unless a test sets global.fetch itself
+const realFetch = global.fetch;   // this machine only (the browser checks talk to their own little server and to the headless browser)
+global.fetch = async (url, o) => { if (/^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(String(url))) return realFetch(url, o); throw new Error('the network is off in tests'); };
+
 const db = createFakeDb(clock);
 
 // ---- the two outside packages are replaced, so nothing needs installing

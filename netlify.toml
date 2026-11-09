@@ -20,7 +20,7 @@
 [[headers]]
   for = "/*"
   [headers.values]
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://images.sumup.com; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
@@ -37,4 +37,27 @@
 [[redirects]]
   from = "/go/*"
   to = "/go.html"
+  status = 200
+
+# The Repository (parish shop) online, at /shop/<address>. The same page also shows an order's own page at /shop.html?order=<id>.
+[[redirects]]
+  from = "/shop/*"
+  to = "/shop.html"
+  status = 200
+
+# Listings (the parish classifieds), at /listings/<address>. A lister's own page is /listings.html?manage=<private link>.
+[[redirects]]
+  from = "/listings/*"
+  to = "/listings.html"
+  status = 200
+
+# The Thursday email to the parish office (candle requests for the coming week, Repository orders for the coming weekend). 07:00, 08:00 and 09:00 UTC on Thursdays:
+# the function itself waits for 8 o'clock in the parish's own time and sends once a week, so summer time and a failed first attempt both take care of themselves.
+[functions."thursday-digest"]
+  schedule = "0 7,8,9 * * 4"
+
+# Light a Candle, at /candles/<address>. A request's own page is /candles.html?request=<id>.
+[[redirects]]
+  from = "/candles/*"
+  to = "/candles.html"
   status = 200

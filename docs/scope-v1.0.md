@@ -1430,3 +1430,162 @@ suggested form accepts only a suggested amount, or an Other inside the limits). 
 A person is registered once they have paid; if they do not finish, the place goes back by itself (unchanged). Refunds are still recorded
 by hand as before. Once people have registered, the payment setting cannot be changed.
 Tests: 9 more server tests (38 in `registrations.test.js`) and browser checks in `ui-registrations.js`.
+
+## 60. Parish page: WhatsApp channel and "Today in the Church" — 2026-11-09 (on dev; preview only)
+
+Two additions to the public page `/go/<address>`, both switched by the parish itself (Admin → Parish page) and both additive.
+Migration `20261109000000_gateway_whatsapp_daily.sql` (two new columns on organizations: `gateway_whatsapp`, `gateway_daily`; applied to the
+live database, baseline re-verified).
+
+- **WhatsApp channel.** A WhatsApp icon (a round picture button, no words; the words are kept for screen readers and the tooltip) at the very top of the page, next to an envelope icon for the parish email (it replaced the old "Email us" chip). Owner rule (2026-11-09): permanent shortcuts are pictures, not words; only campaigns and daily content use text. The admin pastes the channel link; only a real
+  `https://whatsapp.com/channel/<code>` address is accepted (anything else is refused with a plain explanation) and tracking parts are removed.
+  Empty = no icon. The page draws it only for such an address.
+- **Today in the Church.** A card under it, new every day with nothing to maintain: today's date, the name of the celebration (feast, memorial,
+  solemnity, Sunday or the weekday) with its season and liturgical colour, and two picture buttons: an open book (opens the day's Mass readings on
+  **Universalis** (as read at Mass in England and Wales, Westminster diocese). "About today" opens **Vatican News'** Saint of the Day for the date.
+  The readings text is copyrighted, so it is linked, never copied.
+- **Where the day's name comes from:** the open General Roman Calendar data at calapi.inadiutorium.cz (plain http, a community service),
+  asked once per date and kept for 12 hours; a failure is remembered for 2 minutes. If it is down, the card still shows the two links, without
+  the name; the page never fails because of it.
+- **Known limit:** that data is the *General* Roman Calendar, not the England and Wales calendar, so a day that is special only in England and
+  Wales (for example a national patron) shows the general day's name. The Universalis page the button opens shows the England and Wales one.
+  A later improvement is an England and Wales overlay, checked against the bishops' calendar.
+- The card is shown only for the date it was made for (the parish's own time zone), so a page saved on a phone never shows yesterday's feast.
+- "Notification" here means the card on the page each day. A phone push notification ("remind me daily") was offered and not chosen.
+Tests: `test/gateway/daily.test.js` (18 tests; the calendar is replaced by a stand-in, the network is off in tests).
+
+## 61. The Repository (parish shop) online — 2026-11-09 (on dev; preview only)
+
+Father sells devotional items from the parish repository using the SumUp item library. This puts the repository online on the parish page:
+a parishioner chooses items, chooses which weekend Mass to collect at, and pays by card on our page; the office sees a list of orders; the
+volunteer makes each order up under its reference and name and hands it out at the church door.
+
+- **SumUp cannot send its item list to us** (checked 2026-11-09: SumUp's developer API has no items, catalogue or inventory section; its payment
+  notification is only about payments, which we already use). SumUp's help centre does describe a CSV export (Catalog → Items → Export). So the items
+  are brought across once from that file, then kept here; doing it again refreshes names and prices and keeps stock counts and on/off.
+  The importer finds the name, price, category, code, description and variation columns by their headings, shows what it found, and saves only when told.
+  (The real SumUp export has not been seen yet: the headings it recognises are the likely ones; anything else gets a plain message listing the columns found.)
+- **Public:** `/shop/<address>` (the page address is the parish page's own). Items by category with a stepper; "Sold out" at zero, "Only n left" at 5 or fewer;
+  collection choice; name and a mobile or email; one big "Pay by card £x" bar. The price is always worked out on the server from the item list.
+  After paying, SumUp returns the buyer to `/shop.html?order=<id>`: the reference (REP-001…), where to collect, and the items; it updates itself while waiting.
+  A shopping-bag picture button on the parish page opens it (only while the repository is open). Up to £500 and 20 of an item per order.
+- **Collection:** the parish sets its Mass times (Saturday evening, Sunday Masses) and the weekly order cut-off (default Wednesday midnight, in the parish's own
+  time zone). An order made before the cut-off is for the coming weekend, after it for the following one; the next two weekends are offered.
+- **Stock:** optional per item. Taking an order takes the stock in one locked step (two people cannot both take the last one); a payment that does not
+  complete cancels the order and puts the stock back (the existing 30-minute sweep and SumUp's notification do this); a payment that arrives after
+  that takes the stock back if it is still there, otherwise the payment is put in Needs Attention with a plain note.
+- **Money:** exactly the existing card payment. Each order's payment is a normal row in `payments` (refunds, the SumUp check, the books check, Needs
+  Attention all work). Each collection weekend has one hidden campaign (`form_def.shop`) to hold those payments; it is never listed as a campaign, a form
+  or a parish-page choice. Its "keep until" is a month after the weekend, so the nightly retention job clears names and contacts as for any campaign.
+  Names and contacts are kept on the payment only, never on the order tables.
+- **Office:** Admin → Repository (Superadmin, Admin, Finance, Priest). *Orders* by weekend and Mass: reference, name, items, paid or not; tick Prepared and
+  Collected (and undo); cancel with a reason and, if refunded in SumUp, record the refund on the payment; print the list for the volunteer (all the items to
+  get out, then each Mass with tick boxes). *Items*: import, add, change, remove, switch on/off, stock. *Mass times & cut-off*, welcome line, open/closed.
+- **Database:** migration `20261109010000_repository_shop.sql` (five tables, three functions, explicit grants; applied to the live database and the
+  functions tested there inside a rolled-back transaction). Appended to the baseline as section 9.
+- Tests: `test/gateway/shop.test.js` (42 server tests), `test/gateway/ui-shop.js` (browser checks of the shop, the order page and the office screens).
+- **Not built (by decision or for later):** item photos; a separate login for the repository volunteer (the office prints the list instead); a phone alert
+  to the volunteer; refunds sent to SumUp from our screen (recorded only, as for tickets); holiday weekends closed in advance.
+
+### 61b. Repository: the real SumUp export, the weekly sync, small pictures, what shows first, search — 2026-11-09
+
+Built after reading the real export (`Downloads/2026-11-09_..._items-export_*.csv`, 250 lines): 214 repository items ("R-" categories, 10 of them), 29 lines
+for other campaigns (BBQ, Tambola, Food Fair…) which are not brought across, 208 distinct pictures, 22 items at zero stock, 2 lines with no price (Donation, Sale).
+- **Reading the file:** an item with options is a parent line (no price) followed by one line per option; each option becomes its own item, "Name (Option)", with its own
+  stock and price. SumUp's permanent ids (variant id, item id) and the barcode are kept, so next week's file updates the same item. Names are tidied (stray tabs), "R-" is
+  dropped from categories, a minus stock becomes 0, items SumUp does not track have no count. (`netlify/functions/api.js`: `shopReadSumup`.)
+- **Weekly sync (the "Weekly stock update from SumUp" card):** export from SumUp, open the file, check it (a preview: what is new, stock and price changes, what is no longer in
+  SumUp), press Update. SumUp is the truth for name, price and stock; what the office decided here (on/off, "our pick") stays. Stock = SumUp's count minus what is promised in orders not
+  yet made up (awaiting payment or paid; made-up and collected orders have already left the shelf). Items no longer in SumUp are taken off sale, never deleted (a tick lets the office keep
+  them on). Items made by hand are never switched off by a sync, and a hand-made item with the same name or barcode is adopted, not copied. The header says when the stock was last updated and warns
+  after 7 days. (There is no API, so this is a weekly file, by design; it could be a 2-minute job on Tuesday or Wednesday.)
+- **Pictures:** SumUp's are about 650 KB each and cannot be resized by SumUp. The office's browser makes a small copy of each distinct picture (240 px, WebP, a few KB; JPEG if the browser
+  cannot make WebP) and sends it to the server, which checks and stores it in the public `repository` storage bucket under a content-based name (kept a year by browsers). The shop loads
+  only those, lazily, at fixed sizes (no jumping), and shows a plain icon if one is missing. It carries on where it stopped if the page is closed; a changed picture in SumUp is redone
+  on the next sync. No outside image service is used (no per-image cost).
+- **What shows first:** shelves you swipe along, then every category (season first). "Our picks" (the office stars items), "In season" (Christmas from mid-October to 6 January, Easter
+  mid-Feb to April, First Communion March to mid-July, Confirmation March to June: guesses at the usual parish year, easy to change in `SHOP_SEASONS`), "Popular right now" (units sold in
+  paid orders over 120 days; appears once there are sales), "New in" (arrived in a later sync, for two weeks; the first import is not "new"). Sold-out items go last in their category and never on a
+  shelf. Nothing is hidden: every item is in its category and in search.
+- **Search:** instant, in the phone, over name, category and description. Handles plurals, a short list of synonyms (beads/rosary, necklace/pendant…), small typos ("rosry"), several words that must
+  all match, and "did you mean". Category chips filter. Each category shows its first 8 with "Show all".
+- **Speed:** the shop window for the real file is about 38 KB (about 10 KB compressed), cached for 30 seconds; pictures are not part of it (each is fetched only as it comes into view).
+- Migration `20261109020000_repository_sync_images.sql` (applied to the live database; additive).
+- Tests: `test/gateway/shop-sync.test.js` (27), `test/gateway/fixtures/sumup-items-export-sample.csv` (a trimmed real export), and the browser checks in `ui-shop.js`.
+- **Not done:** a seed of "popular" from SumUp's own sales report (not in the item export; an Items-sold report could be loaded later); item photos beyond the first; grouping options of one item
+  under a single card (each option is its own item for now).
+
+## 62. Listings: the parish classifieds — 2026-11-10 (on dev; preview only)
+
+An exchange of goods and services between parishioners (furniture, bulk food, cakes, free clothes, plumbing, electrical, gardening…), as an engagement and a small
+income for the parish. Decisions (Justin): the page is open to anyone with the link (not advertised, kept out of search engines: no access code), and the office approves
+every listing before it appears.
+- **Public page `/listings/<address>`:** a permanent "Between parishioners" notice at the top of every screen (and in the form and in each listing's sheet): the church does
+  not check, recommend or guarantee any listing, takes no payment from and has no part in any deal, and is not responsible for the goods or services; check things yourself with the
+  person who listed them. Search (plurals, synonyms like plumbing/plumber, typos, "did you mean"), group chips (For sale / Free to a good home / Service offered, and six categories),
+  shelves (picked by the office, just added, most viewed, most asked about), and the full list. A listing opens in a sheet with its pictures and description.
+- **Email only, never shown.** The lister gives an email (no mobile number is accepted, and phone numbers, email addresses and web links are refused in the title, description,
+  price and name, with a plain message). A visitor presses "Copy email address" (or "Write an email"); only then does the server hand the address over, to one visitor at a time (40 an hour),
+  and the press is counted. The address is in no page data. "Copy" works in the same press on phones; if a phone refuses, the address is shown in a box to copy by hand.
+- **Making a listing:** kind (for sale, free, service), group, title, description, optional price, up to 4 pictures, 1 week / 2 weeks / 3 weeks / 1 month, email (+ optional first name),
+  a tick that they understand the church does not check or guarantee listings (the version and time are stored). Pictures are made small in the phone before anything is sent (a thumbnail of about
+  8 KB and a viewing size of about 50 KB, from a photo of several MB). The days start when the office approves.
+- **The suggested fee:** worked out by the server from the length and the number of pictures (default £3 for a week, £1.50 for each extra week, £0.50 for each picture, in half pounds), shown as two
+  amounts ("Suggested" and "With thanks", about 50% more) plus "Other", where **£0 is allowed**. The office sets the three numbers (Admin → Listings → Settings). What is paid never affects where a
+  listing appears. A fee is an ordinary SumUp card payment (a row in `payments`; refunds, the SumUp check and Needs Attention all work), held in one hidden campaign per month that is never listed
+  anywhere; its names and contacts are cleared by the normal retention job.
+- **The office (Admin → Listings; Superadmin, Admin, Finance, Priest):** *Waiting* (read each one with its pictures and the lister's email; Approve, or "Not suitable" with a reason the lister sees, and a
+  paid fee can be noted as refunded: refunds themselves are made in SumUp, and only Admin, Superadmin and Finance may record one); *Live* (views, "asked for the email", reports with their reasons, ★ Pick, take down
+  with a reason); *Ended*; *Settings* (open/closed, welcome line, the three numbers, and a table of what a lister is shown).
+- **The lister's own page** (a private link, shown after they send it): where it stands (waiting for payment, waiting for approval, live until a date, not accepted with the reason, ended), how many have looked and
+  asked for the email, and "Take it down". There is no account and nothing is emailed (Campaigns sends no email), so they are told to keep the link.
+- **What shows first:** a score from how new it is (strongest in the first 3 days), the office's picks, and views and email requests per day it has been up (so a new listing is not buried by an old one); counted
+  once per visitor per day (the visitor is a scrambled value, never an IP). Not influenced by payment.
+- **Ending and privacy:** a listing ends by itself when its days are up. Two weeks after it ends (or is refused, withdrawn or taken down) its email address, name, text and pictures are cleared and the files
+  removed; only the title and the counts stay for the office's history. Views and contacts markers older than 90 days are deleted. Limits: 3 open listings per email, 8 new listings a day per connection,
+  a hidden spam-trap field.
+- Migration `20261110000000_listings.sql` (applied to the live database; additive; the counting function tested there in a rolled-back transaction). Baseline section 11.
+- Tests: `test/gateway/listings.test.js` (36) and the browser checks in `test/gateway/ui-listings.js`.
+- **Not built:** email verification (nothing is emailed), an access code (declined), the lister editing a listing after sending it (they take it down and list again), saving a half-made form, a swap/wanted kind,
+  a listing renewal button, and the Priest/Admin getting an alert when something waits (the tab shows a count and a banner).
+
+### 62b. Listings: the email typed twice, and an invitation to list — 2026-11-10
+- **Email twice:** the form asks for the email address and then "Type your email address again", showing at once whether the two match ("✓ They match" / "These two do not match yet"). The server checks again and
+  refuses a missing or different second copy (capitals and spaces do not matter; the address is stored once, in lower case), so a slip can never send a lister's messages to a stranger.
+- **Invitation:** because Listings is new and only as good as what is on it, the first time someone opens the page (and again after 3 days on that device) a friendly sheet appears: a catchy line that changes by day
+  ("One person's spare is another's blessing." / "Skilled with a spade, a spanner or a sponge cake?" / "Got something to give away? Someone nearby is hoping for it."), or "Be among the first on our parish
+  noticeboard." while there are fewer than 4 listings; how many are listed already; "The more of us list, the better this gets for everyone"; that it takes about two minutes, that £0 is a perfectly good price and that
+  the office checks every listing. Buttons: "Add a listing" (straight to the form) and "Just looking" (remembered on that phone). It never appears over the form.
+
+## 63. Cash Recon shows exactly what a seller is holding — 2026-11-10 (on dev; preview only)
+
+Before this, the Cash Recon tab asked the Admin to pick a campaign and a seller and type an amount, with no way to see what that seller should hand over. Now:
+- **Who holds what:** the tab opens on every seller with their unreconciled cash (total, number of sales, number of campaigns), biggest first; a seller with nothing says so, and a deactivated
+  seller who still holds cash is not lost. Money is summed in pence, so there is no rounding drift.
+- **A seller's detail:** a big "Mary should hand over £25.50", per campaign (the one with the oldest sale first), and every sale oldest first with what it was for (tickets), the time and a **running total**,
+  so a part-payment can be seen to cover the first few sales. Only cash still pending counts: not already reconciled, voided, card, online, binned campaigns or another parish.
+- **Live check as the Admin types the counted cash:** "Exactly right" (all sales reconciled), "£X short" (what it would cover, what stays pending and what the next sale needs), or "£X more" (a surplus). A
+  mismatch needs a tick, "I have checked this difference with Mary", before the button (labelled "Reconcile £14.00 anyway") turns on.
+- **Safe against a moving figure:** the screen sends the total it showed. If it has changed by the time the button is pressed (another sale, a void) the server refuses (409) and says what it is now, and the
+  screen refreshes. The amount handed over must be a real amount above £0. A seller's recent reconciliations (when, which campaign, how much, by whom, surplus or shortfall) are listed to avoid counting the same cash twice.
+- Server: `cash_pending` (new), `cash_recon` (checks the amount and the expected figure). Admin, Superadmin and Finance only, own parish only. Tests: `test/gateway/cash.test.js` (12) and `test/gateway/ui-cash.js`.
+
+## 64. Light a Candle and the Thursday email — 2026-11-11 (on dev; preview only)
+
+Parishioners can ask for a candle to be lit for them at one of the church's candle stands (by default the Altar of Our Lady and the Altar of St Anthony of Padua), on a chosen day, and give an offering by card on the page. A reminder email goes to the parish office every Thursday.
+
+**The public page** (`/candles/<parish>`, reached by a picture-only candle button on the parish page, shown only while Light a Candle is open):
+- Five short steps: where (the candle stand), which day (the coming weeks, Monday to Sunday; the week closes on Wednesday midnight in the parish's own time, so the Thursday list is complete), how many candles (1 to 10), the offering for each candle (£1.50, £2, £3, £5 or Other, between £1.50 and £5.00), and the person's details (name, and a mobile number or an email; an optional "who is it for").
+- The pay bar always shows the total (candles × offering). Mistakes are explained in words before anything is sent. Payment is the normal SumUp hosted card page; the person comes back to their own request page (`/candles.html?request=...`), which shows the reference (CAN-001, CAN-002 ...), the stand, the day, the candles and the offering, has a button to copy the reference, and updates itself until the payment is confirmed.
+- The "who is it for" note is stored on the request only, is seen only in the Admin screen, is never put in any email, and is cleared a month after the day. Name and contact stay on the payment and follow the normal retention rules.
+
+**The Admin "Candles" tab** (Superadmin, Admin, Finance, Priest):
+- *Requests*: pick the week (last, this, next, the week after); paid requests are grouped by day then by candle stand, with name, candles, offering and contact; "✓ Lit" ticks a request (and can be undone); "Cancel…" needs a reason and can record that a refund was made in SumUp (the books agree through the normal refund record). Unpaid and cancelled requests are listed apart under "Not on the list". "Print the list for the volunteer" gives day, stand, name, candles and a tick box; "who it is for" is left off the print unless the office ticks it.
+- *Settings*: open/closed switch (needs the parish page address and at least one active stand), the candle stands (up to four; rename, hide, add, remove), the closing day and time, a welcome line.
+- *Thursday email*: on/off, who it goes to (empty means the parish contact address), "Send it now", "See what it would say", and how the last attempt went. If email sending is not set up, the screen says so and lists the steps.
+
+**The Thursday email** covers next week's candle requests (by day and stand: names and counts) and the weekend's paid Repository orders (by collection Mass: reference, name, items, and a total of everything to get out). No phone numbers, no email addresses and no intentions are ever in it. It is a reminder: the full lists are in the Admin screen.
+- Sent from a parish Gmail account through an app password: environment variables `MAIL_USER` and `MAIL_APP_PASSWORD` (and optionally `MAIL_FROM_NAME`) set once in Netlify. The password is never stored in the database or shown on screen.
+- A scheduled function (`thursday-digest`) runs at 07:00, 08:00 and 09:00 UTC on Thursdays; it sends only when the parish's local time is Thursday 08:00 or later, only if the email is switched on, and only once per week (a failed attempt is tried again an hour later). Scheduled functions run only on the published site, not on a preview; "Send it now" works on a preview once the two variables exist.
+
+**Server:** public `public_candles`, `public_candle_request`, `public_candle_status`; office `candles_get`, `candles_week`, `candles_mark`, `candles_cancel`, `candles_set_settings`, `digest_set`, `digest_send_now`, `digest_preview`. Each request makes one pending payment in a hidden per-month campaign (so it stays out of ticket lists and the books check), is held as "awaiting payment" until SumUp confirms, and is cancelled if the payment fails. Safeguards: an invisible trap field, the usual purchase rate limits, a repeat press of Pay returns the same request (no double charge), and every office action is limited to the person's own parish. Migration `20261111000000_candles_digest.sql` (additive: four tables, one function, explicit grants, row security on). Tests: `test/gateway/candles.test.js` (30) and the browser run `test/gateway/ui-candles.js`.

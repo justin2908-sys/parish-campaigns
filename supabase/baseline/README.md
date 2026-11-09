@@ -24,12 +24,12 @@ allp as (select * from tables union all select * from cons1 union all select * f
 select ord, count(*) pieces, md5(string_agg(ddl, E'\n\n' order by n)) hash from allp group by ord order by ord;
 ```
 
-Hashes on 2026-11-06, after migration 20261106000000_registration_party_size (18 tables, 55 keys/checks, 38 links, 21 indexes, 18 row-security switches, 13 functions, 18 permission lines). On 2026-10-27 the file was first verified (sections 1, 2 and 6 were then 9010c5c8…, 9c3ed6ba…, 331e48c2…; the other four are unchanged):
+Hashes on 2026-11-09, after migration 20261109000000_gateway_whatsapp_daily (18 tables, 56 keys/checks, 38 links, 21 indexes, 18 row-security switches, 13 functions, 18 permission lines). On 2026-10-27 the file was first verified (sections 1, 2 and 6 were then 9010c5c8…, 9c3ed6ba…, 331e48c2…; the other four are unchanged):
 
 | Section | Hash |
 |---|---|
-| 1 tables | 5d844043d4de2be81e616f26207a9386 |
-| 2 keys, unique rules, checks | 3bc7ab2eb758dbdcb659a883fdf45274 |
+| 1 tables | 4d1a12c20fd7e131e10c450f02aa3ebd |
+| 2 keys, unique rules, checks | b184ab3c1244cc834494486caa640d8d |
 | 3 links between tables | c3fb2a2f1904bd849bdaa1616c3f0f01 |
 | 4 indexes | dc2c58e79e4698245f8618ae73702a3f |
 | 5 row level security | ada629ffd53b81268199e91b15a158e8 |
@@ -41,3 +41,9 @@ When a change is applied, this baseline is regenerated and the table above updat
 
 **Not in the file:** the nightly deletion job is included (section 8), but the extensions must be allowed by the new project, and the unused
 storage bucket `payment-evidence` is deliberately not recreated.
+
+**2026-11-09, the Repository (parish shop):** migration `20261109010000_repository_shop` added five tables (`repository_items`, `repository_settings`, `repository_weekends`, `repository_orders`, `repository_order_lines`) and three functions (`shop_place_order`, `shop_cancel_order`, `shop_reinstate_order`). They are appended to the baseline file as **section 9** (and, for the weekly sync and pictures migration `20261109020000_repository_sync_images`, **section 10**, which also creates the public `repository` storage bucket) (the migration's own text), not merged into sections 1 to 7, so the seven hashes above still describe the database *without* the Repository objects. To check a copy built from this file, compare sections 1 to 7 after excluding anything named `repository_*` / `shop_*`. Building a new database from the file is unaffected: run it top to bottom, section 9 last.
+
+**2026-11-10, Listings:** migration `20261110000000_listings` added five tables (`listings_settings`, `listings`, `listing_events`, `listing_reports`, `listing_months`), one function (`listing_event`) and the public `listings` storage bucket. They are appended to the baseline file as **section 11**; sections 1 to 7 still describe the database without the Repository and Listings objects.
+
+**2026-11-11, Light a Candle and the Thursday email:** migration `20261111000000_candles_digest` added four tables (`candle_settings`, `candle_requests`, `candle_months`, `weekly_digest`) and one function (`candle_next_ref`). They are appended to the baseline file as **section 12**; sections 1 to 7 still describe the database without the Repository, Listings and Candles objects.

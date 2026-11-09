@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#225840">
+<title>Light a candle</title>
+<script>
+// Ask for the page's data (or the request's status) at once, while the styles and fonts are still downloading.
+window.__cndP = (function () {
+  var qs = new URLSearchParams(location.search), request = qs.get('request');
+  var m = /^\/candles\/([^\/?#]+)\/?$/.exec(location.pathname), slug = m ? decodeURIComponent(m[1]).toLowerCase() : '';
+  if (!window.fetch || (!request && !slug)) return { slug: slug, request: request, p: null };
+  var ctl = window.AbortController ? new AbortController() : null;
+  if (ctl) setTimeout(function () { ctl.abort(); }, 25000);
+  var p = fetch(request ? '/api/public_candle_status' : '/api/public_candles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request ? { request_id: request } : { slug: slug }), signal: ctl ? ctl.signal : undefined })
+    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, d: d }; }); })
+    .catch(function () { return null; });
+  return { slug: slug, request: request, p: p };
+})();
+</script>
+<style>
+@font-face { font-family:'Hanken Grotesk'; font-style:normal; font-weight:400 700; font-display:swap; src:url('/fonts/HankenGrotesk-400-700.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:500; font-display:swap; src:url('/fonts/Spectral-500.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:600; font-display:swap; src:url('/fonts/Spectral-600.woff2') format('woff2'); }
+:root {
+  --bg:#f3f4f1; --surface:#ffffff; --fg:#151c18; --muted:#3d4843; --line:#c9d0cb;
+  --brand:#225840; --brand-text:#225840; --brand-tint:#e0eee6; --flame:#c27a00;
+  --warn:#7a3f00; --warn-tint:#fbeccd; --bad:#a31f1f; --bad-tint:#fbe3e3;
+  --font-display:"Spectral", Georgia, "Times New Roman", serif;
+  --font-body:"Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#101512; --surface:#1b2220; --fg:#f1f4f0; --muted:#c0cbc4; --line:#3a4640;
+    --brand:#2f7a58; --brand-text:#9fdcbd; --brand-tint:#1f3329; --flame:#f5c070;
+    --warn:#f5c070; --warn-tint:#3a2a10; --bad:#ff9a9a; --bad-tint:#3a1c1c;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#101512; --surface:#1b2220; --fg:#f1f4f0; --muted:#c0cbc4; --line:#3a4640;
+  --brand:#2f7a58; --brand-text:#9fdcbd; --brand-tint:#1f3329; --flame:#f5c070;
+  --warn:#f5c070; --warn-tint:#3a2a10; --bad:#ff9a9a; --bad-tint:#3a1c1c;
+  color-scheme:dark;
+}
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-body); font-size:1.0625rem; line-height:1.4; overflow-wrap:break-word; }
+a { color:inherit; text-decoration:none; }
+button, input { font:inherit; color:inherit; }
+button { cursor:pointer; }
+:focus-visible { outline:4px solid var(--brand-text); outline-offset:2px; border-radius:6px; }
+.gutter { padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width:560px; margin:0 auto; }
+[hidden] { display:none !important; }
+.mast { background:var(--brand); color:#fff; padding-top:max(12px, env(safe-area-inset-top, 0px)); padding-bottom:12px; }
+.mast .id { display:flex; align-items:center; gap:12px; }
+.back { flex:none; width:48px; height:48px; border-radius:50%; border:2px solid rgba(255,255,255,.55); display:grid; place-items:center; color:#fff; }
+.mast h1 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.5rem; line-height:1.1; text-wrap:balance; }
+.mast small { display:block; font-family:var(--font-body); font-weight:500; font-size:.9375rem; opacity:.9; margin-bottom:2px; }
+main { padding-top:14px; padding-bottom:150px; display:grid; gap:14px; }
+.panel { background:var(--surface); border:2px solid var(--line); border-radius:16px; padding:14px; display:grid; gap:10px; }
+.panel h2 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.3rem; }
+.panel h2 .n { display:inline-grid; place-items:center; width:30px; height:30px; margin-right:8px; border-radius:50%; background:var(--brand); color:#fff; font-family:var(--font-body); font-size:1rem; font-weight:700; vertical-align:2px; }
+.intro { margin:0; color:var(--muted); }
+.hero { display:flex; gap:12px; align-items:center; }
+.flame { flex:none; width:56px; height:56px; border-radius:50%; background:var(--warn-tint); color:var(--flame); display:grid; place-items:center; }
+.altars { display:grid; gap:10px; }
+.altar { display:flex; align-items:center; gap:12px; min-height:64px; padding:10px 14px; border:2px solid var(--line); border-radius:14px; background:var(--surface); text-align:left; width:100%; font-weight:700; font-size:1.1rem; }
+.altar .ic { flex:none; width:40px; height:40px; border-radius:50%; background:var(--brand-tint); color:var(--brand-text); display:grid; place-items:center; }
+.altar[aria-pressed="true"] { border-color:var(--brand-text); background:var(--brand-tint); }
+.weeks { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; -webkit-overflow-scrolling:touch; }
+.chip { flex:none; min-height:44px; padding:0 14px; border-radius:999px; border:2px solid var(--line); background:var(--surface); font-weight:600; font-size:.9375rem; }
+.chip[aria-pressed="true"] { background:var(--brand); border-color:var(--brand); color:#fff; }
+.days { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; }
+.day { min-height:56px; padding:6px 4px; border-radius:12px; border:2px solid var(--line); background:var(--surface); font-weight:700; line-height:1.15; }
+.day small { display:block; font-weight:500; color:var(--muted); font-size:.9375rem; }
+.day[aria-pressed="true"] { border-color:var(--brand-text); background:var(--brand-tint); color:var(--brand-text); }
+.day[aria-pressed="true"] small { color:var(--brand-text); }
+.stepper { display:flex; align-items:center; justify-content:center; gap:18px; }
+.stepper button { width:56px; height:56px; border-radius:50%; border:2px solid var(--brand-text); background:transparent; color:var(--brand-text); display:grid; place-items:center; padding:0; }
+.stepper button.plus { background:var(--brand); border-color:var(--brand); color:#fff; }
+.stepper button:disabled { opacity:.35; cursor:default; }
+.stepper output { min-width:3rem; text-align:center; font-family:var(--font-display); font-size:2.4rem; font-weight:600; }
+.offers { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+.offer { min-height:56px; border-radius:12px; border:2px solid var(--line); background:var(--surface); font-weight:700; font-size:1.1rem; font-variant-numeric:tabular-nums; }
+.offer[aria-pressed="true"] { border-color:var(--brand-text); background:var(--brand-tint); color:var(--brand-text); }
+.total { margin:0; padding:10px 12px; border-radius:12px; background:var(--brand-tint); font-weight:600; }
+.f { display:grid; gap:4px; }
+.f label { font-weight:700; }
+.f input { width:100%; min-height:52px; padding:10px 12px; border:2px solid var(--line); border-radius:12px; background:var(--surface); font-size:1.0625rem; }
+.f input:focus { border-color:var(--brand-text); outline:none; box-shadow:0 0 0 3px var(--brand-tint); }
+.f .help { color:var(--muted); font-size:.9375rem; }
+.f.bad input { border-color:var(--bad); }
+.trap { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
+.bar { position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--surface); border-top:2px solid var(--line); padding-top:10px; padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
+.bar .wrap { display:grid; gap:8px; }
+.err { margin:0; padding:10px 12px; border-radius:12px; background:var(--bad-tint); color:var(--bad); font-weight:600; }
+.pay { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:56px; padding:0 18px; border:0; border-radius:14px; background:var(--brand); color:#fff; font-weight:700; font-size:1.1rem; }
+.pay:disabled { background:var(--line); color:var(--muted); cursor:default; }
+.btn { min-height:48px; padding:0 16px; border-radius:12px; border:2px solid var(--brand-text); background:transparent; color:var(--brand-text); font-weight:700; display:inline-flex; align-items:center; }
+.btn.solid { background:var(--brand); border-color:var(--brand); color:#fff; }
+.status { padding:28px 0 24px; display:grid; gap:14px; justify-items:start; }
+.status h1 { margin:0; font-family:var(--font-display); font-size:1.6rem; line-height:1.15; }
+.status p { margin:0; color:var(--muted); }
+.ref { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding:14px 16px; border:2px solid var(--brand-text); border-radius:16px; background:var(--brand-tint); }
+.ref b { font-family:var(--font-display); font-size:2.2rem; letter-spacing:.04em; line-height:1; }
+.ref .k { display:block; font-size:.9375rem; color:var(--muted); font-weight:600; }
+.card { width:100%; border:2px solid var(--line); border-radius:14px; padding:12px 14px; background:var(--surface); display:grid; gap:4px; }
+.toast { position:fixed; left:50%; bottom:calc(90px + env(safe-area-inset-bottom, 0px)); transform:translate(-50%,20px); opacity:0; pointer-events:none; background:var(--fg); color:var(--bg); padding:14px 20px; border-radius:12px; max-width:calc(100% - 32px); transition:opacity .2s, transform .2s; z-index:40; }
+.toast.on { opacity:1; transform:translate(-50%,0); }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+(function () {
+  'use strict';
+  var W = { title: 'Light a candle', loading: 'Loading…', failed: 'We could not load this page.', failedHelp: 'Please check your connection and try again.', retry: 'Try again',
+    closed: 'Candle requests are not open right now.', closedHelp: 'Please ask at the parish office, or look again later.' };
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function gbp(n) { return '£' + (Math.round(Number(n) * 100) / 100).toFixed(2); }
+  function ico(d, s) { return '<svg width="' + (s || 24) + '" height="' + (s || 24) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
+  var I = { back: '<path d="M15 6l-6 6 6 6"/>', minus: '<path d="M6 12h12"/>', plus: '<path d="M12 6v12M6 12h12"/>', copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+    candle: '<path d="M12 2c1.4 1.7 2 3 2 4.2a2 2 0 0 1-4 0C10 5 10.6 3.7 12 2Z"/><rect x="8" y="10" width="8" height="12" rx="1.5"/><path d="M12 8.5V10"/>' };
+  var toastEl = $('toast'), tt;
+  function say(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(tt); tt = setTimeout(function () { toastEl.classList.remove('on'); }, 2800); }
+  function mast(name, sub, slug) { return '<header class="mast gutter"><div class="wrap"><div class="id">' + (slug ? '<a class="back" href="/go/' + esc(slug) + '" aria-label="Back to the parish page" title="Back to the parish page">' + ico(I.back) + '</a>' : '') + '<h1>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + esc(name) + '</h1></div></div></header>'; }
+  function status(title, help, retry, slug) { $('app').innerHTML = mast(W.title, '', slug) + '<main class="gutter"><div class="wrap"><div class="status"><h1>' + esc(title) + '</h1><p>' + esc(help) + '</p>' + (retry ? '<button class="btn solid" type="button" id="retry">' + esc(W.retry) + '</button>' : '') + '</div></div></main>'; }
+
+  var P = window.__cndP, slug = P.slug, requestId = P.request;
+  var data = null, f = { altar: '', date: '', week: 0, n: 1, mode: '', other: '', name: '', phone: '', email: '', why: '' }, busy = false, errMsg = '', badField = '', attemptRef = '';
+
+  function each() { if (f.mode === 'other') { var v = Math.round(Number(String(f.other).replace(/[£,\s]/g, '')) * 100) / 100; return f.other === '' || !isFinite(v) ? NaN : v; } return f.mode ? Number(f.mode) : NaN; }
+  function total() { var e = each(); return isFinite(e) ? Math.round(e * 100) * f.n / 100 : NaN; }
+  function render() {
+    var o = data.offering, html = mast(W.title, data.org.name, slug) + '<main class="gutter"><div class="wrap" style="display:grid;gap:14px">' +
+      '<section class="panel"><div class="hero"><span class="flame">' + ico(I.candle, 30) + '</span><p class="intro">' + esc(data.intro || 'A volunteer will light a candle for you, at the stand you choose, on the day you choose. Your offering supports the parish.') + '</p></div></section>' +
+      '<section class="panel" aria-labelledby="h1"><h2 id="h1"><span class="n">1</span>Where?</h2><div class="altars" role="group" aria-labelledby="h1">' + data.altars.map(function (a) { return '<button type="button" class="altar" data-altar="' + esc(a.id) + '" aria-pressed="' + (f.altar === a.id) + '"><span class="ic">' + ico(I.candle, 22) + '</span><span>' + esc(a.name) + '</span></button>'; }).join('') + '</div></section>' +
+      '<section class="panel" aria-labelledby="h2"><h2 id="h2"><span class="n">2</span>Which day?</h2>' + (data.weeks.length > 1 ? '<div class="weeks" role="group" aria-label="Week">' + data.weeks.map(function (w, i) { return '<button type="button" class="chip" data-week="' + i + '" aria-pressed="' + (f.week === i) + '">' + esc('From ' + w.label.replace('Week of ', '').replace(/^(\w{3})\w*/, '$1').replace(/(\w{3})\w+$/, '$1')) + '</button>'; }).join('') + '</div>' : '<p class="intro">' + esc(data.weeks[0] ? data.weeks[0].label : '') + '</p>') +
+      '<div class="days" role="group" aria-label="Day">' + (data.weeks[f.week] ? data.weeks[f.week].dates.map(function (d) { var p = d.short.split(' '); return '<button type="button" class="day" data-date="' + esc(d.date) + '" aria-pressed="' + (f.date === d.date) + '" aria-label="' + esc(d.label) + '">' + esc(p[0]) + '<small>' + esc(p.slice(1).join(' ')) + '</small></button>'; }).join('') : '') + '</div><p class="intro" style="font-size:.9375rem">' + esc(data.cutoff_text) + '</p></section>' +
+      '<section class="panel" aria-labelledby="h3"><h2 id="h3"><span class="n">3</span>How many candles?</h2><div class="stepper" role="group" aria-label="Number of candles"><button type="button" data-dec aria-label="One fewer candle"' + (f.n <= 1 ? ' disabled' : '') + '>' + ico(I.minus, 26) + '</button><output id="nOut" aria-live="polite">' + f.n + '</output><button type="button" class="plus" data-inc aria-label="One more candle"' + (f.n >= data.max_candles ? ' disabled' : '') + '>' + ico(I.plus, 26) + '</button></div></section>' +
+      '<section class="panel" aria-labelledby="h4"><h2 id="h4"><span class="n">4</span>Your offering for each candle</h2><div class="offers" role="group" aria-labelledby="h4">' + o.suggested.map(function (v) { return '<button type="button" class="offer" data-offer="' + v + '" aria-pressed="' + (f.mode === String(v)) + '">' + gbp(v) + '</button>'; }).join('') + '<button type="button" class="offer" data-offer="other" aria-pressed="' + (f.mode === 'other') + '">Other</button></div>' +
+      (f.mode === 'other' ? '<div class="f' + (badField === 'other' ? ' bad' : '') + '"><label for="fOther">Amount for each candle (£' + o.min.toFixed(2) + ' to £' + o.max.toFixed(2) + ')</label><input id="fOther" inputmode="decimal" autocomplete="off" value="' + esc(f.other) + '"></div>' : '') + '<p class="total" id="totalLine"></p></section>' +
+      '<section class="panel" aria-labelledby="h5"><h2 id="h5"><span class="n">5</span>Your details</h2>' +
+      '<div class="f' + (badField === 'name' ? ' bad' : '') + '"><label for="fName">Your name</label><input id="fName" autocomplete="name" maxlength="80" value="' + esc(f.name) + '"></div>' +
+      '<div class="f' + (badField === 'contact' ? ' bad' : '') + '"><label for="fPhone">Mobile number</label><input id="fPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" value="' + esc(f.phone) + '"></div>' +
+      '<div class="f' + (badField === 'contact' ? ' bad' : '') + '"><label for="fEmail">Email address (if you prefer)</label><input id="fEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" value="' + esc(f.email) + '"><span class="help">A mobile number or an email address, so we can reach you if there is a problem.</span></div>' +
+      '<div class="f"><label for="fWhy">Who is it for? (optional)</label><input id="fWhy" maxlength="120" autocomplete="off" value="' + esc(f.why) + '" placeholder="e.g. for my mother, who is unwell"><span class="help">Only the parish office sees this. It is never sent by email and is deleted a month after the day.</span></div>' +
+      '<div class="trap" aria-hidden="true"><label>Leave this empty<input id="fWebsite" tabindex="-1" autocomplete="off"></label></div></section></div></main>' +
+      '<div class="bar gutter"><div class="wrap">' + (errMsg ? '<p class="err" role="alert">' + esc(errMsg) + '</p>' : '') + '<button class="pay" type="button" id="payBtn"' + (busy ? ' disabled' : '') + '><span id="payLabel">' + esc(busy ? 'Opening the payment…' : 'Pay by card') + '</span><span id="payAmt"></span></button></div></div>';
+    var sy = window.scrollY, ae = document.activeElement && document.activeElement.id;
+    $('app').innerHTML = html; window.scrollTo(0, sy); drawTotal();
+    if (ae && $(ae) && /^f(Name|Phone|Email|Why|Other)$/.test(ae)) { var el = $(ae); el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* not for every type */ } }
+  }
+  function drawTotal() {
+    var e = each(), t = total(), line = $('totalLine'), amt = $('payAmt'); if (!line) return;
+    if (f.mode && isFinite(t)) { line.textContent = f.n + (f.n === 1 ? ' candle' : ' candles') + ' × ' + gbp(e) + ' = ' + gbp(t); if (amt && !busy) amt.textContent = gbp(t); }
+    else { line.textContent = f.mode ? 'Type an amount for each candle.' : 'Choose an offering for each candle to see the total.'; if (amt) amt.textContent = ''; }
+  }
+  function submit() {
+    if (busy) return;
+    f.name = $('fName').value.trim(); f.phone = $('fPhone').value.trim(); f.email = $('fEmail').value.trim(); f.why = $('fWhy').value.trim();
+    badField = ''; errMsg = '';
+    var e = each();
+    if (!f.altar) errMsg = 'Please choose where the candle should be lit.';
+    else if (!f.date) errMsg = 'Please choose the day.';
+    else if (!f.mode) errMsg = 'Please choose your offering for each candle.';
+    else if (!(e >= data.offering.min && e <= data.offering.max)) { badField = 'other'; errMsg = 'The offering for each candle is from £' + data.offering.min.toFixed(2) + ' to £' + data.offering.max.toFixed(2) + '.'; }
+    else if (!f.name) { badField = 'name'; errMsg = 'Please enter your name.'; }
+    else if (!f.phone && !f.email) { badField = 'contact'; errMsg = 'Please give a mobile number or an email address.'; }
+    if (errMsg) { render(); var er = document.querySelector('.err'); if (er) er.scrollIntoView({ block: 'nearest' }); var bad = document.querySelector('.f.bad'); if (bad && bad.scrollIntoView) bad.scrollIntoView({ block: 'center' }); return; }
+    busy = true; render();
+    if (!attemptRef) attemptRef = 'a' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+    fetch('/api/public_candle_request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, light_date: f.date, altar_id: f.altar, candles: f.n, per_candle: e, name: f.name, phone: f.phone, email: f.email, intention: f.why, client_ref: attemptRef, website: ($('fWebsite') || {}).value || '' }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (r) {
+        if (r.ok && r.d.request_id) { var pay = /^https:\/\/[^\s]+$/i.test(r.d.pay_url || '') ? r.d.pay_url : ''; if (pay) { location.href = pay; return; } location.href = '/candles.html?request=' + encodeURIComponent(r.d.request_id); return; }
+        busy = false; attemptRef = ''; errMsg = (r.d && r.d.error) || W.failed; render();
+      })
+      .catch(function () { busy = false; errMsg = W.failedHelp; render(); });
+  }
+
+  // ---- a request's own page
+  var polls = 0, pollTimer = null;
+  function requestPage(r) {
+    var paid = r.status === 'paid' || r.status === 'lit';
+    var html = mast(W.title, r.org_name, r.org_slug ? r.org_slug : '') + '<main class="gutter"><div class="wrap"><div class="status">';
+    if (paid) html += '<h1>Thank you. A candle will be lit for you.</h1><div class="ref"><div><span class="k">Your reference</span><b>' + esc(r.ref) + '</b></div><button class="btn" type="button" data-copy="' + esc(r.ref) + '" aria-label="Copy the reference" title="Copy the reference">' + ico(I.copy, 22) + '</button></div>' +
+      '<div class="card"><b>' + r.candles + (r.candles === 1 ? ' candle' : ' candles') + '</b><span>' + esc(r.altar) + '</span><span>' + esc(r.date_label) + '</span><span>Your offering: ' + gbp(r.total) + '</span></div><p>A volunteer will light ' + (r.candles === 1 ? 'it' : 'them') + ' on that day. We are grateful for your offering and we will hold your intentions in prayer.</p>';
+    else if (r.status === 'cancelled') html += '<h1>This request was not completed.</h1><p>' + esc(r.ref) + ' was cancelled, so nothing was taken. If you were charged, please contact the parish office.</p>' + (r.org_slug ? '<a class="btn solid" href="/candles/' + esc(r.org_slug) + '">Start a new request</a>' : '');
+    else html += '<h1>Waiting for your payment…</h1><div class="ref"><div><span class="k">Your reference</span><b>' + esc(r.ref) + '</b></div></div><p>We are checking with the card payment. This page updates by itself. If you have not paid yet:</p>' + (/^https:\/\//.test(r.pay_url || '') ? '<a class="btn solid" href="' + esc(r.pay_url) + '">Go to the payment page</a>' : '');
+    html += '</div></div></main>';
+    $('app').innerHTML = html; document.title = r.ref + ' · ' + W.title;
+    clearTimeout(pollTimer);
+    if (r.status === 'awaiting_payment' && polls++ < 40) pollTimer = setTimeout(function () { fetch('/api/public_candle_status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request_id: requestId }) }).then(function (x) { return x.json(); }).then(function (d) { if (d && d.ref) requestPage(d); }).catch(function () { /* next beat */ }); }, 4000);
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target, b;
+    if ((b = t.closest('[data-altar]'))) { f.altar = b.getAttribute('data-altar'); errMsg = ''; render(); return; }
+    if ((b = t.closest('[data-week]'))) { f.week = Number(b.getAttribute('data-week')); errMsg = ''; render(); return; }
+    if ((b = t.closest('[data-date]'))) { f.date = b.getAttribute('data-date'); errMsg = ''; render(); return; }
+    if (t.closest('[data-inc]')) { if (f.n < data.max_candles) { f.n++; errMsg = ''; $('nOut').textContent = f.n; render(); var i2 = document.querySelector('[data-inc]'); if (i2 && !i2.disabled) i2.focus({ preventScroll: true }); } return; }
+    if (t.closest('[data-dec]')) { if (f.n > 1) { f.n--; errMsg = ''; render(); var d2 = document.querySelector('[data-dec]'); if (d2 && !d2.disabled) d2.focus({ preventScroll: true }); } return; }
+    if ((b = t.closest('[data-offer]'))) { f.mode = b.getAttribute('data-offer'); errMsg = ''; badField = ''; render(); if (f.mode === 'other' && $('fOther')) $('fOther').focus(); return; }
+    if (t.closest('#payBtn')) { submit(); return; }
+    if (t.closest('#retry')) { start(); return; }
+    if ((b = t.closest('[data-copy]'))) { var v = b.getAttribute('data-copy'); try { navigator.clipboard.writeText(v).then(function () { say('Reference copied: ' + v); }, function () { say(v); }); } catch (x) { say(v); } return; }
+  });
+  document.addEventListener('input', function (e) {
+    var t = e.target; if (!t) return;
+    if (t.id === 'fOther') { f.other = t.value; drawTotal(); }
+    else if (t.id === 'fName') f.name = t.value; else if (t.id === 'fPhone') f.phone = t.value; else if (t.id === 'fEmail') f.email = t.value; else if (t.id === 'fWhy') f.why = t.value;
+  });
+  function take(r) {
+    if (requestId) {
+      if (r && r.ok && r.d && r.d.ref) { requestPage(r.d); return; }
+      if (r && r.status === 404) { status('We could not find that request.', 'Please check the link, or ask at the parish office.', false, ''); return; }
+      status(W.failed, W.failedHelp, true, ''); return;
+    }
+    if (!r) { status(W.failed, W.failedHelp, true, slug); return; }
+    if (r.status === 404) { status(W.closed, W.closedHelp, false, slug); return; }
+    if (r.ok && r.d && r.d.altars) { data = r.d; document.title = W.title + ' · ' + data.org.name; if (data.altars.length === 1) f.altar = data.altars[0].id; render(); return; }
+    status(W.failed, W.failedHelp, true, slug);
+  }
+  function start() {
+    if (!requestId && !slug) { status(W.closed, W.closedHelp, false, ''); return; }
+    var p = P.p; P.p = null;
+    if (!p) p = fetch(requestId ? '/api/public_candle_status' : '/api/public_candles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestId ? { request_id: requestId } : { slug: slug }) }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, d: d }; }); }).catch(function () { return null; });
+    p.then(take);
+  }
+  status(W.loading, '', false, slug);
+  start();
+})();
+</script>
+</body>
+</html>

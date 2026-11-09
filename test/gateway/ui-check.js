@@ -12,13 +12,20 @@ const BROWSERS = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const BROWSER = BROWSERS.find(p => fs.existsSync(p));
 if (!BROWSER) { console.log('No Edge or Chrome found: skipping the browser checks.'); process.exit(0); }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// the liturgical calendar is replaced by a stand-in (this machine's own server still works as normal)
+const localFetch = global.fetch;
+global.fetch = async (url, o) => {
+  const m = /general-en\/(\d+)\/(\d+)\/(\d+)$/.exec(String(url));
+  if (m) return { ok: true, json: async () => ({ date: `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`, season: 'ordinary', celebrations: [{ title: 'Saint Leo the Great, pope and doctor', colour: 'white', rank: 'memorial' }] }) };
+  return localFetch(url, o);
+};
 
 // ---------- demo data around today's real date
 clock.live();
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
 const day = (n) => { const x = new Date(today + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const T = db.T;
-T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', display_name: null, address: '2 Witham Road, Osterley, TW7 4AJ', contact_email: 'osterley@rcdow.org', gateway_phone: '020 8560 0000', gateway_hours: 'Tue to Fri, 10:00 am to 1:00 pm' });
+T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', display_name: null, address: '2 Witham Road, Osterley, TW7 4AJ', contact_email: 'osterley@rcdow.org', gateway_phone: '020 8560 0000', gateway_hours: 'Tue to Fri, 10:00 am to 1:00 pm', gateway_whatsapp: 'https://whatsapp.com/channel/0029VaAbCdEf12345' });
 T('organizations').push({ id: 'org-B', name: 'Other Parish', slug: 'other-parish', gateway_enabled: false, timezone: 'Europe/London' });
 const sessions = { sa: addUser('uA-sa', 'superadmin', 'org-A', Date.now() + 6 * 36e5), ad: addUser('uA-ad', 'admin', 'org-A', Date.now() + 6 * 36e5), pr: addUser('uA-pr', 'priest', 'org-A', Date.now() + 6 * 36e5) };
 for (const [id, role, mobile] of [['uA-sa', 'superadmin', '07000000001'], ['uA-ad', 'admin', '07000000002'], ['uA-pr', 'priest', '07000000003']]) Object.assign(T('users').find(u => u.id === id), { mobile, name: role });
@@ -89,7 +96,8 @@ async function open(url, waitFor) {
   for (let i = 0; i < 60; i++) { await sleep(250); try { if (await ev(`!!(${waitFor})`)) return true; } catch { /* page loading */ } }
   return false;
 }
-async function shot(name, full) {
+async function shot(...a) { try { return await shotRaw(...a); } catch (e) { console.log('  (screenshot skipped: ' + e.message + ')'); } }   // pictures are a courtesy; a slow screenshot must not fail the checks
+async function shotRaw(name, full) {
   const m = await send('Page.getLayoutMetrics');
   const h = Math.ceil(m.result.cssContentSize.height), w = Math.ceil(m.result.cssContentSize.width);
   const r = await send('Page.captureScreenshot', full ? { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: w, height: h, scale: 1 } } : { format: 'png' });
@@ -139,6 +147,29 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   check('"See all" reveals the rest in place, and the button then says "Show fewer"', after.n === 4 && after.btn === 'Show fewer', JSON.stringify(after));
   await shot('public-390-light-seeall', true);
 
+  // ---- the picture-only shortcuts (WhatsApp, email) and the "Today in the Church" card, above the three big buttons
+  const wt = await ev(`(() => { const wa = document.querySelector('a.ic[href*="whatsapp.com"]'), em = document.querySelector('button.ic[data-copy]'), td = document.querySelector('section.today'), door = document.querySelector('.door'); const before = (a, b) => !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const r = (e) => e ? e.getBoundingClientRect() : { width: 0, height: 0 };
+    return { waHref: wa && wa.getAttribute('href'), waText: wa && wa.textContent.trim(), waAria: wa && wa.getAttribute('aria-label'), waNew: wa && wa.target === '_blank' && /noopener/.test(wa.rel), waSvg: !!(wa && wa.querySelector('svg')), waSize: [r(wa).width, r(wa).height],
+      emText: em && em.textContent.trim(), emAria: em && em.getAttribute('aria-label'), emSvg: !!(em && em.querySelector('svg')), mastWords: /Email us|WhatsApp/.test(document.querySelector('.mast').textContent),
+      order: before(wa, td) && before(em, td) && before(td, door),
+      head: td && td.querySelector('h2').textContent, sub: td && td.querySelector('.sub').textContent, k: td && td.querySelector('.k').textContent, cls: td && td.className,
+      btns: td ? [...td.querySelectorAll('.acts a')].map(a => a.textContent.trim() + '|' + a.getAttribute('aria-label') + '>' + a.getAttribute('href')) : [] }; })()`);
+  const tdy = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }), tdn = tdy.replace(/-/g, ''), [, tm, tdd] = tdy.split('-');
+  check('WhatsApp is a picture only (no words on screen), 44px or larger, opens the channel in a new tab, and still has its words for screen readers', wt.waHref === 'https://whatsapp.com/channel/0029VaAbCdEf12345' && wt.waText === '' && wt.waSvg && /Join our WhatsApp channel/.test(wt.waAria) && wt.waNew && wt.waSize[0] >= 44 && wt.waSize[1] >= 44, JSON.stringify([wt.waHref, wt.waText, wt.waAria, wt.waSize]));
+  check('Email is a picture only, with its words for screen readers, and nothing but the name is left in the top bar', wt.emText === '' && wt.emSvg && /Copy the parish email address/.test(wt.emAria) && !wt.mastWords, JSON.stringify([wt.emText, wt.emAria, wt.mastWords]));
+  check('the two shortcuts, then the Today card, then the three big buttons', wt.order);
+  check('the Today card shows the date, the name of the day, its rank, season and colour', wt.head === 'Saint Leo the Great, pope and doctor' && wt.sub === 'Memorial · Ordinary Time' && /^[A-Za-z]+day [0-9]+ [A-Za-z]+$/.test(wt.k.trim()) && /c-white/.test(wt.cls), JSON.stringify([wt.head, wt.sub, wt.k, wt.cls]));
+  check('…with a book (readings, Universalis) and a halo figure (about today, Vatican News), both pictures only', wt.btns.length === 2 && wt.btns[0] === `|Today’s Mass readings>https://universalis.com/europe.england.westminster/${tdn}/mass.htm` && wt.btns[1] === `|About today’s saint or feast>https://www.vaticannews.va/en/saints/${tm}/${tdd}.html`, wt.btns.join(' || '));
+  await shot('public-390-light-top', false);
+  // switched off in the parish's settings: no WhatsApp and no card
+  T('organizations').find(o => o.id === 'org-A').gateway_whatsapp = null; T('organizations').find(o => o.id === 'org-A').gateway_daily = false;
+  await open(page, "document.querySelector('.door')");
+  check('with no WhatsApp link and the card switched off, neither appears', await ev(`!document.querySelector('a.ic[href*="whatsapp.com"]') && !document.querySelector('section.today')`));
+  T('organizations').find(o => o.id === 'org-A').gateway_whatsapp = 'https://whatsapp.com/channel/0029VaAbCdEf12345'; T('organizations').find(o => o.id === 'org-A').gateway_daily = true;
+  await open(page, "document.querySelector('.door')");
+  await view(390, 844, true); await open(page, "document.querySelector('section.today')"); await shot('public-390-dark-top', false); await view(390, 844, false);
+
   // ---- notices: a normal one opens a panel; an urgent one puts its message in the bar
   await ev(`document.getElementById('notices').click()`);
   check('the notices bar opens a panel with the full message and link', await ev(`!document.getElementById('sheet').hidden && document.querySelector('#sheetBody .note p').textContent.includes('office is closed') && !!document.querySelector('#sheetBody a.more')`));
@@ -172,11 +203,13 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   const loginAs = async (token, user) => {
     const dbgLog = (m) => { if (process.env.UI_DEBUG) console.log('  step ' + m); };
     dbgLog('login: open index');
-    await open(base + '/index.html', "document.getElementById('app')");
+    // set the login from a plain page that is not the app, so the app being left cannot write its old login back over it
+    await open(base + '/theme.css', 'document.body');
     dbgLog('login: set session');
     await ev(`localStorage.setItem('pc_session', JSON.stringify({ session: ${JSON.stringify(token)}, user: ${JSON.stringify(user)}, campaigns: [], org: null, lastCampaignId: null })); 'ok'`);
     dbgLog('login: reopen');
-    await open(base + '/index.html', "document.querySelector('#headerRight button')");
+    await ev(`window.__old = true; 'ok'`);   // the page being left can still answer for a moment after navigating: tell it apart from the new one
+    await open(base + '/index.html', "!window.__old && document.querySelector('#headerRight button')");
     dbgLog('login: switch to admin');
     await ev(`viewMode = 'admin'; render(); 'ok'`);
     dbgLog('login: done');
@@ -191,6 +224,19 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   const am = await ev(MEASURE_ADMIN);
   check('admin tab: no sideways scroll at 390px, tap targets 44px or larger', !am.hscroll && am.smallTargets.length === 0, am.smallTargets.slice(0, 5).join(' | ') + ' scrollWidth ' + am.scrollWidth);
   await shot('admin-390-light-admin', true);
+  // WhatsApp channel and the daily card
+  const daySwitch = `.gw-switchrow input[aria-label="Show today's feast and Mass readings"]`;
+  check('the tab shows the WhatsApp box (with the current link) and the daily-card switch', await ev(`document.getElementById('gwWhatsapp').value === 'https://whatsapp.com/channel/0029VaAbCdEf12345' && !!document.querySelector(${JSON.stringify(daySwitch)})`));
+  await typeInto('gwWhatsapp', 'https://evil.example/channel/0029VaAbCdEf12345');
+  await click('button', 'Save WhatsApp and daily card'); await waitFor(`document.getElementById('toast').textContent.length > 0`); await sleep(400);
+  check('a link that is not a WhatsApp channel is refused in plain words, and the last good one stays', /Paste the channel link/.test(await toastText()) && T('organizations').find(o => o.id === 'org-A').gateway_whatsapp === 'https://whatsapp.com/channel/0029VaAbCdEf12345', await toastText());
+  await typeInto('gwWhatsapp', 'https://whatsapp.com/channel/0029VbNewChannel9999');
+  await ev(`(() => { const b = document.querySelector(${JSON.stringify(daySwitch)}); b.checked = false; b.dispatchEvent(new Event('change', { bubbles: true })); return 'ok'; })()`);
+  await click('button', 'Save WhatsApp and daily card'); await waitFor(`document.getElementById('toast').textContent === '✓ Saved'`);
+  check('a good channel link and the switch are saved, with "✓ Saved"', (await toastText()) === '✓ Saved' && T('organizations').find(o => o.id === 'org-A').gateway_whatsapp === 'https://whatsapp.com/channel/0029VbNewChannel9999' && T('organizations').find(o => o.id === 'org-A').gateway_daily === false);
+  await typeInto('gwWhatsapp', 'https://whatsapp.com/channel/0029VaAbCdEf12345');
+  await ev(`(() => { const b = document.querySelector(${JSON.stringify(daySwitch)}); b.checked = true; b.dispatchEvent(new Event('change', { bubbles: true })); return 'ok'; })()`);
+  await click('button', 'Save WhatsApp and daily card'); await waitFor(`document.getElementById('toast').textContent === '✓ Saved'`);
   // links
   await typeInto('gwU0', 'javascript:alert(1)');
   check('a bad link address is flagged as you type', await ev(`document.getElementById('gwLm0').classList.contains('err') && document.getElementById('gwU0').classList.contains('gw-bad')`));
@@ -277,7 +323,9 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   // the SuperAdmin
   await loginAs(sessions.sa, { id: 'uA-sa', name: 'superadmin', role: 'superadmin', org_id: 'org-A', mobile: '07000000001' });
   await ev(`setAdminTab('parishpage'); 'ok'`);
-  check('SuperAdmin sees the address, the name and the on/off switch', await waitFor(`document.getElementById('gwSlug') && document.querySelector('.gw-switchrow input[aria-label="Page is on"]:checked')`));
+  const saSees = await waitFor(`document.getElementById('gwSlug') && document.querySelector('.gw-switchrow input[aria-label="Page is on"]:checked')`);
+  check('SuperAdmin sees the address, the name and the on/off switch', saSees);
+  if (!saSees) console.log('  (what the screen shows instead: ' + JSON.stringify(await ev(`(document.getElementById('adminContent') || document.body).textContent.slice(0, 300) + ' | enabled=' + ${JSON.stringify(T('organizations').find(o => o.id === 'org-A').gateway_enabled)} + ' | can_manage=' + (typeof gw !== 'undefined' && gw && gw.d && gw.d.can_manage) + ' | stored role=' + JSON.parse(localStorage.getItem('pc_session')).user.role + ' | tab=' + (typeof adminTab !== 'undefined' ? adminTab : '?') + ' | url=' + location.pathname`)) + ')');
   const sm = await ev(MEASURE_ADMIN);
   check('SuperAdmin view: no sideways scroll, tap targets 44px or larger', !sm.hscroll && sm.smallTargets.length === 0, sm.smallTargets.slice(0, 5).join(' | '));
   await shot('admin-390-light-superadmin', true);

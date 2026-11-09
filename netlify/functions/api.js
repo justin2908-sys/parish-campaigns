@@ -848,11 +848,17 @@ async function syncCheckout(payment) {
     if (payment.status === 'failed') await restoreRegistrationAfterLatePayment(payment, tx.transaction_code);
     await supabase.from('tickets').update({ status: 'paid' }).eq('payment_id', payment.id);
     await supabase.from('registrations').update({ status: 'submitted' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // a paid registration is now in
+    await shopOrderPaid(payment);   // a Repository order for this payment is now paid (or is taken back if it had been given up)
+    await listingPaid(payment);     // a Listings fee: the listing now waits for the office to approve it
+    await candlePaid(payment);      // a candle request: now paid, so it goes on the list
     return 'paid';
   }
   if ((data.status === 'FAILED' || data.status === 'EXPIRED') && payment.status === 'pending') {
     await supabase.from('payments').update({ status: 'failed' }).eq('id', payment.id);
     await supabase.from('registrations').update({ status: 'cancelled', decision_note: 'Payment not completed' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // the place goes back
+    await shopOrderFailed(payment);   // a Repository order for this payment is cancelled and its stock goes back
+    await listingFailed(payment);     // a Listings fee that never came: the listing is cancelled
+    await candleFailed(payment);      // a candle request that was never paid is cancelled
     // A PHYSICAL ticket stays 'held' — it's already in someone's hand, so it must never
     // quietly become resellable; only an explicit Admin Void does that. An ONLINE ticket was
     // never physically handed to anyone, so an unpaid one is simply released back to its series.
@@ -939,6 +945,7 @@ async function listCampaigns(session, { include_inactive } = {}) {
   }
   // Something to sell from only appears while it is actually open: not before its opening date, not after it closes.
   if (sellableOnly) visible = visible.filter(c => c.kind !== 'registration' && campaignOpenState(c) === 'open');
+  visible = visible.filter(c => !shopIsHiddenCampaign(c));   // the Repository's weekend campaigns and the Listings months are never listed
 
   return {
     campaigns: visible.map(c => ({
@@ -1911,15 +1918,22 @@ async function recordRefund(session, { payment_id, amount, note }) {
 }
 
 // Lump-sum cash reconciliation: oldest-first greedy match against a seller's pending cash payments
-async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
+async function cashRecon(session, { seller_id, campaign_id, amount_received, expected_pending }) {
   requireOrgRole(session, ['admin', 'superadmin', 'finance']);
   if (!campaign_id) throw httpError(400, 'A campaign must be selected — cash is reconciled per campaign, not lumped together');
   await requireCampaignsInOwnOrg(session, [campaign_id]);
+  const handed = Math.round(Number(amount_received) * 100) / 100;
+  if (amount_received === '' || amount_received === null || amount_received === undefined || !Number.isFinite(handed) || handed <= 0) throw httpError(400, 'Enter the amount of cash handed over (more than £0).');
   const { data: pending } = await supabase.from('payments')
     .select('*').eq('seller_id', seller_id).eq('campaign_id', campaign_id).eq('method', 'cash').eq('status', 'pending')
     .order('created_at', { ascending: true });
+  // The screen showed what this seller was holding when it was opened. If that has moved (more sales, a void) the amount being counted is checked against the wrong figure, so stop and say so.
+  if (expected_pending !== undefined && expected_pending !== null) {
+    const nowTotal = Math.round((pending || []).reduce((t, p) => t + Math.round(Number(p.amount) * 100), 0)) / 100;
+    if (Math.abs(nowTotal - Number(expected_pending)) > 0.004) throw httpError(409, `The cash this seller is holding has changed since you opened this screen (it is now £${nowTotal.toFixed(2)}). Please look at the new amount and try again.`);
+  }
 
-  let remaining = Number(amount_received);
+  let remaining = handed;
   const matched = [];
   for (const p of pending || []) {
     if (remaining + 1e-9 >= Number(p.amount)) {
@@ -1936,7 +1950,7 @@ async function cashRecon(session, { seller_id, campaign_id, amount_received }) {
   const isShortfall = remaining > 0 && stillPendingRows.length > 0;
 
   const { data: reconRow, error } = await supabase.from('cash_recon').insert({
-    seller_id, campaign_id, amount_received, confirmed_by: session.uid,
+    seller_id, campaign_id, amount_received: handed, confirmed_by: session.uid,
     fully_matched: remaining === 0,
     surplus_amount: isSurplus ? remaining : 0,
     shortfall_amount: isShortfall ? remaining : 0,
@@ -2858,8 +2872,9 @@ async function publicFindRegistrations({ campaign_id, contact_value }) {
 async function registrationForms(session) {
   requireOrgRole(session, CONFIDENTIAL_ROLES);
   await requireConfidentiality(session);
-  const { data: camps } = await supabase.from('campaigns').select('*').eq('org_id', session.org_id).eq('kind', 'registration').eq('binned', false).order('created_at', { ascending: false });
-  const ids = (camps || []).map(c => c.id);
+  const { data: campsAll } = await supabase.from('campaigns').select('*').eq('org_id', session.org_id).eq('kind', 'registration').eq('binned', false).order('created_at', { ascending: false });
+  const camps = (campsAll || []).filter(c => !shopIsHiddenCampaign(c));   // the Repository's hidden weekend campaigns are not forms
+  const ids = camps.map(c => c.id);
   const [{ data: regs }, { data: waits }, { data: users }] = await Promise.all([
     ids.length ? supabase.from('registrations').select('campaign_id, status, party_size').in('campaign_id', ids) : { data: [] },
     ids.length ? supabase.from('waiting_list').select('campaign_id').in('campaign_id', ids) : { data: [] },
@@ -3433,25 +3448,77 @@ async function gwOrders(orgId) {
   return out;
 }
 
+// ---- "Today in the Church": the day's feast or celebration, and where to read the Mass readings.
+// The name of the day comes from the open General Roman Calendar data (calapi.inadiutorium.cz, which serves plain http only).
+// The readings text is copyrighted, so it is never copied: the page links to Universalis, which publishes the readings as they are read
+// at Mass in England and Wales. "About today" goes to Vatican News' Saint of the Day for that date. If the calendar service is
+// unreachable the page still shows the two links, just without the name of the day; it never fails because of it.
+const GW_LITURGY_URL = 'http://calapi.inadiutorium.cz/api/v0/en/calendars/general-en/';
+const GW_READINGS_BASE = 'https://universalis.com/europe.england.westminster/';
+const GW_SAINTS_BASE = 'https://www.vaticannews.va/en/saints/';
+const GW_COLOURS = ['white', 'red', 'green', 'violet', 'rose', 'black'];
+const GW_SEASONS = { ordinary: 'Ordinary Time', advent: 'Advent', christmas: 'Christmas', lent: 'Lent', easter: 'Easter' };
+const GW_RANKS = { solemnity: 'Solemnity', feast: 'Feast', memorial: 'Memorial', 'optional memorial': 'Optional memorial', sunday: 'Sunday' };
+const gwLiturgyCache = new Map();   // 'YYYY-MM-DD' -> { at, value }; a good answer is kept for hours, a failure only for two minutes
+async function gwLiturgicalDay(date, fetchImpl) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const hit = gwLiturgyCache.get(date), nowMs = Date.now();
+  if (hit && nowMs - hit.at < (hit.value ? 12 * 3600e3 : 120e3)) return hit.value;
+  let value = null;
+  try {
+    const [y, m, d] = date.split('-').map(Number);
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 4000);
+    let r; try { r = await (fetchImpl || fetch)(`${GW_LITURGY_URL}${y}/${m}/${d}`, { signal: ctl.signal, headers: { Accept: 'application/json' } }); } finally { clearTimeout(timer); }
+    if (r && r.ok) {
+      const j = await r.json(), c = Array.isArray(j.celebrations) ? j.celebrations[0] : null;
+      if (j.date === date && c && typeof c.title === 'string' && c.title.trim() && c.title.length <= 160) {
+        const rank = String(c.rank || '').toLowerCase();
+        value = {
+          title: c.title.trim(),
+          rank: GW_RANKS[rank] || '',
+          season: GW_SEASONS[String(j.season || '').toLowerCase()] || '',
+          colour: GW_COLOURS.includes(String(c.colour || '').toLowerCase()) ? String(c.colour).toLowerCase() : null,
+        };
+      }
+    }
+  } catch { value = null; }
+  if (gwLiturgyCache.size > 30) gwLiturgyCache.delete(gwLiturgyCache.keys().next().value);
+  gwLiturgyCache.set(date, { at: nowMs, value });
+  return value;
+}
+async function gwDaily(org, today) {
+  if (org.gateway_daily === false) return null;
+  const celebration = await gwLiturgicalDay(today);
+  return {
+    date: today, celebration,
+    readings_url: `${GW_READINGS_BASE}${today.replace(/-/g, '')}/mass.htm`,
+    about_url: `${GW_SAINTS_BASE}${today.slice(5, 7)}/${today.slice(8, 10)}.html`,
+  };
+}
+
 // ---- the public page's data
 const GATEWAY_PUBLIC_MAX = 240, GATEWAY_PUBLIC_WINDOW_SECONDS = 300;
 async function publicGateway({ slug }) {
   const s = String(slug == null ? '' : slug).trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
   const [org, hits] = await Promise.all([
-    supabase.from('organizations').select('id, name, display_name, address, contact_email, timezone, gateway_enabled, gateway_phone, gateway_hours').eq('slug', s).maybeSingle().then(r => r.data),
+    supabase.from('organizations').select('id, name, display_name, address, contact_email, timezone, gateway_enabled, gateway_phone, gateway_hours, gateway_whatsapp, gateway_daily').eq('slug', s).maybeSingle().then(r => r.data),
     clientIp ? rateHit(`gw:${clientIp}`, GATEWAY_PUBLIC_WINDOW_SECONDS) : 0,
   ]);
   if (hits > GATEWAY_PUBLIC_MAX) throw httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
   if (!org || !org.gateway_enabled) throw httpError(404, 'This page is not available.');
   const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London';
   const now = new Date(), today = gwToday(tz, now);
-  const [linksRes, annsRes, campsRes, itemsRes, orders] = await Promise.all([
+  const [linksRes, annsRes, campsRes, itemsRes, orders, daily, shopRow, listingsRow, candlesRow] = await Promise.all([
     supabase.from('gateway_links').select('position, label, sub, url').eq('org_id', org.id).order('position'),
     supabase.from('gateway_announcements').select('message, link_url, urgent, starts_at, ends_at, created_at').eq('org_id', org.id).lte('starts_at', now.toISOString()).order('created_at', { ascending: false }).limit(50),
     supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, places, waiting_list, gateway_cta').eq('org_id', org.id).eq('listed_on_gateway', true).eq('binned', false),
     supabase.from('gateway_items').select('id, section, label, url, cta, starts_on, ends_on').eq('org_id', org.id).eq('listed', true),
     gwOrders(org.id),
+    gwDaily(org, today),
+    shopSettings(org.id),
+    listingSettings(org.id),
+    candleSettings(org.id),
   ]);
   const wording = GATEWAY_WORDING[GATEWAY_VERTICAL];
   const live = (annsRes.data || []).find(a => !a.ends_at || new Date(a.ends_at) > now);   // newest one that has started and not ended
@@ -3480,7 +3547,11 @@ async function publicGateway({ slug }) {
   const sections = {};
   for (const sec of GATEWAY_SECTIONS) sections[sec] = gwSort([...campaigns, ...manual].filter(x => x.section === sec).map(x => x.item), orders[sec]);
   return {
-    org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null },
+    org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null, whatsapp: org.gateway_whatsapp || null },
+    daily,
+    candles: candlesRow && candlesRow.enabled && candleActiveAltars(candlesRow).length ? { path: `/candles/${s}` } : null,   // Light a Candle, only while it is open
+    listings: listingsRow && listingsRow.enabled ? { path: `/listings/${s}` } : null,   // the Listings shortcut, only while it is open
+    shop: shopRow && shopRow.enabled ? { path: `/shop/${s}` } : null,   // the Repository: a shopping-bag shortcut on the page, only while it is open for orders
     links: (linksRes.data || []).map(l => ({ label: l.label, sub: l.sub || '', url: l.url })),
     announcement: live ? { message: live.message, link_url: live.link_url || null, urgent: !!live.urgent, ends_at: live.ends_at || null } : null,
     sections,
@@ -3490,7 +3561,7 @@ async function publicGateway({ slug }) {
 // ---- the admin screen
 async function gwOrg(session) {
   requireOrgRole(session, GATEWAY_ROLES);
-  const { data: org } = await supabase.from('organizations').select('id, name, slug, gateway_enabled, timezone, display_name, gateway_phone, gateway_hours').eq('id', session.org_id).maybeSingle();
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, gateway_enabled, timezone, display_name, gateway_phone, gateway_hours, gateway_whatsapp, gateway_daily').eq('id', session.org_id).maybeSingle();
   if (!org) throw httpError(404, 'Organisation not found');
   if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
   return org;
@@ -3506,11 +3577,11 @@ async function gatewayGet(session) {
   const [linksRes, annsRes, campsRes, itemsRes, orders] = await Promise.all([
     supabase.from('gateway_links').select('position, label, sub, url').eq('org_id', org.id).order('position'),
     supabase.from('gateway_announcements').select('id, message, link_url, urgent, starts_at, ends_at, created_at').eq('org_id', org.id).order('created_at', { ascending: false }).limit(20),
-    supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, listed_on_gateway, gateway_cta').eq('org_id', org.id).eq('binned', false),
+    supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, listed_on_gateway, gateway_cta, form_def').eq('org_id', org.id).eq('binned', false),
     supabase.from('gateway_items').select('id, section, label, url, cta, starts_on, ends_on, listed').eq('org_id', org.id),
     gwOrders(org.id),
   ]);
-  const camps = campsRes.data || [];
+  const camps = (campsRes.data || []).filter(c => !shopIsHiddenCampaign(c));   // the Repository's hidden weekend campaigns are not on offer
   const online = await gwOnlineCampaignIds(camps.filter(c => c.kind !== 'registration').map(c => c.id));
   const rows = [
     ...camps.map(c => {
@@ -3527,7 +3598,7 @@ async function gatewayGet(session) {
   const link = (n) => { const l = (linksRes.data || []).find(x => x.position === n); return { position: n, label: l ? l.label : '', sub: l ? l.sub : '', url: l ? l.url : '' }; };
   return {
     can_manage: session.role === 'superadmin',
-    org: { name: org.name, slug: org.slug || '', enabled: !!org.gateway_enabled, timezone: tz, display_name: org.display_name || '', phone: org.gateway_phone || '', hours: org.gateway_hours || '', page_path: org.slug ? `/go/${org.slug}` : null },
+    org: { name: org.name, slug: org.slug || '', enabled: !!org.gateway_enabled, timezone: tz, display_name: org.display_name || '', phone: org.gateway_phone || '', hours: org.gateway_hours || '', whatsapp: org.gateway_whatsapp || '', daily: org.gateway_daily !== false, page_path: org.slug ? `/go/${org.slug}` : null },
     links: [link(1), link(2), link(3)],
     announcement: current ? { message: current.message, link_url: current.link_url || '', urgent: !!current.urgent, starts_at: gwIsoToLocal(current.starts_at, tz), ends_at: gwIsoToLocal(current.ends_at, tz), state: gwAnnouncementState(current, now) } : null,
     sections, today, now_local: gwIsoToLocal(now.toISOString(), tz),
@@ -3672,9 +3743,21 @@ async function campaignSetListed(session, { campaign_id, listed, cta }) {
 }
 
 // ----- the organisation's own details on the page
-async function gatewaySetDetails(session, { phone, hours }) {
+// The WhatsApp channel link: only a real channel address (https://whatsapp.com/channel/<code>) is accepted, so nothing else can be put on the button.
+function gwWhatsapp(v) {
+  const s = gwUrl(v, 'The WhatsApp channel link');
+  if (!s) return null;
+  const u = new URL(s);
+  if (!/^(www\.)?whatsapp\.com$/i.test(u.hostname) || !/^\/channel\/[A-Za-z0-9_-]{8,64}\/?$/.test(u.pathname)) {
+    throw httpError(400, 'Paste the channel link from WhatsApp. It looks like https://whatsapp.com/channel/… (open your channel, tap its name, then “Share” or “Copy link”).');
+  }
+  return `https://whatsapp.com${u.pathname.replace(/\/$/, '')}`;   // no query or tracking parts
+}
+async function gatewaySetDetails(session, { phone, hours, whatsapp, daily }) {
   const org = await gwOrg(session);
   const patch = { gateway_phone: gwText(phone, 40, 'The phone number') || null, gateway_hours: gwText(hours, 120, 'The office hours') || null };
+  if (whatsapp !== undefined) patch.gateway_whatsapp = gwWhatsapp(whatsapp);   // left out = unchanged (an older screen never wipes it)
+  if (daily !== undefined) patch.gateway_daily = !!daily;
   const { error } = await supabase.from('organizations').update(patch).eq('id', org.id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
@@ -3726,6 +3809,9 @@ READ_ONLY_PUBLIC.add('public_gateway');   // a pure look-up, so the flood check 
 const baseHandler = exports.handler;
 exports.handler = async (event) => {
   const res = await baseHandler(event);
+  if (res && res.statusCode === 200 && ['public_shop', 'public_listings'].includes(String(event.path || '').split('/').pop())) {   // the shop window may be reused for half a minute; the order itself always checks the live stock
+    res.headers = { ...res.headers, 'Cache-Control': 'public, max-age=30, stale-while-revalidate=120' };
+  }
   if (res && res.statusCode === 200 && String(event.path || '').split('/').pop() === 'public_gateway') {
     res.headers = { ...res.headers, 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' };
   }
@@ -3749,17 +3835,20 @@ async function ledgerCheck(session, { campaign_id } = {}) {
   const scoped = campaign_id ? [campaign_id] : ids;
   if (!scoped.length) return { ok: true, problems: [], checked: { payments: 0, tickets: 0 } };
   const nameOf = Object.fromEntries((orgCampaigns || []).map(c => [c.id, c.name]));
-  const [payments, sold, tiersRes, blocksRes, regsRes, unsoldRes] = await Promise.all([
+  const [payments, sold, tiersRes, blocksRes, regsRes, unsoldRes, shopOrdersRes, listingsRes, candlesRes] = await Promise.all([
     fetchAll(() => supabase.from('payments').select('id, campaign_id, method, status, amount, ticket_snapshot, sumup_transaction_code, created_at, attention_done_at').in('campaign_id', scoped).order('id')),
     fetchAll(() => supabase.from('tickets').select('id, campaign_id, block_id, ticket_number, status, payment_id').in('campaign_id', scoped).neq('status', 'unsold').order('id')),
     supabase.from('tiers').select('id, price').in('campaign_id', scoped),
     supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', scoped),
     supabase.from('registrations').select('payment_id').not('payment_id', 'is', null).in('campaign_id', scoped),
     supabase.from('tickets').select('id', { count: 'exact', head: true }).in('campaign_id', scoped).eq('status', 'unsold').not('payment_id', 'is', null),
+    supabase.from('repository_orders').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
+    supabase.from('listings').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
+    supabase.from('candle_requests').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
   ]);
   const price = Object.fromEntries((tiersRes.data || []).map(t => [t.id, Number(t.price)]));
   const prefix = Object.fromEntries((blocksRes.data || []).map(b => [b.id, b.number_prefix || '']));
-  const regPay = new Set((regsRes.data || []).map(r => r.payment_id));
+  const regPay = new Set([...(regsRes.data || []), ...(shopOrdersRes.data || []), ...(listingsRes.data || []), ...(candlesRes.data || [])].map(r => r.payment_id));   // payments for a registration or a Repository order hold no tickets, on purpose
   const byId = new Map(payments.map(p => [p.id, p]));
   const live = new Map();
   for (const t of sold) if (t.payment_id) { if (!live.has(t.payment_id)) live.set(t.payment_id, []); live.get(t.payment_id).push(t); }
@@ -3871,3 +3960,1505 @@ Object.assign(actions, {
   ledger_check: (s, b) => ledgerCheck(s, b),
   sumup_reconcile: (s, b) => sumupReconcile(s, b),
 });
+
+// ---------- The Repository (parish shop) online ----------
+// A parishioner picks items on /shop/<address>, chooses which weekend Mass to collect at, and pays by card on the page. Orders close at a
+// cut-off each week (Wednesday midnight by default): an order made after it is for the following weekend. The office reads the orders
+// (grouped by weekend and Mass), the repository manager makes up each one under its reference, and ticks it prepared and collected.
+//  * The items are the parish's own list (brought across once from SumUp's item export, then kept here); stock is optional per item.
+//  * Payment is exactly the existing SumUp card payment: a row in `payments`, the same notification, the same sweep, refunds, books check.
+//    Each collection weekend has one hidden campaign (kind registration, form_def.shop) only so that payment has somewhere to sit and its
+//    personal details are cleared by the normal retention job. It never appears in any list of campaigns or forms.
+//  * Name and contact are kept on the payment only, never on the order.
+const SHOP_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const SHOP_MAX_LINES = 40, SHOP_MAX_QTY = 20, SHOP_MAX_TOTAL = 500, SHOP_WEEKENDS_OFFERED = 2, SHOP_MAX_SLOTS = 8, SHOP_MAX_IMPORT_ROWS = 1000;
+const shopRef = (n) => `REP-${String(n).padStart(3, '0')}`;
+const shopAddDays = (iso, n) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const shopWeekdayOf = (iso) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+const shopDayLabel = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+const shopTimeLabel = (hhmm) => { const [h, m] = String(hhmm).split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h >= 12 ? 'pm' : 'am'}`; };
+const SHOP_WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const shopSaturdayOf = (iso) => (shopWeekdayOf(iso) === 0 ? shopAddDays(iso, -1) : shopAddDays(iso, 6 - shopWeekdayOf(iso)));   // the Saturday of the collection weekend
+
+async function shopSettings(orgId, { create } = {}) {
+  let { data } = await supabase.from('repository_settings').select('*').eq('org_id', orgId).maybeSingle();
+  if (!data && create) {
+    await supabase.from('repository_settings').upsert({ org_id: orgId }, { onConflict: 'org_id' });
+    ({ data } = await supabase.from('repository_settings').select('*').eq('org_id', orgId).maybeSingle());
+  }
+  return data || { org_id: orgId, enabled: false, slots: [], cutoff_weekday: 3, cutoff_time: '23:59', intro_text: null, next_ref: 1 };
+}
+const shopCutoffText = (s) => `Order by ${SHOP_WEEKDAYS[s.cutoff_weekday]} ${s.cutoff_time === '23:59' ? 'midnight' : shopTimeLabel(s.cutoff_time)} to collect this weekend. Later orders are for the following weekend.`;
+
+// The collection choices on offer right now: the next weekends whose cut-off has not passed, each with the parish's Masses on that weekend.
+function shopOptions(settings, tz, now) {
+  const slots = (settings.slots || []).slice().sort((a, b) => (b.weekday === 6) - (a.weekday === 6) || String(a.time).localeCompare(String(b.time)));
+  if (!slots.length) return [];
+  const today = gwToday(tz, now);
+  const toSat = (6 - shopWeekdayOf(today) + 7) % 7;
+  const back = (6 - settings.cutoff_weekday + 7) % 7;   // days from the cut-off day to that weekend's Saturday
+  const out = [];
+  let found = 0;
+  for (let w = 0; w < 8 && found < SHOP_WEEKENDS_OFFERED; w++) {
+    const sat = shopAddDays(today, toSat + 7 * w);
+    const closesIso = gwLocalToIso(`${shopAddDays(sat, -back)}T${settings.cutoff_time}`, tz);
+    if (!closesIso || new Date(closesIso) <= now) continue;
+    found++;
+    for (const s of slots) {
+      const date = s.weekday === 6 ? sat : shopAddDays(sat, 1);
+      out.push({ key: `${date}|${s.id}`, date, slot_id: s.id, weekend: sat, closes_at: closesIso, label: `${shopDayLabel(date)}, ${shopTimeLabel(s.time)} — ${s.label}` });
+    }
+  }
+  return out;
+}
+
+function shopCleanSlots(v) {
+  if (!Array.isArray(v)) throw httpError(400, 'The Mass times are missing.');
+  if (v.length > SHOP_MAX_SLOTS) throw httpError(400, `Add up to ${SHOP_MAX_SLOTS} Mass times.`);
+  const seen = new Set(), out = [];
+  for (const s of v) {
+    const label = gwText(s && s.label, 60, 'The Mass name', { required: true });
+    const weekday = Number(s && s.weekday);
+    if (weekday !== 6 && weekday !== 0) throw httpError(400, 'Each Mass must be on a Saturday or a Sunday.');
+    const time = String((s && s.time) || '').trim();
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw httpError(400, 'Give each Mass a time, like 18:00.');
+    let id = String((s && s.id) || '').trim();
+    if (!/^[a-z0-9]{2,12}$/.test(id) || seen.has(id)) id = 's' + crypto.randomBytes(3).toString('hex');
+    seen.add(id);
+    out.push({ id, label, weekday, time });
+  }
+  return out;
+}
+
+// One hidden campaign per collection weekend: the home for that weekend's payments, and the date its personal details are cleared by.
+async function shopWeekendCampaign(orgId, weekend) {
+  const find = async () => { const { data } = await supabase.from('repository_weekends').select('campaign_id').eq('org_id', orgId).eq('weekend', weekend).maybeSingle(); return data ? data.campaign_id : null; };
+  const have = await find();
+  if (have) return have;
+  const { data: c, error } = await supabase.from('campaigns').insert({
+    org_id: orgId, name: `Repository, weekend of ${shopDayLabel(weekend).replace(/^\w+ /, '')}`, kind: 'registration', age_restricted: false, public_only: false, public_page_enabled: false,
+    active: true, is_draft: false, listed_on_gateway: false, keep_until: shopAddDays(weekend, 31), form_def: { shop: true, weekend },
+  }).select().single();
+  if (error || !c) throw httpError(500, 'Could not start your order — please try again.');
+  const { error: linkErr } = await supabase.from('repository_weekends').insert({ org_id: orgId, weekend, campaign_id: c.id });
+  if (linkErr) {   // somebody else made this weekend's campaign a moment ago: use theirs
+    await supabase.from('campaigns').delete().eq('id', c.id);
+    const again = await find();
+    if (again) return again;
+    throw httpError(500, 'Could not start your order — please try again.');
+  }
+  return c.id;
+}
+const shopIsHiddenCampaign = (c) => !!(c && c.form_def && (c.form_def.shop || c.form_def.listings || c.form_def.candles));   // the Repository's weekend campaigns, the Listings months and the Candles months
+
+// ----- the public side
+async function shopOrgBySlug(slug) {
+  const s = String(slug == null ? '' : slug).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  if (!org) throw httpError(404, 'This page is not available.');
+  const settings = await shopSettings(org.id);
+  if (!settings.enabled) throw httpError(404, 'The repository is not taking online orders right now.');
+  return { org, settings, tz: gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London' };
+}
+async function publicShop({ slug }) {
+  const { org, settings, tz } = await shopOrgBySlug(slug);
+  const now = new Date(), today = gwToday(tz, now);
+  const [{ data: items }, units] = await Promise.all([
+    supabase.from('repository_items').select('id, name, description, category, price, stock, sort, featured, added_at, image_path').eq('org_id', org.id).eq('available', true),
+    shopPopularity(org.id, now),
+  ]);
+  const newSince = new Date(now.getTime() - 14 * 864e5).toISOString();
+  const oldest = (items || []).reduce((m, i) => (i.added_at && (!m || i.added_at < m) ? i.added_at : m), null);
+  const hasOlder = !!oldest && oldest < newSince;   // the very first import is not "new": only items that arrive in a later sync are
+  const scored = (items || []).map(i => {
+    const out = i.stock === 0, season = shopSeason(i.category, today), pop = units.get(i.id) || 0, isNew = hasOlder && !!i.added_at && i.added_at >= newSince;
+    return { i, out, season, pop, isNew, score: (out ? -100 : 0) + (i.featured ? 6 : 0) + (season ? season.boost : 0) + Math.log2(1 + pop) * 3 + (isNew ? 1 : 0) };
+  });
+  const catSeason = new Map();   // a category is "in season" if any rule matches it today
+  for (const s of scored) if (s.season && !catSeason.has(s.i.category || '')) catSeason.set(s.i.category || '', s.season);
+  const catCount = new Map();
+  for (const s of scored) catCount.set(s.i.category || '', (catCount.get(s.i.category || '') || 0) + 1);
+  const cats = [...catCount.keys()].sort((a, b) => ((catSeason.get(b) ? catSeason.get(b).boost : 0) - (catSeason.get(a) ? catSeason.get(a).boost : 0)) || (a === '') - (b === '') || a.localeCompare(b));
+  const catRank = new Map(cats.map((c, n) => [c, n]));
+  scored.sort((a, b) => (catRank.get(a.i.category || '') - catRank.get(b.i.category || '')) || (b.score - a.score) || (a.i.sort - b.i.sort) || String(a.i.name).localeCompare(String(b.i.name)));
+  const live = scored.filter(s => !s.out);
+  const top = (list, n) => list.slice(0, n).map(s => s.i.id);
+  const byScore = (list) => list.slice().sort((a, b) => b.score - a.score || String(a.i.name).localeCompare(String(b.i.name)));
+  const seasonLabel = [...catSeason.values()].sort((a, b) => b.boost - a.boost)[0];
+  const shelves = [
+    { key: 'picks', title: 'Our picks', ids: top(byScore(live.filter(s => s.i.featured)), 10) },
+    { key: 'season', title: seasonLabel ? `In season: ${seasonLabel.label}` : 'In season', ids: top(byScore(live.filter(s => s.season)), 10) },
+    { key: 'popular', title: 'Popular right now', ids: top(byScore(live.filter(s => s.pop > 0)).sort((a, b) => b.pop - a.pop), 8) },
+    { key: 'new', title: 'New in', ids: top(byScore(live.filter(s => s.isNew)), 8) },
+  ].filter(sh => sh.ids.length >= 2 || (sh.key === 'picks' && sh.ids.length));
+  return {
+    org: { name: org.display_name || org.name },
+    intro: settings.intro_text || null,
+    cutoff_text: shopCutoffText(settings),
+    img_base: shopImageBase(),
+    categories: cats.map(c => ({ name: c, count: catCount.get(c), season: catSeason.has(c) })),
+    shelves,
+    items: scored.map(s => ({ id: s.i.id, name: s.i.name, description: s.i.description || '', category: s.i.category || '', price: Number(s.i.price), img: s.i.image_path || null,
+      sold_out: s.out, left: s.i.stock !== null && s.i.stock !== undefined && s.i.stock > 0 && s.i.stock <= 5 ? s.i.stock : null })),
+    options: shopOptions(settings, tz, now).map(o => ({ key: o.key, label: o.label, weekend: o.weekend })),
+  };
+}
+
+function shopOrderShape(o, lines, extra) {
+  return { id: o.id, ref: shopRef(o.ref_no), status: o.status, collect_date: o.collect_date, slot_label: o.slot_label, total: Number(o.total), created_at: o.created_at,
+    lines: (lines || []).map(l => ({ name: l.item_name, qty: l.qty, unit_price: Number(l.unit_price) })), ...(extra || {}) };
+}
+async function publicShopOrder({ slug, items, collect, name, phone, email, client_ref, website }) {
+  if (website) return { ok: true, order_id: null, ref: '', status: 'awaiting_payment' };   // the hidden spam-trap box was filled in: pretend, store nothing
+  if (clientIp && (await rateHit(`shop:${clientIp}`, 3600)) > 40) throw httpError(429, 'Too many orders from your connection — please try again later.');
+  client_ref = cleanClientRef(client_ref);
+  const { org, settings, tz } = await shopOrgBySlug(slug);
+  if (client_ref) {   // a lost reply and a second tap must not order twice
+    const { data: again } = await supabase.from('repository_orders').select('*').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+    if (again) {
+      const { data: pay } = again.payment_id ? await supabase.from('payments').select('link_url, status').eq('id', again.payment_id).maybeSingle() : { data: null };
+      return { ok: true, order_id: again.id, ref: shopRef(again.ref_no), status: again.status, total: Number(again.total), pay_url: again.status === 'awaiting_payment' && pay ? pay.link_url : null, replay: true };
+    }
+  }
+  // who is ordering, and how to reach them
+  const cleanedName = cleanName(name, 'Your name');
+  if (!cleanedName) throw httpError(400, 'Please enter your name.');
+  const hasPhone = !!String(phone || '').trim(), hasEmail = !!String(email || '').trim();
+  if (!hasPhone && !hasEmail) throw httpError(400, 'Please give a mobile number or an email address, so we can reach you about your order.');
+  const phoneV = hasPhone ? validateRegPhone(phone, 'your mobile number') : null;
+  const emailV = hasEmail ? validateRegEmail(email, 'your email address') : null;
+  // what they chose to buy
+  if (!Array.isArray(items) || !items.length) throw httpError(400, 'Please choose at least one item.');
+  if (items.length > SHOP_MAX_LINES) throw httpError(400, 'That is a lot of different items — please order in two goes.');
+  const want = new Map();
+  for (const l of items) {
+    const id = String(l && l.id || '');
+    const qty = Number(l && l.qty);
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !Number.isInteger(qty) || qty < 1 || qty > SHOP_MAX_QTY) throw httpError(400, `Please choose between 1 and ${SHOP_MAX_QTY} of each item.`);
+    want.set(id, (want.get(id) || 0) + qty);
+  }
+  if ([...want.values()].some(q => q > SHOP_MAX_QTY)) throw httpError(400, `Please choose no more than ${SHOP_MAX_QTY} of one item.`);
+  // when they will collect it: must be one of the choices on offer right now
+  const option = shopOptions(settings, tz, new Date()).find(o => o.key === String(collect || ''));
+  if (!option) throw httpError(409, 'That collection time is no longer available — please choose again.');
+  // the prices come from our own list, never from the page
+  const { data: rows } = await supabase.from('repository_items').select('id, name, price, stock, available').eq('org_id', org.id).in('id', [...want.keys()]);
+  const byId = new Map((rows || []).map(r => [r.id, r]));
+  let total = 0;
+  for (const [id, qty] of want) {
+    const it = byId.get(id);
+    if (!it || !it.available) throw httpError(409, `Sorry, ${it ? it.name : 'one of the items'} is no longer available — please look at your basket again.`);
+    if (it.stock !== null && it.stock !== undefined && it.stock < qty) throw httpError(409, it.stock === 0 ? `Sorry, ${it.name} has just sold out.` : `Sorry, only ${it.stock} of ${it.name} ${it.stock === 1 ? 'is' : 'are'} left.`);
+    total += Math.round(Number(it.price) * 100) * qty;
+  }
+  total = total / 100;
+  if (!(total > 0 && total <= SHOP_MAX_TOTAL)) throw httpError(400, `An order can be up to £${SHOP_MAX_TOTAL}. Please order the rest separately.`);
+  await enforcePublicPurchaseLimits(emailV || phoneV, 1);
+
+  const campaignId = await shopWeekendCampaign(org.id, option.weekend);
+  const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaignId, method: 'link', amount: total, status: 'pending', seller_id: null, payer_name: cleanedName, contact_value: emailV || phoneV, client_ip: clientIp || null }).select().single();
+  if (payErr) throw httpError(500, 'Could not start your payment — please try again.');
+  const voidPayment = (why) => supabase.from('payments').update({ status: 'void', voided: true, void_reason: why }).eq('id', pay.id);
+  const { data: claim, error: claimErr } = await supabase.rpc('shop_place_order', {
+    p_org: org.id, p_collect: option.date, p_slot_id: option.slot_id, p_slot_label: option.label,
+    p_lines: [...want].map(([item_id, qty]) => ({ item_id, qty })), p_expected_total: total, p_client_ref: client_ref, p_payment: pay.id,
+  });
+  if (claimErr) {
+    await voidPayment('order not saved');
+    const msg = String(claimErr.message || '');
+    let m;
+    if ((m = /SOLD_OUT:(.*):(\d+)/.exec(msg))) throw httpError(409, Number(m[2]) === 0 ? `Sorry, ${m[1]} has just sold out.` : `Sorry, only ${m[2]} of ${m[1]} ${Number(m[2]) === 1 ? 'is' : 'are'} left.`);
+    if ((m = /NOT_AVAILABLE:(.*)/.exec(msg))) throw httpError(409, `Sorry, ${m[1]} is no longer available — please look at your basket again.`);
+    if (msg.includes('PRICE_CHANGED')) throw httpError(409, 'A price has just changed — please look at your basket again.');
+    if (claimErr.code === '23505' && client_ref) {
+      const { data: again } = await supabase.from('repository_orders').select('id, ref_no, status, total').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+      if (again) return { ok: true, order_id: again.id, ref: shopRef(again.ref_no), status: again.status, total: Number(again.total), replay: true };
+    }
+    throw httpError(500, 'Could not save your order — please try again.');
+  }
+  const row = Array.isArray(claim) ? claim[0] : claim;
+  const created = await createSumupCheckout({ payment_id: pay.id, refSuffix: '', amount: total, campaignName: 'Repository', ticketNumbers: [shopRef(row.ref_no)],
+    description: `Repository order ${shopRef(row.ref_no)}`, redirectUrl: `${baseUrl}/shop.html?order=${row.order_id}` });
+  if (!created.ok) {
+    await supabase.rpc('shop_cancel_order', { p_order: row.order_id, p_reason: 'Could not start the payment', p_only_unpaid: true });
+    await voidPayment('could not create SumUp payment link');
+    throw httpError(502, created.message);
+  }
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', pay.id);
+  return { ok: true, order_id: row.order_id, ref: shopRef(row.ref_no), status: 'awaiting_payment', total, pay_url: created.pay_url };
+}
+// The buyer's own page: the reference and where the order stands (the id is unguessable; the page shows no contact details).
+async function publicShopStatus({ order_id }) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(order_id || ''))) throw httpError(400, 'order is required');
+  let { data: o } = await supabase.from('repository_orders').select('*').eq('id', order_id).maybeSingle();
+  if (!o) throw httpError(404, 'Order not found');
+  let pay = null;
+  if (o.payment_id) {
+    ({ data: pay } = await supabase.from('payments').select('*').eq('id', o.payment_id).maybeSingle());
+    if (pay && o.status === 'awaiting_payment') {
+      try { await syncCheckout(pay); } catch { /* SumUp unreachable: show what we know */ }
+      ({ data: o } = await supabase.from('repository_orders').select('*').eq('id', order_id).maybeSingle());
+    }
+  }
+  const [{ data: lines }, { data: org }] = await Promise.all([
+    supabase.from('repository_order_lines').select('item_name, qty, unit_price').eq('order_id', o.id),
+    supabase.from('organizations').select('name, display_name, slug, contact_email').eq('id', o.org_id).maybeSingle(),
+  ]);
+  return shopOrderShape(o, lines, { org_name: org ? (org.display_name || org.name) : '', org_slug: org ? org.slug : null, org_contact_email: org ? org.contact_email : null, pay_url: o.status === 'awaiting_payment' && pay ? pay.link_url : null });
+}
+
+// ----- what happens to an order when its payment is settled (called from syncCheckout; never allowed to break a payment check)
+async function shopOrderPaid(payment) {
+  try {
+    const { data: o } = await supabase.from('repository_orders').select('id, status, ref_no').eq('payment_id', payment.id).maybeSingle();
+    if (!o) return;
+    if (o.status === 'awaiting_payment') { await supabase.from('repository_orders').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', o.id); return; }
+    if (o.status === 'cancelled') {   // paid after we had given it up: take the stock back if it is still there, otherwise say so loudly
+      const { data: res } = await supabase.rpc('shop_reinstate_order', { p_order: o.id });
+      if (typeof res === 'string' && res.startsWith('SOLD_OUT:')) {
+        await supabase.from('payments').update({ attention_note: `Paid at SumUp, but ${res.slice(9)} had sold out before the payment arrived (order ${shopRef(o.ref_no)}). Refund this payment, or find the item and keep the order.`, attention_done_at: null, attention_done_by: null }).eq('id', payment.id);
+      }
+    }
+  } catch { /* the payment itself is already recorded; the office can see the order in the list */ }
+}
+async function shopOrderFailed(payment) {
+  try {
+    const { data: o } = await supabase.from('repository_orders').select('id').eq('payment_id', payment.id).maybeSingle();
+    if (o) await supabase.rpc('shop_cancel_order', { p_order: o.id, p_reason: 'Payment not completed', p_only_unpaid: true });
+  } catch { /* the sweep will try again */ }
+}
+
+// ----- the office side (Admin, SuperAdmin, Finance, Priest)
+async function shopOrgOfSession(session) {
+  requireOrgRole(session, SHOP_ROLES);
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone, gateway_enabled').eq('id', session.org_id).maybeSingle();
+  if (!org) throw httpError(404, 'Organisation not found');
+  if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
+  return org;
+}
+function shopItemShape(i) { return { id: i.id, name: i.name, description: i.description || '', category: i.category || '', sku: i.sku || '', barcode: i.barcode || '', price: Number(i.price), stock: i.stock === undefined ? null : i.stock, available: i.available !== false,
+  featured: !!i.featured, image: shopImageUrl(i.image_path), has_picture: !!i.image_src, from_sumup: !!i.sumup_variant_id }; }
+async function shopGet(session) {
+  const org = await shopOrgOfSession(session);
+  const settings = await shopSettings(org.id, { create: true });
+  const { data: items } = await supabase.from('repository_items').select('*').eq('org_id', org.id);
+  const list = (items || []).slice().sort((a, b) => String(a.category || '~').localeCompare(String(b.category || '~')) || (a.sort - b.sort) || String(a.name).localeCompare(String(b.name)));
+  return {
+    org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/shop/${org.slug}` : null, timezone: org.timezone },
+    settings: { enabled: !!settings.enabled, slots: settings.slots || [], cutoff_weekday: settings.cutoff_weekday, cutoff_time: settings.cutoff_time, intro_text: settings.intro_text || '', last_sync_at: settings.last_sync_at || null, last_sync_note: settings.last_sync_note || '' },
+    items: list.map(shopItemShape),
+    pictures_todo: [...new Set(list.filter(i => i.image_src && i.image_src !== i.image_done_src).map(i => i.image_src))],   // the office's browser makes these small pictures
+    options_now: shopOptions(settings, org.timezone, new Date()).map(o => ({ key: o.key, label: o.label })),
+    can_manage: ['superadmin', 'admin', 'finance', 'priest'].includes(session.role),
+  };
+}
+function shopCleanItem(b) {
+  const name = gwText(b.name, 120, 'The item name', { required: true });
+  const price = Math.round(Number(String(b.price == null ? '' : b.price).replace(/[£,\s]/g, '')) * 100) / 100;
+  if (!Number.isFinite(price) || price <= 0 || price > 500) throw httpError(400, 'The price must be more than £0 and no more than £500.');
+  let stock = null;
+  if (b.stock !== null && b.stock !== undefined && String(b.stock).trim() !== '') {
+    stock = Number(b.stock);
+    if (!Number.isInteger(stock) || stock < 0 || stock > 100000) throw httpError(400, 'The stock must be a whole number, 0 or more. Leave it empty if you do not count this item.');
+  }
+  return { name, price, stock, description: gwText(b.description, 300, 'The description') || null, category: gwText(b.category, 60, 'The category') || null, sku: gwText(b.sku, 60, 'The code') || null, available: b.available !== false, ...(b.featured === undefined ? {} : { featured: !!b.featured }) };
+}
+async function shopItemSave(session, b) {
+  const org = await shopOrgOfSession(session);
+  const row = shopCleanItem(b || {});
+  if (b.id) {
+    const { data: old } = await supabase.from('repository_items').select('id').eq('id', b.id).eq('org_id', org.id).maybeSingle();
+    if (!old) throw httpError(404, 'Item not found');
+    const { error } = await supabase.from('repository_items').update({ ...row, updated_at: new Date().toISOString() }).eq('id', old.id).eq('org_id', org.id);
+    if (error) throw httpError(400, error.message);
+    return { ok: true, id: old.id };
+  }
+  const { data, error } = await supabase.from('repository_items').insert({ ...row, org_id: org.id }).select('id').single();
+  if (error) throw httpError(400, error.message);
+  return { ok: true, id: data.id };
+}
+async function shopItemDelete(session, { id }) {
+  const org = await shopOrgOfSession(session);
+  const { data: old } = await supabase.from('repository_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!old) throw httpError(404, 'Item not found');
+  await supabase.from('repository_items').delete().eq('id', old.id).eq('org_id', org.id);   // past orders keep the item's name and price
+  return { ok: true };
+}
+async function shopItemSetAvailable(session, { id, available }) {
+  const org = await shopOrgOfSession(session);
+  const { data: old } = await supabase.from('repository_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!old) throw httpError(404, 'Item not found');
+  await supabase.from('repository_items').update({ available: !!available, updated_at: new Date().toISOString() }).eq('id', old.id).eq('org_id', org.id);
+  return { ok: true };
+}
+async function shopItemSetFeatured(session, { id, featured }) {   // "our pick": shown near the top of the shop
+  const org = await shopOrgOfSession(session);
+  const { data: old } = await supabase.from('repository_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!old) throw httpError(404, 'Item not found');
+  await supabase.from('repository_items').update({ featured: !!featured, updated_at: new Date().toISOString() }).eq('id', old.id).eq('org_id', org.id);
+  return { ok: true };
+}
+async function shopSetSettings(session, b) {
+  const org = await shopOrgOfSession(session);
+  const patch = { updated_at: new Date().toISOString() };
+  if (b.slots !== undefined) patch.slots = shopCleanSlots(b.slots);
+  if (b.cutoff_weekday !== undefined) {
+    const d = Number(b.cutoff_weekday);
+    if (!Number.isInteger(d) || d < 0 || d > 6) throw httpError(400, 'Choose the day orders close.');
+    patch.cutoff_weekday = d;
+  }
+  if (b.cutoff_time !== undefined) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.cutoff_time))) throw httpError(400, 'Give the closing time like 23:59.');
+    patch.cutoff_time = String(b.cutoff_time);
+  }
+  if (b.intro_text !== undefined) patch.intro_text = gwText(b.intro_text, 400, 'The welcome line') || null;
+  const current = await shopSettings(org.id, { create: true });
+  if (b.enabled !== undefined) {
+    if (b.enabled) {
+      if (!org.slug) throw httpError(400, 'Give the parish page an address first (Admin → Parish page).');
+      const slots = patch.slots || current.slots || [];
+      if (!slots.length) throw httpError(400, 'Add at least one Mass time before opening the repository to orders.');
+    }
+    patch.enabled = !!b.enabled;
+  }
+  const { error } = await supabase.from('repository_settings').update(patch).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// ----- bringing the items across from SumUp's export (Catalog → Items → Export). Whatever the columns are called, it looks for the
+// name, price, category, code, description and variation, shows what it found, and only saves when told to.
+function shopParseCsv(text) {
+  const t = String(text == null ? '' : text).replace(/^﻿/, '');
+  const first = t.split(/\r?\n/, 1)[0] || '';
+  const delim = [',', ';', '\t'].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const rows = [];
+  let row = [], cur = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === '"') { if (t[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === delim) { row.push(cur); cur = ''; }
+    else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else if (ch !== '\r') cur += ch;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.some(c => String(c).trim()));
+}
+function shopReadImport(text) {
+  const raw = String(text == null ? '' : text);
+  if (!raw.trim()) throw httpError(400, "That file looks empty. In SumUp, open Catalog, then Items, then Export, and open the file you get.");
+  if (raw.length > 1500000) throw httpError(400, 'That file is too large (1.5 MB at most).');
+  const rows = shopParseCsv(raw);
+  if (rows.length < 2) throw httpError(400, 'I could only find one line in that file. It needs a heading line and then one line per item.');
+  const norm = (h) => String(h).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const head = rows[0].map(norm);
+  if (head.includes('itemiddonotchange') || head.includes('variantiddonotchange')) {   // SumUp's own export
+    if (rows.length - 1 > SHOP_MAX_IMPORT_ROWS) throw httpError(400, `That file has more than ${SHOP_MAX_IMPORT_ROWS} lines. Please import it in parts.`);
+    return shopReadSumup(rows, head);
+  }
+  const col = (names) => { for (const n of names) { const i = head.indexOf(n); if (i >= 0) return i; } return -1; };
+  const iName = col(['itemname', 'name', 'item', 'productname', 'product', 'title']);
+  const iPrice = col(['price', 'unitprice', 'sellingprice', 'saleprice', 'priceincltax', 'pricegbp']);
+  if (iName < 0 || iPrice < 0) throw httpError(400, `I could not find the ${iName < 0 ? 'item name' : 'price'} column. The first line of the file should include a column called "${iName < 0 ? 'Item name' : 'Price'}". The columns I found are: ${rows[0].map(h => String(h).trim()).filter(Boolean).slice(0, 12).join(', ')}.`);
+  const iCat = col(['category', 'categoryname', 'group', 'itemcategory']), iSku = col(['sku', 'itemcode', 'code', 'barcode', 'itemsku']), iDesc = col(['description', 'desc', 'details', 'itemdescription']);
+  const iVar = col(['variation', 'variations', 'variationname', 'variant', 'option', 'size']);
+  if (rows.length - 1 > SHOP_MAX_IMPORT_ROWS) throw httpError(400, `That file has more than ${SHOP_MAX_IMPORT_ROWS} items. Please import it in parts.`);
+  const items = [], skipped = [], seen = new Set();
+  rows.slice(1).forEach((r, idx) => {
+    const line = idx + 2, cell = (i) => (i >= 0 && r[i] !== undefined ? String(r[i]).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() : '');
+    let name = cell(iName);
+    if (!name) { skipped.push({ line, reason: 'no item name' }); return; }
+    const variation = cell(iVar);
+    if (variation && !/^(regular|default|standard|none|n\/a|-)$/i.test(variation)) name = `${name} (${variation})`;
+    const price = Math.round(Number(cell(iPrice).replace(/[£,\s]/g, '')) * 100) / 100;
+    if (!Number.isFinite(price) || price <= 0) { skipped.push({ line, name, reason: 'no price' }); return; }
+    if (price > 500) { skipped.push({ line, name, reason: 'price over £500' }); return; }
+    if (name.length > 120) { skipped.push({ line, name: name.slice(0, 40), reason: 'name too long' }); return; }
+    const sku = cell(iSku).slice(0, 60), key = sku ? `s:${sku.toLowerCase()}` : `n:${name.toLowerCase()}`;
+    if (seen.has(key)) { skipped.push({ line, name, reason: 'listed twice' }); return; }
+    seen.add(key);
+    items.push({ name, price, category: cell(iCat).slice(0, 60) || null, sku: sku || null, description: cell(iDesc).slice(0, 300) || null, line });
+  });
+  return { items, skipped, columns: { name: rows[0][iName], price: rows[0][iPrice], category: iCat >= 0 ? rows[0][iCat] : null, sku: iSku >= 0 ? rows[0][iSku] : null, description: iDesc >= 0 ? rows[0][iDesc] : null, variation: iVar >= 0 ? rows[0][iVar] : null } };
+}
+// SumUp's own export has 47 columns. An item with options is one "parent" line (name, category, picture, no price) followed by one line per
+// option (no name; the option's name, price, quantity and permanent id); a single-option item is one line. When the file has the parish's
+// repository categories ("R-General", "R-Christmas"...) only those are brought across: BBQ, Tambola and the like belong to other campaigns.
+function shopReadSumup(rows, head) {
+  const col = (n) => head.indexOf(n);
+  const I = { name: col('itemname'), vari: col('variations'), price: col('price'), track: col('trackinventoryyesno'), qty: col('quantity'), barcode: col('barcode'), sku: col('sku'),
+    desc: col('descriptiononlinestoreandinvoicesonly'), cat: col('category'), disp: col('displayiteminonlinestoreyesno'), itemId: col('itemiddonotchange'), varId: col('variantiddonotchange'),
+    imgs: [1, 2, 3, 4, 5, 6, 7].map(n => col('image' + n)).filter(i => i >= 0) };
+  if (I.name < 0 || I.price < 0) throw httpError(400, 'This looks like a SumUp file, but it has no "Item name" or "Price" column. Please export it again from Catalog, then Items.');
+  const clean = (v) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  const cell = (r, i) => (i >= 0 && r[i] !== undefined ? clean(r[i]) : '');
+  const repoCat = (c) => { for (const part of String(c || '').split('||')) { const m = /^R\s*-\s*(.+)$/i.exec(part.trim()); if (m) return clean(m[1]).slice(0, 60); } return null; };
+  const firstImage = (r) => { for (const i of I.imgs) { const u = cell(r, i); if (/^https:\/\/[a-z0-9.-]*sumup\.com\/[^\s]{3,250}$/i.test(u)) return u; } return null; };
+  const stripHtml = (s) => clean(String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')).slice(0, 300);
+  const anyRepo = rows.slice(1).some(r => repoCat(r[I.cat]));
+  const items = [], skipped = [], seen = new Set();
+  let notRepo = 0, base = null;
+  const closeBase = () => { if (base && base.container && !base.options) skipped.push({ line: base.line, name: base.name, reason: 'no price' }); };
+  rows.slice(1).forEach((r, idx) => {
+    const line = idx + 2, name = cell(r, I.name), variation = cell(r, I.vari), priceRaw = cell(r, I.price), varId = cell(r, I.varId);
+    if (name) {
+      closeBase();
+      const cat = cell(r, I.cat);
+      base = { name, line, cat, repo: repoCat(cat), track: cell(r, I.track), disp: cell(r, I.disp), itemId: cell(r, I.itemId), desc: stripHtml(cell(r, I.desc)), image: firstImage(r), container: !priceRaw && !varId, options: 0 };
+      if (base.container) return;   // the parent of an item with options: its options follow
+    } else if (!base) { skipped.push({ line, reason: 'no item name' }); return; }
+    if (anyRepo && !base.repo) { notRepo++; return; }
+    const isOption = !name;
+    let display = base.name;
+    if (variation && (isOption || !/^(regular|default|standard|none|n\/a|-)$/i.test(variation))) display = `${base.name} (${variation})`;
+    const price = Math.round(Number(priceRaw.replace(/[£,\s]/g, '')) * 100) / 100;
+    if (!Number.isFinite(price) || price <= 0) { skipped.push({ line, name: display.slice(0, 60), reason: 'no price' }); if (isOption) base.options++; return; }
+    if (price > 500) { skipped.push({ line, name: display.slice(0, 60), reason: 'price over £500' }); if (isOption) base.options++; return; }
+    if (display.length > 120) { skipped.push({ line, name: display.slice(0, 40), reason: 'name too long' }); return; }
+    if (isOption) base.options++;
+    const barcode = cell(r, I.barcode).slice(0, 60), sku = cell(r, I.sku).slice(0, 60), key = varId || barcode || display.toLowerCase();
+    if (seen.has(key)) { skipped.push({ line, name: display.slice(0, 60), reason: 'listed twice' }); return; }
+    seen.add(key);
+    const track = (cell(r, I.track) || base.track) === 'Yes';
+    const qty = Number(cell(r, I.qty));
+    items.push({ name: display, price, category: base.repo || clean(base.cat.split('||')[0]).slice(0, 60) || null, sku: sku || null, barcode: barcode || null, description: base.desc || null,
+      stock: track ? (Number.isFinite(qty) ? Math.max(0, Math.round(qty)) : 0) : null, available: base.disp !== 'No', image_src: base.image,
+      sumup_item_id: (cell(r, I.itemId) || base.itemId || null), sumup_variant_id: varId || null, line });
+  });
+  closeBase();
+  return { items, skipped, not_repository: notRepo, format: 'sumup', columns: { name: rows[0][I.name], price: rows[0][I.price], category: I.cat >= 0 ? rows[0][I.cat] : null, sku: I.barcode >= 0 ? rows[0][I.barcode] : null, description: I.desc >= 0 ? rows[0][I.desc] : null, variation: I.vari >= 0 ? rows[0][I.vari] : null } };
+}
+// What is promised to people but not yet taken off the shelf: orders being paid for, and paid ones not yet made up. A weekly sync takes this away
+// from SumUp's count, so the shop never offers something already promised. (Made-up and collected orders have left the shelf already.)
+async function shopReservedByItem(orgId) {
+  const { data: os } = await supabase.from('repository_orders').select('id, status').eq('org_id', orgId).in('status', ['awaiting_payment', 'paid']);
+  const ids = (os || []).map(o => o.id), out = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data } = await supabase.from('repository_order_lines').select('item_id, qty').in('order_id', ids.slice(i, i + 100));
+    for (const l of data || []) if (l.item_id) out.set(l.item_id, (out.get(l.item_id) || 0) + l.qty);
+  }
+  return out;
+}
+const shopSameStock = (a, b) => (a === undefined ? null : a) === (b === undefined ? null : b);
+// The weekly sync (and the first import). SumUp's export is the truth for name, price and stock; what the office decided here (on/off, featured) stays.
+async function shopImport(session, { text, commit, switch_off_missing }) {
+  const org = await shopOrgOfSession(session);
+  const read = shopReadImport(text);
+  const sumup = read.format === 'sumup';
+  const { data: have } = await supabase.from('repository_items').select('*').eq('org_id', org.id);
+  const byVar = new Map(), byBarcode = new Map(), bySku = new Map(), byName = new Map();
+  for (const h of have || []) { if (h.sumup_variant_id) byVar.set(h.sumup_variant_id, h); if (h.barcode) byBarcode.set(h.barcode, h); if (h.sku) bySku.set(h.sku.toLowerCase(), h); byName.set(String(h.name).toLowerCase(), h); }
+  const reserved = sumup ? await shopReservedByItem(org.id) : new Map();
+  const matched = new Set();
+  const plan = read.items.map(it => {
+    let hit = (it.sumup_variant_id && byVar.get(it.sumup_variant_id)) || (it.barcode && byBarcode.get(it.barcode)) || (it.sku && bySku.get(it.sku.toLowerCase())) || byName.get(it.name.toLowerCase()) || null;
+    if (hit && matched.has(hit.id)) hit = null;   // two lines of the file never claim the same item
+    if (hit) matched.add(hit.id);
+    const held = hit ? (reserved.get(hit.id) || 0) : 0;
+    return { ...it, existing: hit, existing_id: hit ? hit.id : null, held, new_stock: sumup ? (it.stock === null ? null : Math.max(0, it.stock - held)) : undefined };
+  });
+  const gone = sumup ? (have || []).filter(h => h.sumup_variant_id && !matched.has(h.id) && h.available !== false) : [];
+  const priceChanges = plan.filter(p => p.existing && Number(p.existing.price) !== p.price);
+  const stockChanges = sumup ? plan.filter(p => p.existing && !shopSameStock(p.existing.stock, p.new_stock)) : [];
+  const pictures = new Set(plan.filter(p => p.image_src && (!p.existing || p.existing.image_done_src !== p.image_src)).map(p => p.image_src));
+  const summary = {
+    format: read.format || 'plain', found: plan.length, new_items: plan.filter(p => !p.existing_id).length, updated: plan.filter(p => p.existing_id).length,
+    stock_changed: stockChanges.length, price_changed: priceChanges.length, missing: gone.length, not_repository: read.not_repository || 0, pictures_to_prepare: pictures.size,
+    held_back: plan.reduce((s, p) => s + p.held, 0),
+    skipped: read.skipped.slice(0, 50), skipped_count: read.skipped.length, columns: read.columns,
+    sample: plan.slice(0, 12).map(p => ({ name: p.name, price: p.price, category: p.category || '', is_new: !p.existing_id })),
+    new_names: plan.filter(p => !p.existing_id).slice(0, 12).map(p => p.name),
+    stock_changes: stockChanges.slice(0, 15).map(p => ({ name: p.name, from: p.existing.stock === undefined ? null : p.existing.stock, to: p.new_stock })),
+    price_changes: priceChanges.slice(0, 10).map(p => ({ name: p.name, from: Number(p.existing.price), to: p.price })),
+    missing_names: gone.slice(0, 15).map(h => h.name),
+  };
+  if (!commit) return { ok: true, committed: false, ...summary };
+  const now = new Date().toISOString();
+  const fresh = plan.filter(p => !p.existing_id).map((p, i) => ({
+    org_id: org.id, name: p.name, price: p.price, category: p.category, sku: p.sku, barcode: p.barcode || null, description: p.description, stock: sumup ? p.new_stock : null, available: sumup ? p.available : true, sort: i,
+    sumup_item_id: p.sumup_item_id || null, sumup_variant_id: p.sumup_variant_id || null, image_src: p.image_src || null, featured: false, added_at: now, seen_at: now, created_at: now, updated_at: now }));
+  if (fresh.length) { const { error } = await supabase.from('repository_items').insert(fresh); if (error) throw httpError(400, error.message); }
+  const seenIds = [];
+  for (const p of plan.filter(x => x.existing_id)) {   // only what really changed is written, so a weekly sync is quick
+    const h = p.existing, patch = {};
+    if (h.name !== p.name) patch.name = p.name;
+    if (Number(h.price) !== p.price) patch.price = p.price;
+    if (p.category && h.category !== p.category) patch.category = p.category;
+    if (p.sku && h.sku !== p.sku) patch.sku = p.sku;
+    if (p.barcode && h.barcode !== p.barcode) patch.barcode = p.barcode;
+    if (p.description && h.description !== p.description) patch.description = p.description;
+    if (sumup && !shopSameStock(h.stock, p.new_stock)) patch.stock = p.new_stock;
+    if (p.sumup_variant_id && h.sumup_variant_id !== p.sumup_variant_id) patch.sumup_variant_id = p.sumup_variant_id;
+    if (p.sumup_item_id && h.sumup_item_id !== p.sumup_item_id) patch.sumup_item_id = p.sumup_item_id;
+    if (p.image_src && h.image_src !== p.image_src) patch.image_src = p.image_src;
+    seenIds.push(h.id);
+    if (Object.keys(patch).length) { patch.updated_at = now; const { error } = await supabase.from('repository_items').update(patch).eq('id', h.id).eq('org_id', org.id); if (error) throw httpError(400, error.message); }
+  }
+  for (let i = 0; i < seenIds.length; i += 100) await supabase.from('repository_items').update({ seen_at: now }).eq('org_id', org.id).in('id', seenIds.slice(i, i + 100));
+  let switchedOff = 0;
+  if (sumup && switch_off_missing !== false && gone.length) {   // no longer in SumUp: taken off sale, never deleted
+    await supabase.from('repository_items').update({ available: false, updated_at: now }).eq('org_id', org.id).in('id', gone.map(g => g.id));
+    switchedOff = gone.length;
+  }
+  const note = `${summary.new_items} new, ${summary.stock_changed} stock changes, ${summary.price_changed} price changes${switchedOff ? `, ${switchedOff} taken off sale` : ''}`;
+  await shopSettings(org.id, { create: true });
+  await supabase.from('repository_settings').update({ last_sync_at: now, last_sync_note: note }).eq('org_id', org.id);
+  return { ok: true, committed: true, switched_off: switchedOff, note, ...summary };
+}
+
+// ----- small product pictures. The office's browser makes them (SumUp's own pictures are about 650 KB each, far too heavy for a phone), and
+// the server only checks and stores them. Each is named by what is in it, so it can be kept by every browser for a year.
+const shopImageUrl = (p) => (p ? `${String(process.env.SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1/object/public/repository/${p}` : null);
+const shopImageBase = () => `${String(process.env.SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1/object/public/repository/`;
+async function shopImageSave(session, { src, data }) {
+  const org = await shopOrgOfSession(session);
+  const s = String(src == null ? '' : src);
+  if (!/^https:\/\/[^\s]{5,290}$/.test(s)) throw httpError(400, 'The picture address is missing.');
+  const b64 = String(data == null ? '' : data);
+  if (!b64 || b64.length > 140000) throw httpError(400, 'That picture is too large.');
+  const buf = Buffer.from(b64, 'base64');
+  if (!buf.length || buf.length > 100000) throw httpError(400, 'That picture is too large (100 KB at most).');
+  const isWebp = buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  if (!isWebp && !isJpeg) throw httpError(400, 'The picture must be a WebP or a JPEG.');
+  const { data: users } = await supabase.from('repository_items').select('id').eq('org_id', org.id).eq('image_src', s);
+  if (!users || !users.length) throw httpError(404, 'No item uses that picture any more.');
+  const path = `${org.id}/${crypto.createHash('sha256').update(buf).digest('hex').slice(0, 24)}.${isWebp ? 'webp' : 'jpg'}`;
+  const { error } = await supabase.storage.from('repository').upload(path, buf, { contentType: isWebp ? 'image/webp' : 'image/jpeg', upsert: true, cacheControl: '31536000' });
+  if (error) throw httpError(500, 'Could not store the picture: ' + error.message);
+  await supabase.from('repository_items').update({ image_path: path, image_done_src: s }).eq('org_id', org.id).eq('image_src', s);
+  return { ok: true, items: users.length, bytes: buf.length };
+}
+
+// ----- what to show first. A shop of 200 things sells better when the likely things come first: what the parish has been selling lately, what is
+// in season (Christmas from mid-October, Communion in spring...), what the office picked, and what is new. Nothing is hidden: everything is still
+// in its category, and search finds anything. The seasons are guesses at the usual parish year and are easy to change here.
+const SHOP_SEASONS = [
+  { match: /christmas|advent|nativity/i, label: 'Christmas', from: '10-15', to: '01-06', boost: 4 },
+  { match: /easter|lent/i, label: 'Easter', from: '02-10', to: '04-30', boost: 4 },
+  { match: /communion/i, label: 'First Communion', from: '03-01', to: '07-15', boost: 3 },
+  { match: /confirmation/i, label: 'Confirmation', from: '03-01', to: '06-30', boost: 3 },
+];
+const shopInWindow = (md, from, to) => (from <= to ? (md >= from && md <= to) : (md >= from || md <= to));
+function shopSeason(category, today) {   // { label, boost } if this category is in season on this date, else null
+  const md = String(today).slice(5);
+  for (const s of SHOP_SEASONS) if (s.match.test(String(category || '')) && shopInWindow(md, s.from, s.to)) return { label: s.label, boost: s.boost };
+  return null;
+}
+async function shopPopularity(orgId, now, days = 120) {   // units sold per item in paid orders over the last few months
+  const since = new Date(now.getTime() - days * 864e5).toISOString();
+  const { data: os } = await supabase.from('repository_orders').select('id, status, created_at').eq('org_id', orgId).gte('created_at', since).limit(5000);
+  const ids = (os || []).filter(o => ['paid', 'prepared', 'collected'].includes(o.status)).map(o => o.id), units = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data } = await supabase.from('repository_order_lines').select('item_id, qty').in('order_id', ids.slice(i, i + 100));
+    for (const l of data || []) if (l.item_id) units.set(l.item_id, (units.get(l.item_id) || 0) + l.qty);
+  }
+  return units;
+}
+
+// ----- the orders list
+async function shopOrders(session, { weekend } = {}) {
+  const org = await shopOrgOfSession(session);
+  const { data: all } = await supabase.from('repository_orders').select('*').eq('org_id', org.id).order('ref_no', { ascending: true }).limit(5000);
+  const orders = all || [];
+  const byWeekend = new Map();
+  for (const o of orders) { const w = shopSaturdayOf(String(o.collect_date)); if (!byWeekend.has(w)) byWeekend.set(w, []); byWeekend.get(w).push(o); }
+  const today = gwToday(org.timezone, new Date());
+  const weekends = [...byWeekend.keys()].sort().reverse().map(w => {
+    const live = byWeekend.get(w).filter(o => o.status !== 'cancelled' && o.status !== 'awaiting_payment');
+    return { weekend: w, label: shopDayLabel(w), orders: live.length, to_prepare: live.filter(o => o.status === 'paid').length };
+  });
+  let chosen = /^\d{4}-\d{2}-\d{2}$/.test(String(weekend || '')) ? String(weekend) : null;
+  if (!chosen) { const upcoming = [...byWeekend.keys()].filter(w => shopAddDays(w, 1) >= today).sort()[0]; chosen = upcoming || (weekends[0] && weekends[0].weekend) || null; }
+  const mine = chosen && byWeekend.get(chosen) ? byWeekend.get(chosen) : [];
+  const ids = mine.map(o => o.id), payIds = mine.map(o => o.payment_id).filter(Boolean);
+  const [lineRes, payRes] = await Promise.all([
+    ids.length ? supabase.from('repository_order_lines').select('order_id, item_name, qty, unit_price').in('order_id', ids) : { data: [] },
+    payIds.length ? supabase.from('payments').select('id, payer_name, contact_value, status, amount, refund_amount, sumup_transaction_code').in('id', payIds) : { data: [] },
+  ]);
+  const lines = new Map(), pays = new Map((payRes.data || []).map(p => [p.id, p]));
+  for (const l of lineRes.data || []) { if (!lines.has(l.order_id)) lines.set(l.order_id, []); lines.get(l.order_id).push(l); }
+  const out = mine.map(o => { const p = pays.get(o.payment_id); return shopOrderShape(o, lines.get(o.id), {
+    name: p ? (p.payer_name || '(details cleared)') : '', contact: p ? (p.contact_value || '') : '', payment_id: o.payment_id, paid_at: o.paid_at, prepared_at: o.prepared_at, collected_at: o.collected_at,
+    cancel_reason: o.cancel_reason || '', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, sumup_code: p ? p.sumup_transaction_code || '' : '',
+  }); });
+  const live = out.filter(o => o.status === 'paid' || o.status === 'prepared' || o.status === 'collected');
+  return {
+    weekends, weekend: chosen, weekend_label: chosen ? shopDayLabel(chosen) : '', orders: out,
+    totals: { orders: live.length, to_prepare: live.filter(o => o.status === 'paid').length, taken: Math.round(live.reduce((s, o) => s + o.total * 100, 0)) / 100 },
+  };
+}
+async function shopOrderMark(session, { order_id, status }) {
+  const org = await shopOrgOfSession(session);
+  const { data: o } = await supabase.from('repository_orders').select('id, status').eq('id', order_id).eq('org_id', org.id).maybeSingle();
+  if (!o) throw httpError(404, 'Order not found');
+  if (!['paid', 'prepared', 'collected'].includes(status)) throw httpError(400, 'Choose prepared or collected.');
+  if (!['paid', 'prepared', 'collected'].includes(o.status)) throw httpError(400, o.status === 'awaiting_payment' ? 'This order has not been paid yet.' : 'This order was cancelled.');
+  const now = new Date().toISOString();
+  const patch = { status, prepared_at: status === 'paid' ? null : (status === 'prepared' ? now : undefined), collected_at: status === 'collected' ? now : null };
+  if (patch.prepared_at === undefined) delete patch.prepared_at;
+  const { error } = await supabase.from('repository_orders').update(patch).eq('id', o.id).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true, status };
+}
+async function shopOrderCancel(session, { order_id, reason, refund_amount, refund_note }) {
+  const org = await shopOrgOfSession(session);
+  const { data: o } = await supabase.from('repository_orders').select('id, status, payment_id, ref_no').eq('id', order_id).eq('org_id', org.id).maybeSingle();
+  if (!o) throw httpError(404, 'Order not found');
+  if (o.status === 'cancelled') throw httpError(400, 'This order is already cancelled.');
+  const why = gwText(reason, 150, 'The reason', { required: true });
+  let refunded = null;
+  if (refund_amount !== undefined && refund_amount !== null && refund_amount !== '') {
+    if (!o.payment_id || !['paid', 'prepared', 'collected'].includes(o.status)) throw httpError(400, 'This order was not paid, so there is nothing to refund.');
+    refunded = (await recordRefund(session, { payment_id: o.payment_id, amount: refund_amount, note: refund_note || `Repository order ${shopRef(o.ref_no)} cancelled: ${why}` })).refund_amount;
+  }
+  const { data: res, error } = await supabase.rpc('shop_cancel_order', { p_order: o.id, p_reason: `Cancelled by the office: ${why}`, p_only_unpaid: false });
+  if (error) throw httpError(500, error.message);
+  return { ok: true, status: res, refunded };
+}
+
+Object.assign(actions, {
+  public_shop: (s, b) => publicShop(b),
+  public_shop_order: (s, b) => publicShopOrder(b),
+  public_shop_status: (s, b) => publicShopStatus(b),
+  shop_get: (s) => shopGet(s),
+  shop_item_save: (s, b) => shopItemSave(s, b),
+  shop_item_delete: (s, b) => shopItemDelete(s, b),
+  shop_item_set_available: (s, b) => shopItemSetAvailable(s, b),
+  shop_item_set_featured: (s, b) => shopItemSetFeatured(s, b),
+  shop_set_settings: (s, b) => shopSetSettings(s, b),
+  shop_import: (s, b) => shopImport(s, b),
+  shop_image_save: (s, b) => shopImageSave(s, b),
+  shop_orders: (s, b) => shopOrders(s, b),
+  shop_order_mark: (s, b) => shopOrderMark(s, b),
+  shop_order_cancel: (s, b) => shopOrderCancel(s, b),
+});
+READ_ONLY_PUBLIC.add('public_shop');
+
+// ---------- Listings (the parish classifieds) ----------
+// Parishioners offer goods or services (for sale, free, or a service) for 1 to 4 weeks. Everything is by email only: the lister's address is never
+// on the page; a visitor presses "Copy email address" and the address is handed over then (counted, and limited per visitor). The office approves
+// each listing before it appears, and the lister's days start from approval. A listing fee is suggested from its length and pictures; the lister may
+// choose either suggestion or "Other", including 0. A fee is an ordinary SumUp card payment (a row in `payments`, so refunds, the books check and
+// Needs Attention all work); each month has one hidden campaign to hold them. The church takes no part in any deal and checks nothing: the page says so.
+const LISTING_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const LISTING_CATEGORIES = ['Services & trades', 'Food & baking', 'Furniture & home', 'Clothes & children', 'Garden & outdoors', 'Other'];
+const LISTING_KINDS = { sell: 'For sale', free: 'Free to a good home', service: 'Service offered' };
+const LISTING_DAY_CHOICES = [7, 14, 21, 30], LISTING_MAX_IMAGES = 4, LISTING_MAX_FEE = 200, LISTING_DISCLAIMER_VERSION = 1;
+const LISTING_ACTIVE = ['awaiting_payment', 'pending_review', 'live'], LISTING_ENDED = ['rejected', 'withdrawn', 'removed', 'expired', 'cancelled'];
+const LISTING_DISCLAIMER = 'Listings are between parishioners. The church does not check, recommend or guarantee any listing, takes no payment from and has no part in any deal between the people involved, and is not responsible for the goods or services offered or their quality. Please check things for yourself, directly with the person who listed them.';
+const LISTING_AGREEMENT = 'I understand that the church does not check or guarantee my listing, takes no part in any deal and is not responsible for the goods or services offered. I have not put a phone number or email address in my listing.';
+const listingToken = () => crypto.randomBytes(16).toString('hex');
+const roundUpHalf = (n) => Math.ceil(n * 2 - 1e-9) / 2;
+
+async function listingSettings(orgId, { create } = {}) {
+  let { data } = await supabase.from('listings_settings').select('*').eq('org_id', orgId).maybeSingle();
+  if (!data && create) {
+    await supabase.from('listings_settings').upsert({ org_id: orgId }, { onConflict: 'org_id' });
+    ({ data } = await supabase.from('listings_settings').select('*').eq('org_id', orgId).maybeSingle());
+  }
+  return data || { org_id: orgId, enabled: false, intro_text: null, price_base: 3, price_per_extra_week: 1.5, price_per_image: 0.5 };
+}
+// The two suggested amounts for a listing of this length and number of pictures. The page never works these out itself: it reads this table.
+function listingQuote(st, days, images) {
+  const extraWeeks = Math.max(0, Math.round(days / 7) - 1);
+  const raw = Number(st.price_base) + extraWeeks * Number(st.price_per_extra_week) + images * Number(st.price_per_image);
+  const suggested = Math.min(LISTING_MAX_FEE, Math.max(0, roundUpHalf(raw)));
+  let supporter = Math.min(LISTING_MAX_FEE, roundUpHalf(suggested * 1.5));
+  if (supporter < suggested + 1) supporter = Math.min(LISTING_MAX_FEE, suggested + 1);
+  return { suggested, supporter };
+}
+function listingQuoteTable(st) {
+  const out = [];
+  for (const days of LISTING_DAY_CHOICES) for (let n = 0; n <= LISTING_MAX_IMAGES; n++) out.push({ days, images: n, ...listingQuote(st, days, n) });
+  return out;
+}
+const listingImageBase = () => `${String(process.env.SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1/object/public/listings/`;
+
+// ----- what a lister may write: plain words. No email address, no phone number, no web address (they are how people get contacted or tricked)
+function listingBody(v, max, what, { min = 0, multiline = false } = {}) {
+  let s = String(v == null ? '' : v).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ');
+  s = multiline ? s.split('\n').map(l => l.replace(/[ \t]+/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim() : s.replace(/\s+/g, ' ').trim();
+  if (s.length < min) throw httpError(400, `${what} is too short (at least ${min} characters).`);
+  if (s.length > max) throw httpError(400, `${what} is too long (${max} characters at most).`);
+  return s;
+}
+function listingContactDetail(s) {   // true if the text holds an email address, a web address or a phone number
+  if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(s) || /(https?:\/\/|www\.)\S+/i.test(s)) return true;
+  for (const m of s.matchAll(/\+?\d[\d\s().-]{7,}\d/g)) if (m[0].replace(/\D/g, '').length >= 9) return true;
+  return false;
+}
+function listingCheckText(s, what) {
+  if (listingContactDetail(s)) throw httpError(400, `Please don't put phone numbers, email addresses or web links in ${what}. People contact you through the “Copy email address” button, so your email stays private.`);
+  return s;
+}
+function listingCheckImage(b64, maxBytes) {
+  const s = String(b64 == null ? '' : b64);
+  if (!s || s.length > Math.ceil(maxBytes * 1.4) + 8) throw httpError(400, 'A picture is too large.');
+  const buf = Buffer.from(s, 'base64');
+  if (!buf.length || buf.length > maxBytes) throw httpError(400, 'A picture is too large.');
+  const isWebp = buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  if (!isWebp && !isJpeg) throw httpError(400, 'Pictures must be WebP or JPEG.');
+  return { buf, ext: isWebp ? 'webp' : 'jpg', type: isWebp ? 'image/webp' : 'image/jpeg' };
+}
+async function listingMonthCampaign(orgId, today) {
+  const month = today.slice(0, 7);
+  const find = async () => { const { data } = await supabase.from('listing_months').select('campaign_id').eq('org_id', orgId).eq('month', month).maybeSingle(); return data ? data.campaign_id : null; };
+  const have = await find();
+  if (have) return have;
+  const [y, m] = month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const { data: c, error } = await supabase.from('campaigns').insert({
+    org_id: orgId, name: `Listings, ${label}`, kind: 'registration', age_restricted: false, public_only: false, public_page_enabled: false,
+    active: true, is_draft: false, listed_on_gateway: false, keep_until: shopAddDays(last, 75), form_def: { listings: true, month },
+  }).select().single();
+  if (error || !c) throw httpError(500, 'Could not start your listing — please try again.');
+  const { error: linkErr } = await supabase.from('listing_months').insert({ org_id: orgId, month, campaign_id: c.id });
+  if (linkErr) {
+    await supabase.from('campaigns').delete().eq('id', c.id);
+    const again = await find();
+    if (again) return again;
+    throw httpError(500, 'Could not start your listing — please try again.');
+  }
+  return c.id;
+}
+
+// ----- the public side
+async function listingOrgBySlug(slug) {
+  const s = String(slug == null ? '' : slug).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  if (!org) throw httpError(404, 'This page is not available.');
+  const settings = await listingSettings(org.id);
+  if (!settings.enabled) throw httpError(404, 'Listings are not open right now.');
+  return { org, settings, tz: gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London' };
+}
+const listingLive = (l, nowMs) => l.status === 'live' && l.ends_at && new Date(l.ends_at).getTime() > nowMs;
+const listingImg = (l, which) => ((Array.isArray(l.images) ? l.images : []).map(i => i[which]).filter(Boolean));
+function listingDaysLeft(l, nowMs) { return Math.max(0, Math.ceil((new Date(l.ends_at).getTime() - nowMs) / 864e5)); }
+// How high a listing sits: what the office pinned, how new it is, and how much people have looked at it and asked about it (per day it has been up, so a
+// new listing is not buried by an old one). It is not influenced by what was paid.
+function listingScore(l, nowMs) {
+  const age = Math.max(0, (nowMs - new Date(l.starts_at || l.created_at).getTime()) / 864e5);
+  const rate = ((l.views || 0) + 3 * (l.contacts || 0)) / (age + 2);
+  return (l.featured ? 6 : 0) + (age < 3 ? 5 : age < 7 ? 3 : age < 14 ? 1 : 0) + Math.log2(1 + rate * 7) * 2;
+}
+// Housekeeping, at most every half hour: listings whose time is up are marked ended; a listing that ended (or was refused or withdrawn) more than two
+// weeks ago loses its email address, text and pictures. Visitors' counted-once markers older than 90 days go.
+async function listingsSweep(orgId, now) {
+  const nowIso = now.toISOString();
+  await supabase.from('listings').update({ status: 'expired' }).eq('org_id', orgId).eq('status', 'live').lt('ends_at', nowIso);
+  const cut = new Date(now.getTime() - 14 * 864e5).toISOString();
+  const { data: old } = await supabase.from('listings').select('id, images, ends_at, reviewed_at, created_at').eq('org_id', orgId).in('status', LISTING_ENDED).is('purged_at', null).limit(60);
+  const due = (old || []).filter(l => String(l.ends_at || l.reviewed_at || l.created_at) < cut);
+  for (const l of due) {
+    const files = (Array.isArray(l.images) ? l.images : []).flatMap(i => [i.t, i.f]).filter(Boolean);
+    if (files.length) { try { await supabase.storage.from('listings').remove(files); } catch { /* the row is still cleared; a stray file is harmless */ } }
+    await supabase.from('listings').update({ email: null, display_name: null, description: '', images: [], purged_at: nowIso }).eq('id', l.id).eq('org_id', orgId);
+  }
+  await supabase.from('listing_events').delete().lt('day', new Date(now.getTime() - 90 * 864e5).toISOString().slice(0, 10));
+}
+async function publicListings({ slug }) {
+  const { org, settings, tz } = await listingOrgBySlug(slug);
+  const now = new Date(), nowMs = now.getTime();
+  try { if ((await rateHit(`lsweep:${org.id}`, 1800)) === 1) await listingsSweep(org.id, now); } catch { /* housekeeping only */ }
+  const { data: rows } = await supabase.from('listings').select('id, title, description, category, kind, price_text, display_name, images, featured, views, contacts, starts_at, ends_at, status, created_at').eq('org_id', org.id).eq('status', 'live').limit(500);
+  const live = (rows || []).filter(l => listingLive(l, nowMs)).map(l => ({ l, score: listingScore(l, nowMs), age: Math.max(0, (nowMs - new Date(l.starts_at || l.created_at).getTime()) / 864e5) }));
+  live.sort((a, b) => b.score - a.score || String(b.l.starts_at).localeCompare(String(a.l.starts_at)));
+  const card = (x) => ({ id: x.l.id, title: x.l.title, snippet: String(x.l.description || '').replace(/\s+/g, ' ').slice(0, 140), category: x.l.category, kind: x.l.kind, price: x.l.price_text || '', name: x.l.display_name || '',
+    thumb: listingImg(x.l, 't')[0] || null, pictures: listingImg(x.l, 't').length, is_new: x.age < 7, days_left: listingDaysLeft(x.l, nowMs), pick: !!x.l.featured });
+  const top = (list, n) => list.slice(0, n).map(x => x.l.id);
+  const shelves = [
+    { key: 'picks', title: 'Picked by the office', ids: top(live.filter(x => x.l.featured), 6) },
+    { key: 'new', title: 'Just added', ids: top(live.filter(x => x.age < 7).sort((a, b) => a.age - b.age), 8) },
+    { key: 'viewed', title: 'Most viewed', ids: top(live.filter(x => x.l.views >= 3).sort((a, b) => (b.l.views / (b.age + 2)) - (a.l.views / (a.age + 2))), 8) },
+    { key: 'contacted', title: 'Most asked about', ids: top(live.filter(x => x.l.contacts >= 1).sort((a, b) => (b.l.contacts / (b.age + 2)) - (a.l.contacts / (a.age + 2))), 8) },
+  ].filter(sh => sh.ids.length >= 2 || (sh.key === 'picks' && sh.ids.length));
+  const count = (f) => { const m = new Map(); for (const x of live) m.set(f(x.l), (m.get(f(x.l)) || 0) + 1); return m; };
+  const cats = count(l => l.category), kinds = count(l => l.kind);
+  return {
+    org: { name: org.display_name || org.name },
+    intro: settings.intro_text || null, disclaimer: LISTING_DISCLAIMER, agreement: LISTING_AGREEMENT, agreement_version: LISTING_DISCLAIMER_VERSION,
+    img_base: listingImageBase(),
+    categories: LISTING_CATEGORIES.map(c => ({ name: c, count: cats.get(c) || 0 })),
+    kinds: Object.entries(LISTING_KINDS).map(([k, label]) => ({ key: k, label, count: kinds.get(k) || 0 })),
+    shelves, listings: live.map(card),
+    new_listing: { max_images: LISTING_MAX_IMAGES, day_choices: LISTING_DAY_CHOICES, quotes: listingQuoteTable(settings), max_fee: LISTING_MAX_FEE },
+  };
+}
+async function listingForVisitor(slug, id) {
+  const { org, tz } = await listingOrgBySlug(slug);
+  if (!/^[0-9a-f-]{36}$/i.test(String(id || ''))) throw httpError(404, 'That listing is not available.');
+  const { data: l } = await supabase.from('listings').select('*').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!l || !listingLive(l, Date.now())) throw httpError(404, 'That listing is no longer available.');
+  return { org, tz, l };
+}
+const listingDay = (tz) => gwToday(tz, new Date());
+async function publicListingView({ slug, id }) {
+  const { tz, l } = await listingForVisitor(slug, id);
+  if (clientIp) { try { await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'view', p_day: listingDay(tz), p_ip: clientIp }); } catch { /* a missed count is harmless */ } }
+  return { id: l.id, title: l.title, description: l.description, category: l.category, kind: l.kind, price: l.price_text || '', name: l.display_name || '', images: listingImg(l, 'f'), thumbs: listingImg(l, 't'),
+    days_left: listingDaysLeft(l, Date.now()), ends_label: new Date(l.ends_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: tz }), disclaimer: LISTING_DISCLAIMER };
+}
+// The email address is only ever sent here, on a press of the button, to one visitor at a time (40 an hour), and the press is counted (once a day per visitor).
+async function publicListingContact({ slug, id }) {
+  if (clientIp && (await rateHit(`lcontact:${clientIp}`, 3600)) > 40) throw httpError(429, 'Too many requests from your connection — please try again later.');
+  const { tz, l } = await listingForVisitor(slug, id);
+  if (!l.email) throw httpError(404, 'That listing is no longer available.');
+  if (clientIp) { try { await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'contact', p_day: listingDay(tz), p_ip: clientIp }); } catch { /* a missed count is harmless */ } }
+  return { ok: true, email: l.email, subject: `Your listing: ${l.title}` };
+}
+async function publicListingReport({ slug, id, reason }) {
+  if (clientIp && (await rateHit(`lreport:${clientIp}`, 3600)) > 10) throw httpError(429, 'Too many reports from your connection — please try again later.');
+  const { tz, l } = await listingForVisitor(slug, id);
+  const why = listingBody(reason, 200, 'The reason', { min: 3 });
+  let counted = true;
+  if (clientIp) { const { data } = await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'report', p_day: listingDay(tz), p_ip: clientIp }); counted = data !== false; }
+  if (counted) await supabase.from('listing_reports').insert({ listing_id: l.id, reason: why });
+  return { ok: true };
+}
+
+async function publicListingCreate(b) {
+  if (b.website) return { ok: true, token: null, status: 'pending_review' };   // the hidden spam-trap box was filled in: pretend, store nothing
+  if (clientIp && (await rateHit(`lnew:${clientIp}`, 86400)) > 8) throw httpError(429, 'Too many listings from your connection today — please try again tomorrow.');
+  const { org, settings, tz } = await listingOrgBySlug(b.slug);
+  const client_ref = cleanClientRef(b.client_ref);
+  if (client_ref) {   // a lost reply and a second tap must not list twice
+    const { data: again } = await supabase.from('listings').select('id, token, status, fee, payment_id').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+    if (again) {
+      const { data: pay } = again.payment_id ? await supabase.from('payments').select('link_url').eq('id', again.payment_id).maybeSingle() : { data: null };
+      return { ok: true, token: again.token, status: again.status, fee: Number(again.fee), pay_url: again.status === 'awaiting_payment' && pay ? pay.link_url : null, replay: true };
+    }
+  }
+  if (b.agree !== true) throw httpError(400, 'Please tick the box to say you understand the church does not check or guarantee listings.');
+  const title = listingCheckText(listingBody(b.title, 70, 'The title', { min: 5 }), 'the title');
+  const description = listingCheckText(listingBody(b.description, 1200, 'The description', { min: 20, multiline: true }), 'the description');
+  const priceText = b.price_text ? listingCheckText(listingBody(b.price_text, 40, 'The price'), 'the price') : '';
+  const displayName = b.display_name ? listingCheckText(listingBody(b.display_name, 40, 'Your name'), 'your name') : '';
+  if (!LISTING_CATEGORIES.includes(b.category)) throw httpError(400, 'Please choose a category.');
+  if (!LISTING_KINDS[b.kind]) throw httpError(400, 'Please say whether it is for sale, free, or a service.');
+  const days = Number(b.days);
+  if (!Number.isInteger(days) || days < 7 || days > 30) throw httpError(400, 'A listing runs for 1 to 4 weeks (7 to 30 days).');
+  if (b.email === undefined || !String(b.email).trim()) throw httpError(400, 'Please give your email address. It is how people reach you, and it is never shown on the page.');
+  const email = validateRegEmail(b.email, 'your email address');
+  const again = String(b.email_confirm == null ? '' : b.email_confirm).trim().toLowerCase();   // typed twice, so a slip cannot send the lister's messages to a stranger
+  if (!again) throw httpError(400, 'Please type your email address a second time, to be sure it is right.');
+  if (again !== email) throw httpError(400, 'The two email addresses do not match. Please check them.');
+  const images = Array.isArray(b.images) ? b.images : [];
+  if (images.length > LISTING_MAX_IMAGES) throw httpError(400, `Up to ${LISTING_MAX_IMAGES} pictures, please.`);
+  const prepared = images.map(i => ({ t: listingCheckImage(i && i.t, 40000), f: listingCheckImage(i && i.f, 150000) }));
+  const amount = Math.round(Number(b.amount) * 100) / 100;
+  if (b.amount === undefined || b.amount === null || b.amount === '' || !Number.isFinite(amount) || amount < 0 || amount > LISTING_MAX_FEE) throw httpError(400, `Please choose what you would like to give for your listing (£0 to £${LISTING_MAX_FEE}). £0 is fine.`);
+  const { count: open } = await supabase.from('listings').select('id', { count: 'exact', head: true }).eq('org_id', org.id).eq('email', email).in('status', LISTING_ACTIVE);
+  if ((open || 0) >= 3) throw httpError(409, 'You already have three listings open with this email address. Please wait for one to finish, or withdraw one.');
+
+  const today = gwToday(tz, new Date()), token = listingToken();
+  let payment = null;
+  if (amount > 0) {
+    await enforcePublicPurchaseLimits(email, 1);
+    const campaignId = await listingMonthCampaign(org.id, today);
+    const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaignId, method: 'link', amount, status: 'pending', seller_id: null, payer_name: displayName || 'Listing', contact_value: email, client_ip: clientIp || null }).select().single();
+    if (payErr) throw httpError(500, 'Could not start your payment — please try again.');
+    payment = pay;
+  }
+  const voidPayment = (why) => (payment ? supabase.from('payments').update({ status: 'void', voided: true, void_reason: why }).eq('id', payment.id) : null);
+  const { data: row, error } = await supabase.from('listings').insert({
+    org_id: org.id, token, title, description, category: b.category, kind: b.kind, price_text: priceText || null, display_name: displayName || null, email, days,
+    status: amount > 0 ? 'awaiting_payment' : 'pending_review', fee: amount, payment_id: payment ? payment.id : null, agreed_version: LISTING_DISCLAIMER_VERSION, agreed_at: new Date().toISOString(), client_ref,
+  }).select().single();
+  if (error || !row) {
+    await voidPayment('listing not saved');
+    if (error && error.code === '23505' && client_ref) {
+      const { data: again } = await supabase.from('listings').select('token, status, fee').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+      if (again) return { ok: true, token: again.token, status: again.status, fee: Number(again.fee), replay: true };
+    }
+    throw httpError(500, 'Could not save your listing — please try again.');
+  }
+  const stored = [];
+  const undo = async () => { try { if (stored.length) await supabase.storage.from('listings').remove(stored); } catch { /* stray files are harmless */ } await supabase.from('listings').delete().eq('id', row.id); await voidPayment('listing not saved'); };
+  const paths = [];
+  for (let n = 0; n < prepared.length; n++) {
+    const t = `${org.id}/${row.id}/${n}-t.${prepared[n].t.ext}`, f = `${org.id}/${row.id}/${n}-f.${prepared[n].f.ext}`;
+    for (const [p, im] of [[t, prepared[n].t], [f, prepared[n].f]]) {
+      const { error: upErr } = await supabase.storage.from('listings').upload(p, im.buf, { contentType: im.type, upsert: true, cacheControl: '31536000' });
+      if (upErr) { await undo(); throw httpError(500, 'Could not store your pictures — please try again.'); }
+      stored.push(p);
+    }
+    paths.push({ t, f });
+  }
+  if (paths.length) await supabase.from('listings').update({ images: paths }).eq('id', row.id);
+  if (!payment) return { ok: true, token, status: 'pending_review', fee: 0 };
+  const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: 'Listings', ticketNumbers: [row.id.slice(0, 6).toUpperCase()],
+    description: `Listing: ${title.slice(0, 50)}`, redirectUrl: `${baseUrl}/listings.html?manage=${token}` });
+  if (!created.ok) { await undo(); throw httpError(502, created.message); }
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', payment.id);
+  return { ok: true, token, status: 'awaiting_payment', fee: amount, pay_url: created.pay_url };
+}
+// The lister's own page (reached by their private link): where the listing stands, how people have responded, and a way to take it down.
+async function listingByToken(token) {
+  if (!/^[0-9a-f]{32}$/.test(String(token || ''))) throw httpError(404, 'We could not find that listing.');
+  const { data: l } = await supabase.from('listings').select('*').eq('token', token).maybeSingle();
+  if (!l) throw httpError(404, 'We could not find that listing.');
+  return l;
+}
+async function publicListingManage({ token }) {
+  let l = await listingByToken(token);
+  let pay = null;
+  if (l.payment_id) {
+    ({ data: pay } = await supabase.from('payments').select('*').eq('id', l.payment_id).maybeSingle());
+    if (pay && l.status === 'awaiting_payment') { try { await syncCheckout(pay); } catch { /* SumUp unreachable: show what we know */ } l = await listingByToken(token); }
+  }
+  const { data: org } = await supabase.from('organizations').select('name, display_name, slug, contact_email, timezone').eq('id', l.org_id).maybeSingle();
+  const tz = org && gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London', nowMs = Date.now();
+  const status = l.status === 'live' && !listingLive(l, nowMs) ? 'expired' : l.status;
+  const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: tz }) : '');
+  return { title: l.title, status, category: l.category, kind: l.kind, price: l.price_text || '', days: l.days, fee: Number(l.fee), review_note: l.review_note || '', views: l.views, contacts: l.contacts,
+    starts: day(l.starts_at), ends: day(l.ends_at), days_left: status === 'live' ? listingDaysLeft(l, nowMs) : null, thumbs: listingImg(l, 't'), img_base: listingImageBase(),
+    pay_url: status === 'awaiting_payment' && pay ? pay.link_url : null, can_withdraw: LISTING_ACTIVE.includes(status),
+    org_name: org ? (org.display_name || org.name) : '', org_slug: org ? org.slug : null, org_contact_email: org ? org.contact_email : null };
+}
+async function publicListingWithdraw({ token }) {
+  const l = await listingByToken(token);
+  if (!LISTING_ACTIVE.includes(l.status)) throw httpError(400, 'This listing has already ended.');
+  await supabase.from('listings').update({ status: 'withdrawn', review_note: l.review_note }).eq('id', l.id);
+  return { ok: true };
+}
+
+// ----- what happens to a listing when its fee is settled (called from syncCheckout; never allowed to break a payment check)
+async function listingPaid(payment) {
+  try {
+    const { data: l } = await supabase.from('listings').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (l && (l.status === 'awaiting_payment' || l.status === 'cancelled')) await supabase.from('listings').update({ status: 'pending_review', review_note: null }).eq('id', l.id);
+  } catch { /* the payment itself is already recorded; the office can see the listing */ }
+}
+async function listingFailed(payment) {
+  try {
+    const { data: l } = await supabase.from('listings').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (l && l.status === 'awaiting_payment') await supabase.from('listings').update({ status: 'cancelled', review_note: 'Payment not completed' }).eq('id', l.id);
+  } catch { /* the sweep will try again */ }
+}
+
+// ----- the office side (Admin, SuperAdmin, Finance, Priest)
+async function listingsOrg(session) {
+  requireOrgRole(session, LISTING_ROLES);
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone').eq('id', session.org_id).maybeSingle();
+  if (!org) throw httpError(404, 'Organisation not found');
+  if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
+  return org;
+}
+async function listingsGet(session) {
+  const org = await listingsOrg(session), settings = await listingSettings(org.id, { create: true });
+  try { await listingsSweep(org.id, new Date()); } catch { /* housekeeping only */ }
+  const { data: all } = await supabase.from('listings').select('*').eq('org_id', org.id).limit(1000);
+  const rows = all || [], nowMs = Date.now();
+  const payIds = rows.map(r => r.payment_id).filter(Boolean);
+  const { data: pays } = payIds.length ? await supabase.from('payments').select('id, status, amount, refund_amount').in('id', payIds) : { data: [] };
+  const payOf = new Map((pays || []).map(p => [p.id, p]));
+  const url = (p) => (p ? `${listingImageBase()}${p}` : null);
+  const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: org.timezone }) : '');
+  const shape = (l) => { const p = payOf.get(l.payment_id); return { id: l.id, title: l.title, description: l.description, category: l.category, kind: l.kind, price: l.price_text || '', name: l.display_name || '', email: l.email || '', days: l.days, fee: Number(l.fee),
+    paid: !!p && p.status === 'paid', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, payment_id: l.payment_id, status: l.status, featured: !!l.featured, views: l.views, contacts: l.contacts, reports: l.reports,
+    thumbs: listingImg(l, 't').map(url), images: listingImg(l, 'f').map(url), created: day(l.created_at), starts: day(l.starts_at), ends: day(l.ends_at), days_left: listingLive(l, nowMs) ? listingDaysLeft(l, nowMs) : null, review_note: l.review_note || '' }; };
+  const ids = rows.filter(r => r.reports > 0 && r.status === 'live').map(r => r.id);
+  const { data: reps } = ids.length ? await supabase.from('listing_reports').select('listing_id, reason').in('listing_id', ids) : { data: [] };
+  const reasons = new Map();
+  for (const r of reps || []) { if (!reasons.has(r.listing_id)) reasons.set(r.listing_id, []); reasons.get(r.listing_id).push(r.reason); }
+  const by = (st) => rows.filter(r => r.status === st);
+  return {
+    org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/listings/${org.slug}` : null },
+    settings: { enabled: !!settings.enabled, intro_text: settings.intro_text || '', price_base: Number(settings.price_base), price_per_extra_week: Number(settings.price_per_extra_week), price_per_image: Number(settings.price_per_image) },
+    quotes: listingQuoteTable(settings), disclaimer: LISTING_DISCLAIMER,
+    waiting: by('pending_review').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map(shape),
+    live: rows.filter(r => listingLive(r, nowMs)).sort((a, b) => listingScore(b, nowMs) - listingScore(a, nowMs)).map(l => ({ ...shape(l), reasons: reasons.get(l.id) || [] })),
+    ended: rows.filter(r => LISTING_ENDED.includes(r.status) || (r.status === 'live' && !listingLive(r, nowMs))).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 20).map(shape),
+    counts: { waiting: by('pending_review').length, live: rows.filter(r => listingLive(r, nowMs)).length, reported: rows.filter(r => listingLive(r, nowMs) && r.reports > 0).length },
+  };
+}
+async function listingsOne(session, id) {
+  const org = await listingsOrg(session);
+  const { data: l } = await supabase.from('listings').select('*').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!l) throw httpError(404, 'Listing not found');
+  return { org, l };
+}
+async function listingsReview(session, { id, decision, note, refund_amount, refund_note }) {
+  const { l } = await listingsOne(session, id);
+  if (l.status !== 'pending_review') throw httpError(400, l.status === 'awaiting_payment' ? 'This listing has not been paid for yet.' : 'This listing has already been dealt with.');
+  const nowMs = Date.now();
+  if (decision === 'approve') {
+    await supabase.from('listings').update({ status: 'live', starts_at: new Date(nowMs).toISOString(), ends_at: new Date(nowMs + l.days * 864e5).toISOString(), reviewed_at: new Date(nowMs).toISOString(), review_note: null }).eq('id', l.id);
+    return { ok: true, status: 'live' };
+  }
+  if (decision !== 'reject') throw httpError(400, 'Choose approve or reject.');
+  const why = listingBody(note, 300, 'The reason', { min: 3 });
+  let refunded = null;
+  if (refund_amount !== undefined && refund_amount !== null && refund_amount !== '') {
+    if (!l.payment_id || !(Number(l.fee) > 0)) throw httpError(400, 'This listing had no fee, so there is nothing to refund.');
+    refunded = (await recordRefund(session, { payment_id: l.payment_id, amount: refund_amount, note: refund_note || `Listing "${l.title}" not accepted: ${why}` })).refund_amount;
+  }
+  await supabase.from('listings').update({ status: 'rejected', review_note: why, reviewed_at: new Date(nowMs).toISOString() }).eq('id', l.id);
+  return { ok: true, status: 'rejected', refunded };
+}
+async function listingsTakedown(session, { id, note }) {
+  const { l } = await listingsOne(session, id);
+  if (!listingLive(l, Date.now())) throw httpError(400, 'This listing is not live.');
+  await supabase.from('listings').update({ status: 'removed', review_note: listingBody(note, 300, 'The reason', { min: 3 }), reviewed_at: new Date().toISOString() }).eq('id', l.id);
+  return { ok: true };
+}
+async function listingsSetFeatured(session, { id, featured }) {
+  const { l } = await listingsOne(session, id);
+  await supabase.from('listings').update({ featured: !!featured }).eq('id', l.id);
+  return { ok: true };
+}
+async function listingsDismissReports(session, { id }) {
+  const { l } = await listingsOne(session, id);
+  await supabase.from('listing_reports').delete().eq('listing_id', l.id);
+  await supabase.from('listings').update({ reports: 0 }).eq('id', l.id);
+  return { ok: true };
+}
+async function listingsSetSettings(session, b) {
+  const org = await listingsOrg(session), patch = { updated_at: new Date().toISOString() };
+  const num = (v, max, what) => { const n = Math.round(Number(v) * 100) / 100; if (!Number.isFinite(n) || n < 0 || n > max) throw httpError(400, `${what} must be between £0 and £${max}.`); return n; };
+  if (b.intro_text !== undefined) patch.intro_text = gwText(b.intro_text, 300, 'The welcome line') || null;
+  if (b.price_base !== undefined) patch.price_base = num(b.price_base, 50, 'The starting price');
+  if (b.price_per_extra_week !== undefined) patch.price_per_extra_week = num(b.price_per_extra_week, 50, 'The price per extra week');
+  if (b.price_per_image !== undefined) patch.price_per_image = num(b.price_per_image, 20, 'The price per picture');
+  if (b.enabled !== undefined) {
+    if (b.enabled && !org.slug) throw httpError(400, 'Give the parish page an address first (Admin → Parish page).');
+    patch.enabled = !!b.enabled;
+  }
+  await listingSettings(org.id, { create: true });
+  const { error } = await supabase.from('listings_settings').update(patch).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+Object.assign(actions, {
+  public_listings: (s, b) => publicListings(b),
+  public_listing_view: (s, b) => publicListingView(b),
+  public_listing_contact: (s, b) => publicListingContact(b),
+  public_listing_report: (s, b) => publicListingReport(b),
+  public_listing_create: (s, b) => publicListingCreate(b),
+  public_listing_manage: (s, b) => publicListingManage(b),
+  public_listing_withdraw: (s, b) => publicListingWithdraw(b),
+  listings_get: (s) => listingsGet(s),
+  listings_review: (s, b) => listingsReview(s, b),
+  listings_takedown: (s, b) => listingsTakedown(s, b),
+  listings_set_featured: (s, b) => listingsSetFeatured(s, b),
+  listings_dismiss_reports: (s, b) => listingsDismissReports(s, b),
+  listings_set_settings: (s, b) => listingsSetSettings(s, b),
+});
+READ_ONLY_PUBLIC.add('public_listings');
+
+// ---------- Cash Recon: exactly what a seller should hand over ----------
+// Before an Admin takes a seller's cash, this says how much that seller is holding that has not been reconciled: in total, per campaign, and sale by sale
+// (oldest first, with a running total, so a part-payment can be seen to cover the first few sales). It also lists every seller who is holding cash, and what
+// was reconciled with this seller lately, so the same cash is not counted twice.
+async function cashPending(session, { seller_id } = {}) {
+  requireOrgRole(session, ['admin', 'superadmin', 'finance']);
+  const { data: camps } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id).eq('binned', false);
+  const campById = new Map((camps || []).map(c => [c.id, c])), campIds = [...campById.keys()];
+  const { data: users } = await supabase.from('users').select('id, name, active').eq('org_id', session.org_id);
+  const userBy = new Map((users || []).map(u => [u.id, u]));
+  if (seller_id && !userBy.has(seller_id)) throw httpError(404, 'Seller not found');
+  const pending = campIds.length ? await fetchAll(() => supabase.from('payments').select('id, seller_id, campaign_id, amount, created_at, payer_name, ticket_snapshot').eq('method', 'cash').eq('status', 'pending').in('campaign_id', campIds).order('created_at', { ascending: true }).order('id')) : [];
+  const pennies = (n) => Math.round(Number(n) * 100);
+  const by = new Map();   // seller -> { pennies, count, campaigns }
+  for (const p of pending) {
+    if (!p.seller_id || !userBy.has(p.seller_id)) continue;
+    const e = by.get(p.seller_id) || { pennies: 0, count: 0, campaigns: new Set() };
+    e.pennies += pennies(p.amount); e.count++; e.campaigns.add(p.campaign_id); by.set(p.seller_id, e);
+  }
+  const sellers = (users || []).filter(u => u.active !== false || by.has(u.id)).map(u => { const e = by.get(u.id); return { id: u.id, name: u.name, active: u.active !== false, total: e ? e.pennies / 100 : 0, count: e ? e.count : 0, campaigns: e ? e.campaigns.size : 0 }; })
+    .sort((a, b) => (b.total - a.total) || String(a.name).localeCompare(String(b.name)));
+  if (!seller_id) return { sellers };
+
+  const mine = pending.filter(p => p.seller_id === seller_id);
+  const tickets = await ticketsForPayments(mine.map(p => p.id), 'payment_id, ticket_number, tier_id, block_id');
+  const { data: tiers } = campIds.length ? await supabase.from('tiers').select('id, name').in('campaign_id', campIds) : { data: [] };
+  const { data: blocks } = campIds.length ? await supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', campIds) : { data: [] };
+  const groups = new Map();
+  for (const p of mine) {
+    if (!groups.has(p.campaign_id)) groups.set(p.campaign_id, { campaign_id: p.campaign_id, name: campById.get(p.campaign_id).name, pennies: 0, sales: [] });
+    const g = groups.get(p.campaign_id);
+    g.pennies += pennies(p.amount);
+    g.sales.push({ id: p.id, amount: Number(p.amount), created_at: p.created_at, buyer: p.payer_name || '', what: groupTicketsForDisplay(p, tickets, tiers || [], blocks || []), running: g.pennies / 100 });
+  }
+  const campaigns = [...groups.values()].map(g => ({ campaign_id: g.campaign_id, name: g.name, total: g.pennies / 100, count: g.sales.length, oldest: g.sales[0].created_at, sales: g.sales })).sort((a, b) => String(a.oldest).localeCompare(String(b.oldest)));
+  const { data: recs } = campIds.length ? await supabase.from('cash_recon').select('*').eq('seller_id', seller_id).in('campaign_id', campIds).order('created_at', { ascending: false }).limit(5) : { data: [] };
+  const recIds = (recs || []).map(r => r.id);
+  const { data: matched } = recIds.length ? await supabase.from('payments').select('cash_recon_batch_id, amount').in('cash_recon_batch_id', recIds) : { data: [] };
+  const recent = (recs || []).map(r => { const ms = (matched || []).filter(m => m.cash_recon_batch_id === r.id); return { id: r.id, created_at: r.created_at, campaign: (campById.get(r.campaign_id) || {}).name || '', received: Number(r.amount_received), by: (userBy.get(r.confirmed_by) || {}).name || '', sales: ms.length, matched: Math.round(ms.reduce((s, m) => s + pennies(m.amount), 0)) / 100, surplus: Number(r.surplus_amount || 0), shortfall: Number(r.shortfall_amount || 0) }; });
+  return { sellers, seller: { id: seller_id, name: userBy.get(seller_id).name, total: campaigns.reduce((s, c) => s + pennies(c.total), 0) / 100, count: mine.length, campaigns, recent } };
+}
+Object.assign(actions, { cash_pending: (s, b) => cashPending(s, b) });
+
+// ---------- Light a Candle, and the Thursday email ----------
+// A parishioner asks for candles to be lit at one of the parish's candle stands on a chosen day (any day of the next weeks, Monday to Sunday), and gives an
+// offering of £1.50 to £5 a candle by card on the page. Requests for a week close on the cut-off (Wednesday midnight, as for the Repository), so the list for
+// that week is complete when it goes out on Thursday. The office sees the list in Admin and ticks each one "lit"; on Thursday morning an email goes to the
+// parish office with the candles for the coming week and the Repository orders for the coming weekend, as a reminder (the Admin screen is the real record).
+// The payment is the ordinary SumUp card payment (a row in `payments`, held in one hidden campaign a month); the person's name and contact stay on the
+// payment only. An optional intention ("who it is for") is private to the office: never in the email, and cleared a month after the day.
+const CANDLE_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const CANDLE_MIN = 1.5, CANDLE_MAX = 5, CANDLE_SUGGESTED = [1.5, 2, 3, 5], CANDLE_MAX_CANDLES = 10, CANDLE_WEEKS_OFFERED = 4;
+const candleRef = (n) => `CAN-${String(n).padStart(3, '0')}`;
+const candleDefaultAltars = () => [{ id: 'mary', name: 'Altar of Our Lady', active: true }, { id: 'anthony', name: 'Altar of St Anthony of Padua', active: true }];
+
+async function candleSettings(orgId, { create } = {}) {
+  let { data } = await supabase.from('candle_settings').select('*').eq('org_id', orgId).maybeSingle();
+  if (!data && create) {
+    await supabase.from('candle_settings').upsert({ org_id: orgId }, { onConflict: 'org_id' });
+    ({ data } = await supabase.from('candle_settings').select('*').eq('org_id', orgId).maybeSingle());
+  }
+  return data || { org_id: orgId, enabled: false, altars: candleDefaultAltars(), intro_text: null, cutoff_weekday: 3, cutoff_time: '23:59', next_ref: 1 };
+}
+const candleActiveAltars = (st) => (Array.isArray(st.altars) ? st.altars : []).filter(a => a && a.active !== false);
+// The weeks on offer: the next Mondays whose cut-off has not passed, each with its seven days.
+function candleWeeks(settings, tz, now) {
+  const today = gwToday(tz, now), toMon = (1 - shopWeekdayOf(today) + 7) % 7, back = (1 - settings.cutoff_weekday + 7) % 7;
+  const out = [];
+  for (let w = 0; w < 10 && out.length < CANDLE_WEEKS_OFFERED; w++) {
+    const monday = shopAddDays(today, toMon + 7 * w);
+    const closesIso = gwLocalToIso(`${shopAddDays(monday, -back)}T${settings.cutoff_time}`, tz);
+    if (!closesIso || new Date(closesIso) <= now) continue;
+    out.push({ monday, closes_at: closesIso, label: `Week of ${shopDayLabel(monday)}`, dates: Array.from({ length: 7 }, (_, i) => { const d = shopAddDays(monday, i); return { date: d, label: shopDayLabel(d), short: new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', timeZone: 'UTC' }) }; }) });
+  }
+  return out;
+}
+const candleCutoffText = (s) => `Requests for a week close on ${SHOP_WEEKDAYS[s.cutoff_weekday]} ${s.cutoff_time === '23:59' ? 'midnight' : shopTimeLabel(s.cutoff_time)}, so the list is ready for the Thursday before it.`;
+async function candleMonthCampaign(orgId, today) {
+  const month = today.slice(0, 7);
+  const find = async () => { const { data } = await supabase.from('candle_months').select('campaign_id').eq('org_id', orgId).eq('month', month).maybeSingle(); return data ? data.campaign_id : null; };
+  const have = await find();
+  if (have) return have;
+  const [y, m] = month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const { data: c, error } = await supabase.from('campaigns').insert({ org_id: orgId, name: `Candles, ${label}`, kind: 'registration', age_restricted: false, public_only: false, public_page_enabled: false,
+    active: true, is_draft: false, listed_on_gateway: false, keep_until: shopAddDays(last, 75), form_def: { candles: true, month } }).select().single();
+  if (error || !c) throw httpError(500, 'Could not start your request — please try again.');
+  const { error: linkErr } = await supabase.from('candle_months').insert({ org_id: orgId, month, campaign_id: c.id });
+  if (linkErr) { await supabase.from('campaigns').delete().eq('id', c.id); const again = await find(); if (again) return again; throw httpError(500, 'Could not start your request — please try again.'); }
+  return c.id;
+}
+// The intention is cleared a month after its day.
+async function candlesSweep(orgId, now) {
+  const cut = shopAddDays(now.toISOString().slice(0, 10), -30);
+  await supabase.from('candle_requests').update({ intention: null }).eq('org_id', orgId).lt('light_date', cut).not('intention', 'is', null);
+}
+
+// ----- the public side
+async function candleOrgBySlug(slug) {
+  const s = String(slug == null ? '' : slug).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  if (!org) throw httpError(404, 'This page is not available.');
+  const settings = await candleSettings(org.id);
+  if (!settings.enabled || !candleActiveAltars(settings).length) throw httpError(404, 'Candle requests are not open right now.');
+  return { org, settings, tz: gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London' };
+}
+async function publicCandles({ slug }) {
+  const { org, settings, tz } = await candleOrgBySlug(slug);
+  try { if ((await rateHit(`csweep:${org.id}`, 21600)) === 1) await candlesSweep(org.id, new Date()); } catch { /* housekeeping only */ }
+  return {
+    org: { name: org.display_name || org.name }, intro: settings.intro_text || null,
+    altars: candleActiveAltars(settings).map(a => ({ id: a.id, name: a.name })),
+    offering: { min: CANDLE_MIN, max: CANDLE_MAX, suggested: CANDLE_SUGGESTED }, max_candles: CANDLE_MAX_CANDLES,
+    weeks: candleWeeks(settings, tz, new Date()).map(w => ({ monday: w.monday, label: w.label, dates: w.dates })),
+    cutoff_text: candleCutoffText(settings),
+  };
+}
+async function publicCandleRequest({ slug, light_date, altar_id, candles, per_candle, name, phone, email, intention, client_ref, website }) {
+  if (website) return { ok: true, request_id: null, ref: '', status: 'awaiting_payment' };   // the hidden spam-trap box was filled in: pretend, store nothing
+  if (clientIp && (await rateHit(`candle:${clientIp}`, 3600)) > 30) throw httpError(429, 'Too many requests from your connection — please try again later.');
+  client_ref = cleanClientRef(client_ref);
+  const { org, settings, tz } = await candleOrgBySlug(slug);
+  if (client_ref) {   // a lost reply and a second tap must not light twice
+    const { data: again } = await supabase.from('candle_requests').select('*').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+    if (again) {
+      const { data: pay } = again.payment_id ? await supabase.from('payments').select('link_url').eq('id', again.payment_id).maybeSingle() : { data: null };
+      return { ok: true, request_id: again.id, ref: candleRef(again.ref_no), status: again.status, total: Number(again.total), pay_url: again.status === 'awaiting_payment' && pay ? pay.link_url : null, replay: true };
+    }
+  }
+  const cleanedName = cleanName(name, 'Your name');
+  if (!cleanedName) throw httpError(400, 'Please enter your name.');
+  const hasPhone = !!String(phone || '').trim(), hasEmail = !!String(email || '').trim();
+  if (!hasPhone && !hasEmail) throw httpError(400, 'Please give a mobile number or an email address, so we can reach you if there is a problem.');
+  const phoneV = hasPhone ? validateRegPhone(phone, 'your mobile number') : null;
+  const emailV = hasEmail ? validateRegEmail(email, 'your email address') : null;
+  const altar = candleActiveAltars(settings).find(a => a.id === altar_id);
+  if (!altar) throw httpError(400, 'Please choose where the candle should be lit.');
+  const week = candleWeeks(settings, tz, new Date()).find(w => w.dates.some(d => d.date === light_date));
+  if (!week) throw httpError(409, 'That day is no longer open for requests — please choose another.');
+  const n = Number(candles);
+  if (!Number.isInteger(n) || n < 1 || n > CANDLE_MAX_CANDLES) throw httpError(400, `Please choose from 1 to ${CANDLE_MAX_CANDLES} candles.`);
+  const each = Math.round(Number(per_candle) * 100) / 100;
+  if (!Number.isFinite(each) || each < CANDLE_MIN || each > CANDLE_MAX) throw httpError(400, `The offering for each candle is from £${CANDLE_MIN.toFixed(2)} to £${CANDLE_MAX.toFixed(2)}.`);
+  const total = Math.round(each * 100) * n / 100;
+  const why = intention ? listingBody(intention, 120, 'The intention') : '';
+  await enforcePublicPurchaseLimits(emailV || phoneV, 1);
+  const today = gwToday(tz, new Date());
+  const campaignId = await candleMonthCampaign(org.id, today);
+  const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaignId, method: 'link', amount: total, status: 'pending', seller_id: null, payer_name: cleanedName, contact_value: emailV || phoneV, client_ip: clientIp || null }).select().single();
+  if (payErr) throw httpError(500, 'Could not start your payment — please try again.');
+  const voidPayment = (w) => supabase.from('payments').update({ status: 'void', voided: true, void_reason: w }).eq('id', pay.id);
+  const { data: refData, error: refErr } = await supabase.rpc('candle_next_ref', { p_org: org.id });
+  const refNo = Array.isArray(refData) ? refData[0] : refData;
+  if (refErr || !refNo) { await voidPayment('request not saved'); throw httpError(500, 'Could not save your request — please try again.'); }
+  const { data: row, error } = await supabase.from('candle_requests').insert({ org_id: org.id, ref_no: refNo, payment_id: pay.id, light_date, altar_id: altar.id, altar_name: altar.name, candles: n, per_candle: each, total, intention: why || null, client_ref, status: 'awaiting_payment' }).select().single();
+  if (error || !row) { await voidPayment('request not saved'); throw httpError(500, 'Could not save your request — please try again.'); }
+  const created = await createSumupCheckout({ payment_id: pay.id, refSuffix: '', amount: total, campaignName: 'Candles', ticketNumbers: [candleRef(refNo)],
+    description: `Candles ${candleRef(refNo)}, ${altar.name}`, redirectUrl: `${baseUrl}/candles.html?request=${row.id}` });
+  if (!created.ok) { await supabase.from('candle_requests').update({ status: 'cancelled', cancel_reason: 'Could not start the payment', cancelled_at: new Date().toISOString() }).eq('id', row.id); await voidPayment('could not create SumUp payment link'); throw httpError(502, created.message); }
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', pay.id);
+  return { ok: true, request_id: row.id, ref: candleRef(refNo), status: 'awaiting_payment', total, pay_url: created.pay_url };
+}
+async function publicCandleStatus({ request_id }) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(request_id || ''))) throw httpError(400, 'request is required');
+  let { data: r } = await supabase.from('candle_requests').select('*').eq('id', request_id).maybeSingle();
+  if (!r) throw httpError(404, 'Request not found');
+  let pay = null;
+  if (r.payment_id) {
+    ({ data: pay } = await supabase.from('payments').select('*').eq('id', r.payment_id).maybeSingle());
+    if (pay && r.status === 'awaiting_payment') { try { await syncCheckout(pay); } catch { /* SumUp unreachable: show what we know */ } ({ data: r } = await supabase.from('candle_requests').select('*').eq('id', request_id).maybeSingle()); }
+  }
+  const { data: org } = await supabase.from('organizations').select('name, display_name, slug').eq('id', r.org_id).maybeSingle();
+  return { ref: candleRef(r.ref_no), status: r.status, date_label: shopDayLabel(String(r.light_date)), altar: r.altar_name, candles: r.candles, per_candle: Number(r.per_candle), total: Number(r.total),
+    pay_url: r.status === 'awaiting_payment' && pay ? pay.link_url : null, org_name: org ? (org.display_name || org.name) : '', org_slug: org ? org.slug : null };
+}
+async function candlePaid(payment) {
+  try {
+    const { data: r } = await supabase.from('candle_requests').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (r && (r.status === 'awaiting_payment' || (r.status === 'cancelled'))) await supabase.from('candle_requests').update({ status: 'paid', paid_at: new Date().toISOString(), cancel_reason: null, cancelled_at: null }).eq('id', r.id);
+  } catch { /* the payment itself is already recorded; the office can see the request */ }
+}
+async function candleFailed(payment) {
+  try {
+    const { data: r } = await supabase.from('candle_requests').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (r && r.status === 'awaiting_payment') await supabase.from('candle_requests').update({ status: 'cancelled', cancel_reason: 'Payment not completed', cancelled_at: new Date().toISOString() }).eq('id', r.id);
+  } catch { /* the sweep will try again */ }
+}
+
+// ----- the office side
+async function candlesOrg(session) {
+  requireOrgRole(session, CANDLE_ROLES);
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone, contact_email').eq('id', session.org_id).maybeSingle();
+  if (!org) throw httpError(404, 'Organisation not found');
+  if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
+  return org;
+}
+const mailReady = () => !!(mailer || (process.env.MAIL_USER && process.env.MAIL_APP_PASSWORD));
+async function digestRow(orgId, { create } = {}) {
+  let { data } = await supabase.from('weekly_digest').select('*').eq('org_id', orgId).maybeSingle();
+  if (!data && create) { await supabase.from('weekly_digest').upsert({ org_id: orgId }, { onConflict: 'org_id' }); ({ data } = await supabase.from('weekly_digest').select('*').eq('org_id', orgId).maybeSingle()); }
+  return data || { org_id: orgId, enabled: false, to_email: null, last_week_start: null, last_sent_at: null, last_status: null, last_note: null, last_attempt_at: null };
+}
+function digestShape(d, org) {
+  return { enabled: !!d.enabled, to_email: d.to_email || '', sends_to: d.to_email || org.contact_email || '', mail_ready: mailReady(), last_sent_at: d.last_sent_at || null, last_attempt_at: d.last_attempt_at || null, last_status: d.last_status || null, last_note: d.last_note || '', last_week_start: d.last_week_start || null };
+}
+async function candlesGet(session) {
+  const org = await candlesOrg(session), settings = await candleSettings(org.id, { create: true }), now = new Date();
+  try { await candlesSweep(org.id, now); } catch { /* housekeeping only */ }
+  const dg = await digestRow(org.id, { create: true });
+  const today = gwToday(org.timezone, now), nextMonday = shopAddDays(today, ((1 - shopWeekdayOf(today) + 7) % 7) || 7);
+  return {
+    org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/candles/${org.slug}` : null, timezone: org.timezone },
+    settings: { enabled: !!settings.enabled, altars: Array.isArray(settings.altars) ? settings.altars : candleDefaultAltars(), intro_text: settings.intro_text || '', cutoff_weekday: settings.cutoff_weekday, cutoff_time: settings.cutoff_time },
+    digest: digestShape(dg, org), next_monday: nextMonday, this_monday: shopAddDays(today, -((shopWeekdayOf(today) + 6) % 7)),
+  };
+}
+async function candlesWeek(session, { monday } = {}) {
+  const org = await candlesOrg(session);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(monday || '')) || shopWeekdayOf(String(monday)) !== 1) throw httpError(400, 'Choose a Monday.');
+  const { data: rows } = await supabase.from('candle_requests').select('*').eq('org_id', org.id).gte('light_date', monday).lte('light_date', shopAddDays(monday, 6)).order('ref_no', { ascending: true }).limit(2000);
+  const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
+  const { data: pays } = payIds.length ? await supabase.from('payments').select('id, payer_name, contact_value, status, refund_amount').in('id', payIds) : { data: [] };
+  const payOf = new Map((pays || []).map(p => [p.id, p]));
+  const out = (rows || []).map(r => { const p = payOf.get(r.payment_id); return { id: r.id, ref: candleRef(r.ref_no), status: r.status, date: String(r.light_date), date_label: shopDayLabel(String(r.light_date)), altar: r.altar_name, candles: r.candles, per_candle: Number(r.per_candle), total: Number(r.total),
+    name: p ? (p.payer_name || '(details cleared)') : '', contact: p ? (p.contact_value || '') : '', intention: r.intention || '', lit_at: r.lit_at, cancel_reason: r.cancel_reason || '', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, payment_id: r.payment_id }; });
+  const live = out.filter(r => r.status === 'paid' || r.status === 'lit');
+  return { monday, label: `Week of ${shopDayLabel(monday)}`, requests: out, totals: { requests: live.length, candles: live.reduce((s, r) => s + r.candles, 0), to_light: live.filter(r => r.status === 'paid').reduce((s, r) => s + r.candles, 0), offered: Math.round(live.reduce((s, r) => s + r.total * 100, 0)) / 100 } };
+}
+async function candlesMark(session, { id, lit }) {
+  const org = await candlesOrg(session);
+  const { data: r } = await supabase.from('candle_requests').select('id, status').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!r) throw httpError(404, 'Request not found');
+  if (!['paid', 'lit'].includes(r.status)) throw httpError(400, r.status === 'awaiting_payment' ? 'This request has not been paid yet.' : 'This request was cancelled.');
+  await supabase.from('candle_requests').update(lit ? { status: 'lit', lit_at: new Date().toISOString() } : { status: 'paid', lit_at: null }).eq('id', r.id);
+  return { ok: true, status: lit ? 'lit' : 'paid' };
+}
+async function candlesCancel(session, { id, reason, refund_amount, refund_note }) {
+  const org = await candlesOrg(session);
+  const { data: r } = await supabase.from('candle_requests').select('id, status, payment_id, ref_no').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!r) throw httpError(404, 'Request not found');
+  if (r.status === 'cancelled') throw httpError(400, 'This request is already cancelled.');
+  const why = gwText(reason, 150, 'The reason', { required: true });
+  let refunded = null;
+  if (refund_amount !== undefined && refund_amount !== null && refund_amount !== '') {
+    if (!r.payment_id || !['paid', 'lit'].includes(r.status)) throw httpError(400, 'This request was not paid, so there is nothing to refund.');
+    refunded = (await recordRefund(session, { payment_id: r.payment_id, amount: refund_amount, note: refund_note || `Candles ${candleRef(r.ref_no)} cancelled: ${why}` })).refund_amount;
+  }
+  await supabase.from('candle_requests').update({ status: 'cancelled', cancel_reason: `Cancelled by the office: ${why}`, cancelled_at: new Date().toISOString() }).eq('id', r.id);
+  return { ok: true, status: 'cancelled', refunded };
+}
+async function candlesSetSettings(session, b) {
+  const org = await candlesOrg(session), patch = { updated_at: new Date().toISOString() };
+  const current = await candleSettings(org.id, { create: true });
+  if (b.intro_text !== undefined) patch.intro_text = gwText(b.intro_text, 300, 'The welcome line') || null;
+  if (b.cutoff_weekday !== undefined) { const d = Number(b.cutoff_weekday); if (!Number.isInteger(d) || d < 0 || d > 6) throw httpError(400, 'Choose the day requests close.'); patch.cutoff_weekday = d; }
+  if (b.cutoff_time !== undefined) { if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.cutoff_time))) throw httpError(400, 'Give the closing time like 23:59.'); patch.cutoff_time = String(b.cutoff_time); }
+  if (b.altars !== undefined) {
+    if (!Array.isArray(b.altars) || !b.altars.length || b.altars.length > 4) throw httpError(400, 'Add from one to four candle stands.');
+    const seen = new Set();
+    patch.altars = b.altars.map(a => { let id = String((a && a.id) || '').trim(); if (!/^[a-z0-9]{2,12}$/.test(id) || seen.has(id)) id = 'a' + crypto.randomBytes(3).toString('hex'); seen.add(id); return { id, name: gwText(a && a.name, 50, 'The name of the candle stand', { required: true }), active: !(a && a.active === false) }; });
+  }
+  if (b.enabled !== undefined) {
+    if (b.enabled) {
+      if (!org.slug) throw httpError(400, 'Give the parish page an address first (Admin → Parish page).');
+      if (!candleActiveAltars({ altars: patch.altars || current.altars }).length) throw httpError(400, 'Switch on at least one candle stand before opening.');
+    }
+    patch.enabled = !!b.enabled;
+  }
+  const { error } = await supabase.from('candle_settings').update(patch).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// ----- the Thursday email
+let mailer = null;   // tests put a stand-in here; otherwise the parish Gmail account sends it (MAIL_USER and MAIL_APP_PASSWORD, set once in Netlify)
+exports.setMailer = (fn) => { mailer = fn; };
+async function sendMail(msg) {
+  if (mailer) return mailer(msg);
+  const nodemailer = require('nodemailer');
+  const tr = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_APP_PASSWORD } });
+  return tr.sendMail({ from: `"${process.env.MAIL_FROM_NAME || 'Parish Campaigns'}" <${process.env.MAIL_USER}>`, to: msg.to, subject: msg.subject, text: msg.text, html: msg.html });
+}
+const digestEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Everything the volunteer needs and nothing more: names, altars, days, candle counts, order references and items. No phone numbers, no email
+// addresses, and never an intention.
+async function digestContent(org, monday) {
+  const tz = org.timezone, sunday = shopAddDays(monday, 6), sat = shopAddDays(monday, 5);
+  const { data: reqs } = await supabase.from('candle_requests').select('*').eq('org_id', org.id).gte('light_date', monday).lte('light_date', sunday).in('status', ['paid', 'lit']).order('ref_no', { ascending: true }).limit(2000);
+  const payIds = [...(reqs || []).map(r => r.payment_id)].filter(Boolean);
+  const { data: orders } = await supabase.from('repository_orders').select('*').eq('org_id', org.id).gte('collect_date', sat).lte('collect_date', sunday).in('status', ['paid', 'prepared']).order('ref_no', { ascending: true }).limit(2000);
+  const orderIds = (orders || []).map(o => o.id);
+  const { data: lines } = orderIds.length ? await supabase.from('repository_order_lines').select('order_id, item_name, qty').in('order_id', orderIds) : { data: [] };
+  const orderPay = [...(orders || []).map(o => o.payment_id)].filter(Boolean);
+  const allPay = [...new Set([...payIds, ...orderPay])];
+  const { data: pays } = allPay.length ? await supabase.from('payments').select('id, payer_name').in('id', allPay) : { data: [] };
+  const nameOf = new Map((pays || []).map(p => [p.id, p.payer_name || '(name cleared)']));
+  // candles: day, then candle stand
+  const days = new Map();
+  for (const r of reqs || []) { const d = String(r.light_date); if (!days.has(d)) days.set(d, new Map()); const al = days.get(d); if (!al.has(r.altar_name)) al.set(r.altar_name, []); al.get(r.altar_name).push({ name: nameOf.get(r.payment_id) || '', n: r.candles, lit: r.status === 'lit' }); }
+  const candleTotal = (reqs || []).reduce((s, r) => s + r.candles, 0);
+  // repository: collection Mass, then order
+  const slots = new Map();
+  for (const o of orders || []) { if (!slots.has(o.slot_label)) slots.set(o.slot_label, []); slots.get(o.slot_label).push({ ref: shopRef(o.ref_no), name: nameOf.get(o.payment_id) || '', lines: (lines || []).filter(l => l.order_id === o.id).map(l => ({ name: l.item_name, qty: l.qty })) }); }
+  const pick = new Map();
+  for (const l of lines || []) pick.set(l.item_name, (pick.get(l.item_name) || 0) + l.qty);
+  const title = `${org.name}: Thursday list`, weekLabel = `Week of ${shopDayLabel(monday)}`;
+  const t = [title, weekLabel, '', `LIGHT A CANDLE: ${(reqs || []).length} request${(reqs || []).length === 1 ? '' : 's'}, ${candleTotal} candle${candleTotal === 1 ? '' : 's'}`];
+  const h = [`<h2 style="margin:0 0 4px">${digestEsc(title)}</h2><p style="margin:0 0 16px;color:#555">${digestEsc(weekLabel)}</p>`, `<h3 style="margin:16px 0 6px">Light a candle: ${(reqs || []).length} request${(reqs || []).length === 1 ? '' : 's'}, ${candleTotal} candle${candleTotal === 1 ? '' : 's'}</h3>`];
+  if (!days.size) { t.push('No candle requests for this week.'); h.push('<p>No candle requests for this week.</p>'); }
+  for (const d of [...days.keys()].sort()) {
+    t.push('', shopDayLabel(d)); h.push(`<p style="margin:10px 0 2px"><b>${digestEsc(shopDayLabel(d))}</b></p>`);
+    for (const [altar, list] of days.get(d)) {
+      const n = list.reduce((s, x) => s + x.n, 0);
+      t.push(`  ${altar} (${n} candle${n === 1 ? '' : 's'}): ${list.map(x => `${x.name} x${x.n}${x.lit ? ' (lit)' : ''}`).join('; ')}`);
+      h.push(`<p style="margin:0 0 4px 12px">${digestEsc(altar)} <span style="color:#555">(${n} candle${n === 1 ? '' : 's'})</span>: ${list.map(x => `${digestEsc(x.name)} &times;${x.n}${x.lit ? ' (lit)' : ''}`).join('; ')}</p>`);
+    }
+  }
+  t.push('', `REPOSITORY ORDERS FOR THE WEEKEND (${shopDayLabel(sat)} and ${shopDayLabel(sunday)}): ${(orders || []).length} paid order${(orders || []).length === 1 ? '' : 's'}`);
+  h.push(`<h3 style="margin:20px 0 6px">Repository orders for the weekend (${digestEsc(shopDayLabel(sat))} and ${digestEsc(shopDayLabel(sunday))}): ${(orders || []).length} paid order${(orders || []).length === 1 ? '' : 's'}</h3>`);
+  if (!slots.size) { t.push('No paid orders yet for this weekend.'); h.push('<p>No paid orders yet for this weekend.</p>'); }
+  for (const label of [...slots.keys()].sort()) {
+    t.push('', label); h.push(`<p style="margin:10px 0 2px"><b>${digestEsc(label)}</b></p>`);
+    for (const o of slots.get(label)) { const what = o.lines.map(l => `${l.qty} x ${l.name}`).join(', '); t.push(`  ${o.ref}  ${o.name}: ${what}`); h.push(`<p style="margin:0 0 4px 12px"><b>${digestEsc(o.ref)}</b> ${digestEsc(o.name)}: ${digestEsc(o.lines.map(l => `${l.qty} × ${l.name}`).join(', '))}</p>`); }
+  }
+  if (pick.size) {
+    const items = [...pick.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    t.push('', 'All the items to get out: ' + items.map(([n, q]) => `${n} x${q}`).join('; ')); h.push(`<p style="margin:12px 0 2px"><b>All the items to get out:</b> ${digestEsc(items.map(([n, q]) => `${n} ×${q}`).join('; '))}</p>`);
+  }
+  const foot = 'This is a reminder. The full lists (including any intentions for candles) are in the parish Campaigns screen, under Admin: Candles and Repository. Orders not yet paid are not included.';
+  t.push('', foot); h.push(`<p style="margin:20px 0 0;color:#555;font-size:13px">${digestEsc(foot)}</p>`);
+  return { subject: `Thursday list: ${weekLabel}`, text: t.join('\n'), html: `<div style="font-family:Arial,sans-serif;font-size:15px;color:#111">${h.join('')}</div>`, counts: { requests: (reqs || []).length, candles: candleTotal, orders: (orders || []).length } };
+}
+// Sends the email for one organisation. A normal (scheduled) run only sends on a Thursday morning (8 o'clock or after, the parish's own time), once a week,
+// and only if it is switched on; a forced run (the "Send now" button) always sends. The result is written down either way, so the office can see it.
+async function digestSend(orgId, { force, now } = {}) {
+  now = now || new Date();
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, contact_email').eq('id', orgId).maybeSingle();
+  if (!org) return { skipped: 'no organisation' };
+  const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London';
+  org.timezone = tz; org.name = org.display_name || org.name;
+  const row = await digestRow(orgId, { create: true });
+  const today = gwToday(tz, now), dow = shopWeekdayOf(today), monday = shopAddDays(today, ((1 - dow + 7) % 7) || 7);
+  if (!force) {
+    if (!row.enabled) return { skipped: 'switched off' };
+    const hour = gwParts(now.getTime(), tz).h;
+    if (dow !== 4 || hour < 8) return { skipped: 'not Thursday morning yet' };
+    if (row.last_week_start && String(row.last_week_start) === monday && row.last_status === 'sent') return { skipped: 'already sent this week' };
+  }
+  const to = row.to_email || org.contact_email;
+  const record = async (patch) => { await supabase.from('weekly_digest').update({ ...patch, last_attempt_at: now.toISOString(), updated_at: now.toISOString() }).eq('org_id', orgId); };
+  if (!to) { await record({ last_status: 'failed', last_note: 'There is no email address to send it to.' }); return { ok: false, error: 'There is no email address to send it to.' }; }
+  if (!mailReady()) { await record({ last_status: 'failed', last_note: 'Email sending has not been set up yet.' }); return { ok: false, error: 'Email sending has not been set up yet.' }; }
+  try {
+    const c = await digestContent(org, monday);
+    await sendMail({ to, subject: c.subject, text: c.text, html: c.html });
+    await record({ last_status: 'sent', last_sent_at: now.toISOString(), last_week_start: monday, last_note: `Sent to ${to}: ${c.counts.requests} candle request${c.counts.requests === 1 ? '' : 's'}, ${c.counts.orders} repository order${c.counts.orders === 1 ? '' : 's'}.` });
+    return { ok: true, to, counts: c.counts };
+  } catch (e) {
+    const msg = String(e && e.message || 'The email could not be sent.').slice(0, 250);
+    await record({ last_status: 'failed', last_note: msg });
+    return { ok: false, error: msg };
+  }
+}
+// Called by the scheduled function three times on Thursday mornings (so a failed attempt is tried again an hour later).
+exports.runWeeklyDigests = async (now) => {
+  const { data: rows } = await supabase.from('weekly_digest').select('org_id').eq('enabled', true);
+  const out = [];
+  for (const r of rows || []) { try { out.push({ org: r.org_id, ...(await digestSend(r.org_id, { now })) }); } catch (e) { out.push({ org: r.org_id, ok: false, error: String(e && e.message) }); } }
+  return out;
+};
+async function digestSetSettings(session, b) {
+  const org = await candlesOrg(session);
+  const patch = { updated_at: new Date().toISOString() };
+  if (b.to_email !== undefined) patch.to_email = String(b.to_email || '').trim() ? validateRegEmail(b.to_email, 'the email address') : null;
+  if (b.enabled !== undefined) patch.enabled = !!b.enabled;
+  await digestRow(org.id, { create: true });
+  const { error } = await supabase.from('weekly_digest').update(patch).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+async function digestSendNow(session) {
+  const org = await candlesOrg(session);
+  if (!mailReady()) throw httpError(400, 'Email sending has not been set up yet. It needs the parish Gmail account and an app password added once in Netlify (the steps are in the Admin screen).');
+  const r = await digestSend(org.id, { force: true });
+  if (!r.ok) throw httpError(502, r.error || 'The email could not be sent.');
+  return { ok: true, to: r.to, counts: r.counts };
+}
+async function digestPreview(session) {
+  const org = await candlesOrg(session);
+  const { data: o } = await supabase.from('organizations').select('id, name, display_name, timezone').eq('id', org.id).maybeSingle();
+  const tz = org.timezone, today = gwToday(tz, new Date()), monday = shopAddDays(today, ((1 - shopWeekdayOf(today) + 7) % 7) || 7);
+  const c = await digestContent({ id: org.id, name: o.display_name || o.name, timezone: tz }, monday);
+  return { subject: c.subject, text: c.text, counts: c.counts };
+}
+
+Object.assign(actions, {
+  public_candles: (s, b) => publicCandles(b),
+  public_candle_request: (s, b) => publicCandleRequest(b),
+  public_candle_status: (s, b) => publicCandleStatus(b),
+  candles_get: (s) => candlesGet(s),
+  candles_week: (s, b) => candlesWeek(s, b),
+  candles_mark: (s, b) => candlesMark(s, b),
+  candles_cancel: (s, b) => candlesCancel(s, b),
+  candles_set_settings: (s, b) => candlesSetSettings(s, b),
+  digest_set: (s, b) => digestSetSettings(s, b),
+  digest_send_now: (s) => digestSendNow(s),
+  digest_preview: (s) => digestPreview(s),
+});
+READ_ONLY_PUBLIC.add('public_candles');

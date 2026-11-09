@@ -60,7 +60,6 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .mast .id { display:flex; align-items:center; gap:10px; }
 .crest { width:28px; height:28px; flex:none; color:#fff; opacity:.95; }
 .mast h1 { flex:1; min-width:0; font-family:var(--font-display); font-weight:600; font-size:1.6rem; line-height:1.1; margin:0; text-wrap:balance; }
-.mail { display:inline-flex; align-items:center; gap:6px; flex:none; min-height:44px; padding:0 14px; border:2px solid rgba(255,255,255,.55); border-radius:999px; background:transparent; color:#fff; font-size:.95rem; font-weight:600; }
 
 /* notices bar */
 .notices { display:flex; align-items:center; gap:10px; width:100%; min-height:48px; padding-top:6px; padding-bottom:6px; background:var(--surface); border:0; border-bottom:2px solid var(--line); text-align:left; }
@@ -72,6 +71,27 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .notices.urgent .lab { color:var(--warn); }
 .notices.urgent .sub { color:var(--fg); white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-weight:600; }
 .notices.urgent .go { color:var(--warn); }
+
+/* the permanent shortcuts are pictures, not words: WhatsApp, email */
+.iconrow { display:flex; justify-content:center; gap:18px; margin-top:14px; }
+.ic { width:60px; height:60px; flex:none; border-radius:50%; border:0; background:var(--brand); color:#fff; display:grid; place-items:center; }
+.ic:active { filter:brightness(.88); }
+.ic svg { width:30px; height:30px; }
+
+/* Today in the Church */
+.today { margin-top:12px; background:var(--surface); border:2px solid var(--line); border-left-width:8px; border-radius:16px; padding:12px 14px; display:grid; gap:4px; }
+.today.c-white { border-left-color:#d9d4c0; } .today.c-red { border-left-color:#b3262b; } .today.c-green { border-left-color:#2f7a3f; }
+.today.c-violet { border-left-color:#6b3fa0; } .today.c-rose { border-left-color:#d77a9a; } .today.c-black { border-left-color:#222; }
+.today .k { display:flex; align-items:center; gap:8px; font-size:.9375rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--brand-text); }
+.today .k svg { flex:none; }
+.today h2 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.3rem; line-height:1.2; text-wrap:balance; }
+.today .sub { margin:0; color:var(--muted); font-size:.9375rem; }
+.today .acts { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
+.today .ib { flex:1 1 0; min-height:60px; border-radius:14px; display:grid; place-items:center; border:2px solid var(--brand-text); color:var(--brand-text); background:transparent; }
+.today .ib.solid { background:var(--brand); border-color:var(--brand); color:#fff; }
+.today .ib:active { filter:brightness(.9); }
+.today .ib svg { width:30px; height:30px; }
+.today .src { margin:6px 0 0; color:var(--muted); font-size:.9375rem; line-height:1.3; }
 
 /* the notice, opened */
 .sheet { position:fixed; inset:0; z-index:30; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center; }
@@ -164,6 +184,10 @@ main { padding-bottom:32px; }
       failed: 'We could not load this page.', failedHelp: 'Please check your connection and try again.', retry: 'Try again',
       loading: 'Loading…', copied: 'Copied ', copiedLink: 'Link copied', seeAll: 'See all', showFewer: 'Show fewer',
       full: 'Full', waiting: 'Join waiting list', isNew: 'New',
+      // the shortcut buttons show pictures only; these words are for screen readers and for the tooltip
+      waJoin: 'Join our WhatsApp channel', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services', candleAria: 'Light a candle',
+      today: 'Today', readings: 'Today’s Mass readings', about: 'About today’s saint or feast', readingsTitle: 'Mass readings for today',
+      todaySource: 'Readings: Universalis (England & Wales). Day: General Roman Calendar.',
       icons: ['hall', 'mass', 'news']   // the three permanent links are drawn in this order
     }
   };
@@ -172,7 +196,16 @@ main { padding-bottom:32px; }
     hall: '<path d="M3 21h18M5 21V10l7-6 7 6v11M9 21v-6h6v6"/>',
     mass: '<path d="M12 2c1.6 2 2.2 3.4 2.2 4.6a2.2 2.2 0 0 1-4.4 0C9.8 5.4 10.4 4 12 2ZM8 12h8v9H8zM6 21h12"/>',
     news: '<path d="M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V4ZM18 9h2v9a2 2 0 0 1-2 2M8 8h7M8 12h7M8 16h4"/>',
-    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+    // the permanent shortcuts: a chat bubble with a handset, an envelope, an open book, a figure with a halo, a calendar
+    whatsapp: '<path d="M4 20l1.3-4.2A8 8 0 1 1 8.4 18.8L4 20Z"/><path d="M9.2 8.4c-.3 1.6.9 3.6 2.6 4.8 1 .7 2.2 1.2 3.3 1l.9-1.2-1.8-1-.8.6c-.7-.3-1.4-1-1.8-1.7l.6-.8-1-1.8-1.2.1Z"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    book: '<path d="M12 6.5C10.5 5 8 4.4 4 4.4V18c4 0 6.5.6 8 2.2 1.5-1.6 4-2.2 8-2.2V4.4c-4 0-6.5.6-8 2.1ZM12 6.5v13.7"/>',
+    saint: '<ellipse cx="12" cy="4.6" rx="4.2" ry="1.7"/><circle cx="12" cy="11.6" r="3.2"/><path d="M5.5 21c0-3.6 2.9-5.6 6.5-5.6s6.5 2 6.5 5.6"/>',
+    calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/>',
+    tag: '<path d="M3 12V4h8l10 10-8 8L3 12Z"/><circle cx="7.5" cy="8.5" r="1.2"/>',
+    bag: '<path d="M6 8h12l1.2 12H4.8L6 8Z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>',   // the Repository (parish shop): a shopping bag
+    candle: '<path d="M12 2.5c1.3 1.5 1.8 2.6 1.8 3.5a1.8 1.8 0 0 1-3.6 0c0-.9.5-2 1.8-3.5Z"/><rect x="9" y="9.5" width="6" height="9" rx="1"/><path d="M12 8v1.5M6 21.5h12M7.5 18.5h9"/>'   // Light a Candle: a flame over a candle on its stand
   };
   var DAY = 864e5;
   function $(id) { return document.getElementById(id); }
@@ -225,20 +258,44 @@ main { padding-bottom:32px; }
     return a;
   }
   function noticeKey(n) { return n ? n.message + '|' + n.urgent + '|' + n.ends_at : ''; }
+  // The WhatsApp channel bar, at the very top of the page. Only a WhatsApp channel address is ever drawn.
+  function icon(name, size) { return '<svg width="' + (size || 30) + '" height="' + (size || 30) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
+  // The permanent shortcuts are pictures only (each still has its words for screen readers and as a tooltip): WhatsApp, email.
+  // Only a WhatsApp channel address is ever drawn.
+  function iconRow(o, shop, listings, candles) {
+    var u = String(o.whatsapp || '').trim(), parts = [];
+    if (candles && /^\/candles\/[a-z0-9-]+$/.test(String(candles.path || ''))) parts.push('<a class="ic" href="' + esc(candles.path) + '" aria-label="' + esc(W.candleAria) + '" title="' + esc(W.candleAria) + '">' + icon('candle') + '</a>');
+    if (listings && /^\/listings\/[a-z0-9-]+$/.test(String(listings.path || ''))) parts.push('<a class="ic" href="' + esc(listings.path) + '" aria-label="' + esc(W.listAria) + '" title="' + esc(W.listAria) + '">' + icon('tag') + '</a>');
+    if (shop && /^\/shop\/[a-z0-9-]+$/.test(String(shop.path || ''))) parts.push('<a class="ic" href="' + esc(shop.path) + '" aria-label="' + esc(W.shopAria) + '" title="' + esc(W.shopAria) + '">' + icon('bag') + '</a>');
+    if (/^https:\/\/(www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+\/?$/i.test(u)) parts.push('<a class="ic" href="' + esc(u) + '" target="_blank" rel="noopener" aria-label="' + esc(W.waJoin) + '" title="' + esc(W.waJoin) + '">' + icon('whatsapp') + '</a>');
+    if (o.contact_email) parts.push('<button class="ic" type="button" data-copy="' + esc(o.contact_email) + '" aria-label="' + esc(W.emailAria + ': ' + o.contact_email) + '" title="' + esc(W.emailAria) + '">' + icon('mail') + '</button>');
+    return parts.length ? '<nav class="iconrow" aria-label="Contact">' + parts.join('') + '</nav>' : '';
+  }
+  // "Today in the Church": the day's feast and where to read the Mass readings. It only shows for the day it was made for, so a page
+  // saved on a phone overnight never shows yesterday's feast.
+  function todayCard(tz, today) {
+    var d = data.daily; if (!d || d.date !== today) return '';
+    var rd = safeHref(d.readings_url), ab = safeHref(d.about_url), c = d.celebration;
+    var p = today.split('-'), when = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+    var sub = c ? [c.rank, c.season].filter(Boolean).join(' · ') : '';
+    var col = c && c.colour ? ' c-' + c.colour : '';
+    return '<section class="today' + col + '" aria-labelledby="td-h"><span class="k">' + icon('calendar', 20) + '<span>' + esc(when) + '</span></span><h2 id="td-h">' + esc(c ? c.title : W.readingsTitle) + '</h2>' + (sub ? '<p class="sub">' + esc(sub) + '</p>' : '') +
+      '<div class="acts">' + (rd ? '<a class="ib solid" href="' + esc(rd) + '" target="_blank" rel="noopener" aria-label="' + esc(W.readings) + '" title="' + esc(W.readings) + '">' + icon('book') + '</a>' : '') + (ab ? '<a class="ib" href="' + esc(ab) + '" target="_blank" rel="noopener" aria-label="' + esc(W.about) + '" title="' + esc(W.about) + '">' + icon('saint') + '</a>' : '') + '</div>' +
+      '<p class="src">' + esc(W.todaySource) + '</p></section>';
+  }
   function crest() { return '<svg class="crest" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 4v32M11 14h18"/><circle cx="20" cy="20" r="17" stroke-width="1.4" opacity=".6"/></svg>'; }
   function render() {
     var o = data.org, tz = o.timezone || 'Europe/London', today = todayIn(tz), n = liveNotice(tz);
     lastNoticeKey = noticeKey(n);
     document.title = o.name;
     var html = '<header class="mast gutter"><div class="wrap"><div class="id">' + crest() + '<h1>' + esc(o.name) + '</h1>' +
-      (o.contact_email ? '<button class="mail" type="button" data-copy="' + esc(o.contact_email) + '" aria-label="Copy email address ' + esc(o.contact_email) + '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg><span>' + esc(W.emailChip) + '</span></button>' : '') +
       '</div></div></header>';
     if (n) {
       html += n.urgent
         ? '<button class="notices urgent gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.urgentNotice + ': ' + n.message + '. Tap to read.') + '"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:var(--warn)"><path d="M12 3 2 20h20L12 3ZM12 10v5M12 18v.01"/></svg><span class="txt"><span class="lab">' + esc(W.urgentLabel) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>'
         : '<button class="notices gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.notice + ': ' + n.message + '. Tap to read.') + '"><span class="txt"><span class="lab">' + esc(W.notices) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>';
     }
-    html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '');
+    html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '') + iconRow(o, data.shop, data.listings, data.candles) + todayCard(tz, today);
     var doors = (data.links || []).map(function (l, i) {
       var h = safeHref(l.url); if (!h) return '';
       return '<a class="door" href="' + esc(h) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[W.icons[i] || 'link'] + '</svg></span><span><h2>' + esc(l.label) + '</h2>' + (l.sub ? '<p>' + esc(l.sub) + '</p>' : '') + '</span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>';
@@ -323,7 +380,14 @@ main { padding-bottom:32px; }
   if (!data && $('app')) status(W.loading, '', false);
   load();
   // The page re-reads itself now and then, so a new notice appears and an old one goes without anybody touching it.
-  setInterval(function () { if (data && !document.hidden && noticeKey(liveNotice()) !== lastNoticeKey) render(); }, 30000);   // a notice reaching its end time comes down on its own
+  var lastDay = '';
+  setInterval(function () {   // a notice reaching its end time comes down on its own; at midnight the "Today" card goes (and the page asks for the new day)
+    if (!data || document.hidden) return;
+    var day = todayIn((data.org && data.org.timezone) || 'Europe/London');
+    if (lastDay && day !== lastDay) { lastDay = day; render(); load(); return; }
+    lastDay = day;
+    if (noticeKey(liveNotice()) !== lastNoticeKey) render();
+  }, 30000);
   setInterval(function () { if (!document.hidden && data) load(); }, 120000);
   document.addEventListener('visibilitychange', function () { if (!document.hidden && data) load(); });
 
