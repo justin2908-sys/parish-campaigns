@@ -7,8 +7,11 @@ function createFakeDb(clock) {
   const tables = {};
   const T = (n) => (tables[n] = tables[n] || []);
   const joins = { ticket_blocks: 'block_id' };   // tickets.block_id -> ticket_blocks, for "ticket_blocks!inner(type)"
-  const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']] };
-  const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }) };
+  const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']],
+    repository_weekends: [['org_id', 'weekend']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
+  const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
+    repository_items: () => ({ available: true, stock: null, sort: 0 }),
+    repository_settings: () => ({ enabled: false, slots: [], cutoff_weekday: 3, cutoff_time: '23:59', intro_text: null, next_ref: 1 }) };
   let seq = 0;
   const faults = [];   // { table, op, when? }: the next matching write fails once, so tests can see what the code does when the database refuses
   const clone = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x)));
@@ -175,6 +178,51 @@ function createFakeDb(clock) {
       if (a.p_client_ref && mine.some(r => r.client_ref === a.p_client_ref)) return { data: null, error: { code: '23505', message: 'duplicate client_ref' } };
       T('registrations').push(row);
       return { data: [{ reg_id: row.id, number: next }], error: null };
+    }
+    // The Repository's three functions, mirroring the SQL in 20261109010000_repository_shop.sql (which was also tested against the real database).
+    if (name === 'shop_place_order') {
+      let st = T('repository_settings').find(s => s.org_id === a.p_org);
+      if (!st) { st = { ...defaults.repository_settings(), org_id: a.p_org }; T('repository_settings').push(st); }
+      const want = new Map();
+      for (const l of a.p_lines) want.set(l.item_id, (want.get(l.item_id) || 0) + Number(l.qty));
+      let total = 0;
+      for (const id of [...want.keys()].sort()) {
+        const it = T('repository_items').find(x => x.id === id && x.org_id === a.p_org);
+        if (!it || !it.available) return { data: null, error: { message: 'NOT_AVAILABLE:' + (it ? it.name : 'an item') } };
+        if (it.stock !== null && it.stock !== undefined && it.stock < want.get(id)) return { data: null, error: { message: `SOLD_OUT:${it.name}:${it.stock}` } };
+        total += Math.round(Number(it.price) * 100) * want.get(id);
+      }
+      total /= 100;
+      if (total !== Number(a.p_expected_total)) return { data: null, error: { message: 'PRICE_CHANGED' } };
+      if (a.p_client_ref && T('repository_orders').some(o => o.org_id === a.p_org && o.client_ref === a.p_client_ref)) return { data: null, error: { code: '23505', message: 'duplicate client_ref' } };
+      const ref = st.next_ref; st.next_ref += 1;
+      const order = { id: crypto.randomUUID(), org_id: a.p_org, ref_no: ref, payment_id: a.p_payment, status: 'awaiting_payment', collect_date: a.p_collect, slot_id: a.p_slot_id, slot_label: a.p_slot_label, total, cancel_reason: null, client_ref: a.p_client_ref, created_at: new Date(clock.now() + (++seq)).toISOString(), paid_at: null, prepared_at: null, collected_at: null, cancelled_at: null };
+      T('repository_orders').push(order);
+      for (const [id, qty] of want) {
+        const it = T('repository_items').find(x => x.id === id);
+        T('repository_order_lines').push({ id: crypto.randomUUID(), order_id: order.id, item_id: id, item_name: it.name, unit_price: it.price, qty });
+        if (it.stock !== null && it.stock !== undefined) it.stock -= qty;
+      }
+      return { data: [{ order_id: order.id, ref_no: ref, total }], error: null };
+    }
+    if (name === 'shop_cancel_order') {
+      const o = T('repository_orders').find(x => x.id === a.p_order);
+      if (!o) return { data: 'missing', error: null };
+      if (['cancelled', 'collected'].includes(o.status)) return { data: o.status, error: null };
+      if (a.p_only_unpaid && o.status !== 'awaiting_payment') return { data: o.status, error: null };
+      for (const l of T('repository_order_lines').filter(x => x.order_id === o.id && x.item_id)) { const it = T('repository_items').find(x => x.id === l.item_id); if (it && it.stock !== null && it.stock !== undefined) it.stock += l.qty; }
+      Object.assign(o, { status: 'cancelled', cancel_reason: String(a.p_reason).slice(0, 200), cancelled_at: new Date(clock.now()).toISOString() });
+      return { data: 'cancelled', error: null };
+    }
+    if (name === 'shop_reinstate_order') {
+      const o = T('repository_orders').find(x => x.id === a.p_order);
+      if (!o) return { data: 'missing', error: null };
+      if (o.status !== 'cancelled' || o.cancel_reason !== 'Payment not completed') return { data: o.status, error: null };
+      const ls = T('repository_order_lines').filter(x => x.order_id === o.id && x.item_id);
+      for (const l of ls) { const it = T('repository_items').find(x => x.id === l.item_id); if (it && it.stock !== null && it.stock !== undefined && it.stock < l.qty) return { data: 'SOLD_OUT:' + it.name, error: null }; }
+      for (const l of ls) { const it = T('repository_items').find(x => x.id === l.item_id); if (it && it.stock !== null && it.stock !== undefined) it.stock -= l.qty; }
+      Object.assign(o, { status: 'paid', cancel_reason: null, cancelled_at: null, paid_at: new Date(clock.now()).toISOString() });
+      return { data: 'paid', error: null };
     }
     return { data: null, error: null };   // rate_reset, rate_prune
   };
