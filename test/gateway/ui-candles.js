@@ -95,7 +95,7 @@ const MEASURE = `(() => {
     if ([...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) { const px = parseFloat(getComputedStyle(e).fontSize); if (px < 14.99) smallText.push(e.tagName + ':' + e.textContent.trim().slice(0, 30) + ' ' + px + 'px'); }
     if (e.matches('a[href], button, input:not([type=radio]):not([type=checkbox]):not([type=file]), select, textarea') && !e.closest('.gw-switch') && !e.closest('.agree')) { const r = e.getBoundingClientRect(); if (r.height < 43.9 || r.width < 43.9) smallTargets.push(e.tagName + ':' + (e.textContent || e.id || '').trim().slice(0, 30) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)); }
   }
-  return { hscroll: document.documentElement.scrollWidth > innerWidth + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, smallText, smallTargets };
+  return { hscroll: document.documentElement.scrollWidth > Math.min(innerWidth, (window.visualViewport || {}).width || innerWidth) + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, smallText, smallTargets };
 })()`;
 const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.replace('ROOT', '#adminContent');
 const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copied.push(t); };

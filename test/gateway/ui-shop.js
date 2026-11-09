@@ -98,7 +98,7 @@ const MEASURE = `(() => {
     if ([...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) { const px = parseFloat(getComputedStyle(e).fontSize); if (px < 14.99) smallText.push(e.tagName + ':' + e.textContent.trim().slice(0, 30) + ' ' + px + 'px'); }
     if (e.matches('a[href], button, input:not([type=radio]):not([type=checkbox]), select, textarea') && !e.closest('.opt') && !e.closest('.gw-switch')) { const r = e.getBoundingClientRect(); if (r.height < 43.9 || r.width < 43.9) smallTargets.push(e.tagName + ':' + (e.textContent || e.id || '').trim().slice(0, 30) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)); }
   }
-  return { hscroll: document.documentElement.scrollWidth > innerWidth + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, smallText, smallTargets };
+  return { hscroll: document.documentElement.scrollWidth > Math.min(innerWidth, (window.visualViewport || {}).width || innerWidth) + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, smallText, smallTargets };
 })()`;
 const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.replace('ROOT', '#adminContent');
 
@@ -238,6 +238,16 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
   await view(360, 740); await open(base + '/shop/svp-osterley', "document.querySelector('.item')"); await sleep(300);
   const m3 = await ev(MEASURE_PAGE);
   check('…and at 360px', !m3.hscroll && !m3.smallText.length && !m3.smallTargets.length, JSON.stringify([m3.scrollWidth, m3.smallText.slice(0, 3), m3.smallTargets.slice(0, 5)]));
+  // a real catalogue: 25 categories (a long row of category buttons) and long product names must never stretch the page sideways
+  const cats = ['Baptism', 'Bibles and Books', 'Candles and Lights', 'Christmas', 'Communion', 'Confirmation', 'Cards and Gifts', 'Crosses and Crucifixes', 'Devotional Statues', 'Holy Water Fonts', 'Icons and Pictures', 'Jewellery and Medals', 'Missals and Prayer Books', 'Rosaries and Chaplets', 'Wedding', 'Funeral and Memorial', 'Advent and Lent', 'Easter', 'Saints and Novenas', 'Children and Youth', 'Music and CDs', 'Vestments', 'Church Supplies', 'Household Blessings', 'Other items'];
+  const stress = cats.map((c, i) => item('As for Me and My House We Will Serve the Lord - Hollow Cross, ' + c + ' edition ' + i, 4.5 + i, { category: c, description: 'A long description with a few extra words so that it needs more than one line on a small phone screen.' }));
+  for (const [w, h] of [[390, 844], [360, 740], [320, 640]]) {
+    await view(w, h); await open(base + '/shop/svp-osterley', "document.querySelector('.item')"); await sleep(400);
+    const ms = await ev(MEASURE_PAGE);
+    check(`a real-sized catalogue (25 categories, long names) at ${w}px: the page does not scroll sideways, tap targets 44px or larger`, !ms.hscroll && !ms.smallTargets.length, JSON.stringify([ms.scrollWidth, ms.innerWidth, ms.smallTargets.slice(0, 4)]));
+    if (w === 390) await shot('shop-390-light-many-categories');
+  }
+  T('repository_items').splice(T('repository_items').findIndex(i => i.id === stress[0]), stress.length);
   await view(390, 844); await open(base + '/shop/svp-osterley', "document.querySelector('.item')");
   await typeSearch('candle'); await shot('shop-390-light-search');
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }); await sleep(200);

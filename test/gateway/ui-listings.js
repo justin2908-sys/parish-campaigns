@@ -101,7 +101,8 @@ const MEASURE = `(() => {
     if ([...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) { const px = parseFloat(getComputedStyle(e).fontSize); if (px < 14.99) smallText.push(e.tagName + ':' + e.textContent.trim().slice(0, 30) + ' ' + px + 'px'); }
     if (e.matches('a[href], button, input:not([type=radio]):not([type=checkbox]):not([type=file]), select, textarea') && !e.closest('.gw-switch') && !e.closest('.agree')) { const r = e.getBoundingClientRect(); if (r.height < 43.9 || r.width < 43.9) smallTargets.push(e.tagName + ':' + (e.textContent || e.id || '').trim().slice(0, 30) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)); }
   }
-  return { hscroll: document.documentElement.scrollWidth > innerWidth + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, smallText, smallTargets };
+  const vw = Math.min(innerWidth, (window.visualViewport || {}).width || innerWidth), wide = [...document.querySelectorAll("body *")].filter(e => !e.closest(".trap") && e.getBoundingClientRect().width && e.getBoundingClientRect().right > vw + 1).slice(0, 6).map(e => e.tagName.toLowerCase() + "." + String(e.className).slice(0, 30) + "#" + e.id + ":" + Math.round(e.getBoundingClientRect().right));
+  return { hscroll: document.documentElement.scrollWidth > vw + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, wide, smallText, smallTargets };
 })()`;
 const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.replace('ROOT', '#adminContent');
 const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copied.push(t); };
@@ -130,7 +131,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('it has an "Add a listing" button and a "Just looking" way out, and takes the focus', iv && iv.add && iv.looking && iv.focused);
   await shot('listings-390-light-invite');
   const inm = await ev(MEASURE_PAGE);
-  check('the prompt at 390px: readable and tappable', !inm.hscroll && !inm.smallText.length && !inm.smallTargets.length, JSON.stringify([inm.smallText.slice(0, 2), inm.smallTargets.slice(0, 3)]));
+  check('the prompt at 390px: readable and tappable', !inm.hscroll && !inm.smallText.length && !inm.smallTargets.length, JSON.stringify([inm.wide, inm.smallText.slice(0, 2), inm.smallTargets.slice(0, 3)]));
   await click('[data-invite-close]', 'Just looking'); await sleep(200);
   check('"Just looking" closes it, and it is not asked again on the next visit', await ev(`!document.getElementById('invite') && !!localStorage.getItem('lst_invited_svp-osterley')`));
   await open(base + '/listings/svp-osterley', "document.querySelector('.item')"); await sleep(600);
@@ -149,7 +150,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   for (const [w, h] of [[390, 844], [360, 740]]) {
     await view(w, h); await open(base + '/listings/svp-osterley', "document.querySelector('.item')"); await sleep(300);
     const m = await ev(MEASURE_PAGE);
-    check(`browse at ${w}px: no sideways scroll, text 15px or larger, tap targets 44px or larger`, !m.hscroll && !m.smallText.length && !m.smallTargets.length, JSON.stringify([m.scrollWidth, m.smallText.slice(0, 3), m.smallTargets.slice(0, 4)]));
+    check(`browse at ${w}px: no sideways scroll, text 15px or larger, tap targets 44px or larger`, !m.hscroll && !m.smallText.length && !m.smallTargets.length, JSON.stringify([m.scrollWidth, m.wide, m.smallText.slice(0, 3), m.smallTargets.slice(0, 4)]));
   }
   await view(390, 844); await open(base + '/listings/svp-osterley', "document.querySelector('.item')"); await sleep(300);
   const b1 = await ev(`({ notice: document.querySelector('.notice').textContent, add: !!document.getElementById('addBtn'), shelves: [...document.querySelectorAll('.shelfh')].map(e => e.textContent), items: document.querySelectorAll('.item').length, chips: [...document.querySelectorAll('.chip')].map(e => e.textContent.trim()), noindex: document.querySelector('meta[name=robots]').content, intro: document.querySelector('.intro').textContent,

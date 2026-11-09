@@ -53,6 +53,7 @@
   .tabs button { flex:1; padding:11px 8px; border:1px solid var(--stone); background:var(--surface); border-radius:11px; font-size:14.5px; font-weight:600; color:var(--pine); }
   .tabs button.active { background:var(--pine); color:#F3F1E7; border-color:var(--pine); }
   /* the admin's two levels: four sections (big, with a picture), then a quiet row of tabs inside the section */
+  .tscroll { max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
   .tabs.sections { display:grid; grid-template-columns:repeat(var(--cols, 4), minmax(0, 1fr)); gap:6px; margin-bottom:6px; }
   .tabs.sections button { display:grid; justify-items:center; align-content:center; gap:3px; padding:9px 4px 8px; min-height:62px; font-size:14px; line-height:1.15; text-align:center; overflow-wrap:anywhere; }
   .tabs.sections button svg { width:24px; height:24px; }
@@ -4404,6 +4405,14 @@ async function cndPreview() {
   try { const r = await call('digest_preview'); cnd.preview = r.text; cndPaint(); toast('✓ This is what the email would say'); }
   catch (e) { toast(e.message, 'error'); }
 }
+
+// A wide table (Users, Sales, Reports...) scrolls inside its own box instead of stretching the whole page sideways on a phone.
+(function () {
+  const wrap = (t) => { if (!t.parentNode || (t.parentElement && t.parentElement.classList.contains('tscroll'))) return; const d = document.createElement('div'); d.className = 'tscroll'; t.parentNode.insertBefore(d, t); d.appendChild(t); };
+  const all = (root) => { if (root.nodeType !== 1) return; if (root.tagName === 'TABLE') wrap(root); else root.querySelectorAll('table').forEach(wrap); };
+  new MutationObserver((ms) => { for (const m of ms) m.addedNodes.forEach(all); }).observe(document.body, { childList: true, subtree: true });
+  all(document.body);
+})();
 </script>
 </body>
 </html>

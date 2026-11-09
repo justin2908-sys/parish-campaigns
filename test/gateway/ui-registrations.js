@@ -97,7 +97,7 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   await ev(`document.querySelectorAll('#f_needs input[type=checkbox]')[1].click()`);
   check('unticking one frees them again', await ev(`[...document.querySelectorAll('#f_needs input[type=checkbox]')].filter(c => c.disabled).length === 0`));
   check('the places question offers 1 to 3', await ev(`[...document.querySelectorAll('#f_party option')].map(o => o.value).join() === '1,2,3'`));
-  const m = await ev(`({ h: document.documentElement.scrollWidth > innerWidth + 1, boxes: [...document.querySelectorAll('.chk')].map(e => Math.round(e.getBoundingClientRect().height)) })`);
+  const m = await ev(`({ h: document.documentElement.scrollWidth > Math.min(innerWidth, (window.visualViewport || {}).width || innerWidth) + 1, boxes: [...document.querySelectorAll('.chk')].map(e => Math.round(e.getBoundingClientRect().height)) })`);
   check('no sideways scroll at 390px, and tick-box rows are at least 44px tall', !m.h && m.boxes.every(h => h >= 44), JSON.stringify(m));
   await shot('form-390');
   // a refused attempt: Other with nothing typed

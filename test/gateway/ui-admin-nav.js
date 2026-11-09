@@ -94,7 +94,7 @@ const MEASURE = `(() => {
     if ([...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) { const px = parseFloat(getComputedStyle(e).fontSize); if (px < 14.99) smallText.push(e.tagName + ':' + e.textContent.trim().slice(0, 30) + ' ' + px + 'px'); }
     if (e.matches('a[href], button, input:not([type=radio]):not([type=checkbox]):not([type=file]), select, textarea') && !e.closest('.gw-switch') && !e.closest('.agree')) { const r = e.getBoundingClientRect(); if (r.height < 43.9 || r.width < 43.9) smallTargets.push(e.tagName + ':' + (e.textContent || e.id || '').trim().slice(0, 30) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)); }
   }
-  return { hscroll: document.documentElement.scrollWidth > innerWidth + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, smallText, smallTargets };
+  return { hscroll: document.documentElement.scrollWidth > Math.min(innerWidth, (window.visualViewport || {}).width || innerWidth) + 1, scrollWidth: document.documentElement.scrollWidth, innerWidth, smallText, smallTargets };
 })()`;
 const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.replace('ROOT', '#adminContent');
 const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copied.push(t); };
@@ -115,7 +115,7 @@ Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', n
   };
   const sections = () => ev(`[...document.querySelectorAll('.tabs.sections button')].map(b => b.textContent.trim() + (b.classList.contains('active') ? '*' : ''))`);
   const subs = () => ev(`[...document.querySelectorAll('.tabs.subtabs button')].map(b => b.textContent.trim() + (b.classList.contains('active') ? '*' : ''))`);
-  const NAV = `(() => { const sec = document.querySelector('.tabs.sections'), sub = document.querySelector('.tabs.subtabs'); const small = [...document.querySelectorAll('.tabs button')].filter(b => { const r = b.getBoundingClientRect(); return r.height < 43.9 || r.width < 43.9; }).map(b => b.textContent.trim()); return { hscroll: document.documentElement.scrollWidth > innerWidth + 1, subFits: !sub || sub.scrollWidth <= sub.clientWidth + 1, secOneLine: !sec || new Set([...sec.children].map(b => Math.round(b.getBoundingClientRect().top))).size === 1, small }; })()`;
+  const NAV = `(() => { const sec = document.querySelector('.tabs.sections'), sub = document.querySelector('.tabs.subtabs'); const small = [...document.querySelectorAll('.tabs button')].filter(b => { const r = b.getBoundingClientRect(); return r.height < 43.9 || r.width < 43.9; }).map(b => b.textContent.trim()); const vw = Math.min(innerWidth, (window.visualViewport || {}).width || innerWidth), wide = [...document.querySelectorAll("#adminContent *")].filter(e => e.getBoundingClientRect().width && e.getBoundingClientRect().right > vw + 1).slice(0, 5).map(e => e.tagName.toLowerCase() + "." + String(e.className).slice(0, 24) + ":" + Math.round(e.getBoundingClientRect().right)); return { wide, hscroll: document.documentElement.scrollWidth > vw + 1, subFits: !sub || sub.scrollWidth <= sub.clientWidth + 1, secOneLine: !sec || new Set([...sec.children].map(b => Math.round(b.getBoundingClientRect().top))).size === 1, small }; })()`;
   const content = () => ev(`document.getElementById('adminContent').innerText`);
 
   for (const w of [390, 360]) {
