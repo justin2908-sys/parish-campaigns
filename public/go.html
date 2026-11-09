@@ -73,25 +73,22 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .notices.urgent .go { color:var(--warn); }
 
 /* the permanent shortcuts are pictures, not words: WhatsApp, email */
-.iconrow { display:flex; justify-content:center; gap:18px; margin-top:14px; }
-.ic { width:60px; height:60px; flex:none; border-radius:50%; border:0; background:var(--brand); color:#fff; display:grid; place-items:center; }
+.iconrow { display:grid; grid-template-columns:repeat(var(--n, 4), minmax(0, 60px)); justify-content:center; gap:clamp(8px, 2.6vw, 18px); margin-top:14px; }
+.ic { width:100%; aspect-ratio:1; min-width:44px; border-radius:50%; border:0; background:var(--brand); color:#fff; display:grid; place-items:center; position:relative; }
 .ic:active { filter:brightness(.88); }
-.ic svg { width:30px; height:30px; }
+.ic svg { width:52%; height:52%; }
+@media (max-width:340px) { .iconrow { grid-template-columns:repeat(3, minmax(0, 60px)); } }
 
-/* Today in the Church */
-.today { margin-top:12px; background:var(--surface); border:2px solid var(--line); border-left-width:8px; border-radius:16px; padding:12px 14px; display:grid; gap:4px; }
-.today.c-white { border-left-color:#d9d4c0; } .today.c-red { border-left-color:#b3262b; } .today.c-green { border-left-color:#2f7a3f; }
-.today.c-violet { border-left-color:#6b3fa0; } .today.c-rose { border-left-color:#d77a9a; } .today.c-black { border-left-color:#222; }
-.today .k { display:flex; align-items:center; gap:8px; font-size:.9375rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--brand-text); }
-.today .k svg { flex:none; }
-.today h2 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.3rem; line-height:1.2; text-wrap:balance; }
-.today .sub { margin:0; color:var(--muted); font-size:.9375rem; }
-.today .acts { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
-.today .ib { flex:1 1 0; min-height:60px; border-radius:14px; display:grid; place-items:center; border:2px solid var(--brand-text); color:var(--brand-text); background:transparent; }
-.today .ib.solid { background:var(--brand); border-color:var(--brand); color:#fff; }
-.today .ib:active { filter:brightness(.9); }
-.today .ib svg { width:30px; height:30px; }
-.today .src { margin:6px 0 0; color:var(--muted); font-size:.9375rem; line-height:1.3; }
+/* the bell: today's readings and the saint of the day, in a small panel */
+.dl { display:grid; grid-template-columns:44px minmax(0,1fr) auto; align-items:center; gap:12px; min-height:68px; padding:10px 14px; background:var(--surface); border:2px solid var(--brand-text); border-radius:16px; }
+.dl:active { background:var(--brand-tint); }
+.dl .ico { width:44px; height:44px; border-radius:12px; background:var(--brand); color:#fff; display:grid; place-items:center; }
+.dl b { display:block; font-size:1.15rem; line-height:1.15; }
+.dl small { display:block; margin-top:2px; color:var(--muted); font-size:.9375rem; line-height:1.25; overflow-wrap:anywhere; }
+.dl.c-white { border-left:8px solid #d9d4c0; } .dl.c-red { border-left:8px solid #b3262b; } .dl.c-green { border-left:8px solid #2f7a3f; }
+.dl.c-violet { border-left:8px solid #6b3fa0; } .dl.c-rose { border-left:8px solid #d77a9a; } .dl.c-black { border-left:8px solid #222; }
+.daysub { margin:2px 0 0; color:var(--muted); font-size:1rem; }
+.src { margin:0; color:var(--muted); font-size:.9375rem; line-height:1.3; }
 
 /* the notice, opened */
 .sheet { position:fixed; inset:0; z-index:30; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center; }
@@ -187,6 +184,7 @@ main { padding-bottom:32px; }
       // the shortcut buttons show pictures only; these words are for screen readers and for the tooltip
       waJoin: 'Join our WhatsApp channel', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services', candleAria: 'Light a candle',
       today: 'Today', readings: 'Today’s Mass readings', about: 'About today’s saint or feast', readingsTitle: 'Mass readings for today',
+      bellAria: 'Notifications: today’s readings and today in the Church', dayReadings: 'Readings for the day', dayReadingsSub: 'The Mass readings', dayChurch: 'Today in the Church', dayClose: 'Close',
       todaySource: 'Readings: Universalis (England & Wales). Day: General Roman Calendar.',
       icons: ['hall', 'mass', 'news']   // the three permanent links are drawn in this order
     }
@@ -194,7 +192,8 @@ main { padding-bottom:32px; }
   var W = WORDING[VERTICAL];
   var ICONS = {
     hall: '<path d="M3 21h18M5 21V10l7-6 7 6v11M9 21v-6h6v6"/>',
-    mass: '<path d="M12 2c1.6 2 2.2 3.4 2.2 4.6a2.2 2.2 0 0 1-4.4 0C9.8 5.4 10.4 4 12 2ZM8 12h8v9H8zM6 21h12"/>',
+    mass: '<path d="M7 3h10c0 4.2-1.2 6.2-5 6.2S7 7.2 7 3ZM12 9.2V17M8 21h8M12 17v4"/>',   // Mass: a chalice (the candle is Light a Candle's picture, so the two never look alike)
+    bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.6 2.4H4.4L6 16ZM10 21a2 2 0 0 0 4 0"/>',
     news: '<path d="M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V4ZM18 9h2v9a2 2 0 0 1-2 2M8 8h7M8 12h7M8 16h4"/>',
     link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
     // the permanent shortcuts: a chat bubble with a handset, an envelope, an open book, a figure with a halo, a calendar
@@ -262,30 +261,34 @@ main { padding-bottom:32px; }
   function icon(name, size) { return '<svg width="' + (size || 30) + '" height="' + (size || 30) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
   // The permanent shortcuts are pictures only (each still has its words for screen readers and as a tooltip): WhatsApp, email.
   // Only a WhatsApp channel address is ever drawn.
-  function iconRow(o, shop, listings, candles) {
+  function iconRow(o, shop, listings, candles, hasDay) {
     var u = String(o.whatsapp || '').trim(), parts = [];
+    if (hasDay) parts.push('<button class="ic" type="button" id="dayBtn" aria-haspopup="dialog" aria-label="' + esc(W.bellAria) + '" title="' + esc(W.bellAria) + '">' + icon('bell') + '</button>');
     if (candles && /^\/candles\/[a-z0-9-]+$/.test(String(candles.path || ''))) parts.push('<a class="ic" href="' + esc(candles.path) + '" aria-label="' + esc(W.candleAria) + '" title="' + esc(W.candleAria) + '">' + icon('candle') + '</a>');
     if (listings && /^\/listings\/[a-z0-9-]+$/.test(String(listings.path || ''))) parts.push('<a class="ic" href="' + esc(listings.path) + '" aria-label="' + esc(W.listAria) + '" title="' + esc(W.listAria) + '">' + icon('tag') + '</a>');
     if (shop && /^\/shop\/[a-z0-9-]+$/.test(String(shop.path || ''))) parts.push('<a class="ic" href="' + esc(shop.path) + '" aria-label="' + esc(W.shopAria) + '" title="' + esc(W.shopAria) + '">' + icon('bag') + '</a>');
     if (/^https:\/\/(www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+\/?$/i.test(u)) parts.push('<a class="ic" href="' + esc(u) + '" target="_blank" rel="noopener" aria-label="' + esc(W.waJoin) + '" title="' + esc(W.waJoin) + '">' + icon('whatsapp') + '</a>');
     if (o.contact_email) parts.push('<button class="ic" type="button" data-copy="' + esc(o.contact_email) + '" aria-label="' + esc(W.emailAria + ': ' + o.contact_email) + '" title="' + esc(W.emailAria) + '">' + icon('mail') + '</button>');
-    return parts.length ? '<nav class="iconrow" aria-label="Contact">' + parts.join('') + '</nav>' : '';
+    return parts.length ? '<nav class="iconrow" style="--n:' + parts.length + '" aria-label="Shortcuts">' + parts.join('') + '</nav>' : '';
   }
-  // "Today in the Church": the day's feast and where to read the Mass readings. It only shows for the day it was made for, so a page
-  // saved on a phone overnight never shows yesterday's feast.
-  function todayCard(tz, today) {
-    var d = data.daily; if (!d || d.date !== today) return '';
-    var rd = safeHref(d.readings_url), ab = safeHref(d.about_url), c = d.celebration;
+  // The bell: today's readings and "Today in the Church" (the day's feast), in a small panel instead of a card taking up the page. It only
+  // shows for the day it was made for, so a page saved on a phone overnight never offers yesterday's feast.
+  function dayInfo(today) {
+    var d = data.daily; if (!d || d.date !== today) return null;
+    var rd = safeHref(d.readings_url), ab = safeHref(d.about_url);
+    return rd || ab ? { rd: rd, ab: ab, c: d.celebration } : null;
+  }
+  function daySheetHtml(day, today) {
     var p = today.split('-'), when = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
-    var sub = c ? [c.rank, c.season].filter(Boolean).join(' · ') : '';
-    var col = c && c.colour ? ' c-' + c.colour : '';
-    return '<section class="today' + col + '" aria-labelledby="td-h"><span class="k">' + icon('calendar', 20) + '<span>' + esc(when) + '</span></span><h2 id="td-h">' + esc(c ? c.title : W.readingsTitle) + '</h2>' + (sub ? '<p class="sub">' + esc(sub) + '</p>' : '') +
-      '<div class="acts">' + (rd ? '<a class="ib solid" href="' + esc(rd) + '" target="_blank" rel="noopener" aria-label="' + esc(W.readings) + '" title="' + esc(W.readings) + '">' + icon('book') + '</a>' : '') + (ab ? '<a class="ib" href="' + esc(ab) + '" target="_blank" rel="noopener" aria-label="' + esc(W.about) + '" title="' + esc(W.about) + '">' + icon('saint') + '</a>' : '') + '</div>' +
-      '<p class="src">' + esc(W.todaySource) + '</p></section>';
+    var c = day.c, sub = c ? [c.title, [c.rank, c.season].filter(Boolean).join(' · ')].filter(Boolean).join(' — ') : '';
+    var chev = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+    var link = function (href, ico, title, small, cls) { return '<a class="dl' + (cls || '') + '" href="' + esc(href) + '" target="_blank" rel="noopener"><span class="ico">' + icon(ico, 24) + '</span><span><b>' + esc(title) + '</b><small>' + esc(small) + '</small></span>' + chev + '</a>'; };
+    return '<div class="sheet" id="daySheet" hidden><div class="sheet-card" id="daySheetCard" role="dialog" aria-modal="true" aria-labelledby="daySheetTitle" tabindex="-1"><div class="sheet-head"><div><h2 id="daySheetTitle">' + esc(W.today) + '</h2><p class="daysub">' + esc(when) + '</p></div><button class="btn" type="button" id="daySheetClose">' + esc(W.dayClose) + '</button></div>' +
+      '<div style="display:grid;gap:10px">' + (day.rd ? link(day.rd, 'book', W.dayReadings, W.dayReadingsSub, '') : '') + (day.ab ? link(day.ab, 'saint', W.dayChurch, sub || W.about, c && c.colour ? ' c-' + c.colour : '') : '') + '</div><p class="src">' + esc(W.todaySource) + '</p></div></div>';
   }
   function crest() { return '<svg class="crest" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 4v32M11 14h18"/><circle cx="20" cy="20" r="17" stroke-width="1.4" opacity=".6"/></svg>'; }
   function render() {
-    var o = data.org, tz = o.timezone || 'Europe/London', today = todayIn(tz), n = liveNotice(tz);
+    var o = data.org, tz = o.timezone || 'Europe/London', today = todayIn(tz), n = liveNotice(tz), day = dayInfo(today);
     lastNoticeKey = noticeKey(n);
     document.title = o.name;
     var html = '<header class="mast gutter"><div class="wrap"><div class="id">' + crest() + '<h1>' + esc(o.name) + '</h1>' +
@@ -295,7 +298,7 @@ main { padding-bottom:32px; }
         ? '<button class="notices urgent gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.urgentNotice + ': ' + n.message + '. Tap to read.') + '"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:var(--warn)"><path d="M12 3 2 20h20L12 3ZM12 10v5M12 18v.01"/></svg><span class="txt"><span class="lab">' + esc(W.urgentLabel) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>'
         : '<button class="notices gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.notice + ': ' + n.message + '. Tap to read.') + '"><span class="txt"><span class="lab">' + esc(W.notices) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>';
     }
-    html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '') + iconRow(o, data.shop, data.listings, data.candles) + todayCard(tz, today);
+    html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '') + iconRow(o, data.shop, data.listings, data.candles, !!day);
     var doors = (data.links || []).map(function (l, i) {
       var h = safeHref(l.url); if (!h) return '';
       return '<a class="door" href="' + esc(h) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[W.icons[i] || 'link'] + '</svg></span><span><h2>' + esc(l.label) + '</h2>' + (l.sub ? '<p>' + esc(l.sub) + '</p>' : '') + '</span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>';
@@ -311,9 +314,11 @@ main { padding-bottom:32px; }
       (o.phone ? '<div>' + esc(W.phone) + ' <span style="user-select:all">' + esc(o.phone) + '</span></div>' : '') +
       (o.contact_email ? '<div>' + esc(W.email) + ' <span style="user-select:all">' + esc(o.contact_email) + '</span></div>' : '') + '</section></div></main>';
     html += '<div class="sheet" id="sheet" hidden><div class="sheet-card" id="sheetCard" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1"><div class="sheet-head"><h2 id="sheetTitle">' + esc(n && n.urgent ? W.urgentNotice : W.notices) + '</h2><button class="btn" type="button" id="sheetClose">Close</button></div><div id="sheetBody" style="display:grid;gap:18px">' + (n ? noticeHtml(n, tz) : '') + '</div></div></div>';
-    var openSheet = !$('sheet') ? false : !$('sheet').hidden;   // a refresh must not close a notice somebody is reading
+    if (day) html += daySheetHtml(day, today);
+    var openSheet = !$('sheet') ? false : !$('sheet').hidden, openDay = !$('daySheet') ? false : !$('daySheet').hidden;   // a refresh must not close a notice somebody is reading
     $('app').innerHTML = html;
     if (openSheet && n) openSheetNow();
+    if (openDay && day) openDayNow();
     afterRender();
   }
   function noticeHtml(a, tz) {
@@ -340,6 +345,8 @@ main { padding-bottom:32px; }
   var lastFocus = null;
   function openSheetNow() { var s = $('sheet'); if (!s) return; s.hidden = false; document.body.style.overflow = 'hidden'; $('sheetCard').focus(); }
   function closeSheet() { var s = $('sheet'); if (!s) return; s.hidden = true; document.body.style.overflow = ''; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+  function openDayNow() { var s = $('daySheet'); if (!s) return; s.hidden = false; document.body.style.overflow = 'hidden'; $('daySheetCard').focus(); }
+  function closeDay() { var s = $('daySheet'); if (!s) return; s.hidden = true; document.body.style.overflow = ''; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
 
   function afterRender() { /* nothing to wire: one delegated click handler below handles everything */ }
   document.addEventListener('click', function (e) {
@@ -348,6 +355,8 @@ main { padding-bottom:32px; }
     if (c) { var text = c.getAttribute('data-copy'); try { navigator.clipboard.writeText(text).then(function () { say(W.copied + text); }, function () { say(W.email + ': ' + text); }); } catch (x) { say(W.email + ': ' + text); } return; }
     if (t.closest('#notices')) { lastFocus = document.activeElement; openSheetNow(); return; }
     if (t.closest('#sheetClose') || t.id === 'sheet') { closeSheet(); return; }
+    if (t.closest('#dayBtn')) { lastFocus = document.activeElement; openDayNow(); return; }
+    if (t.closest('#daySheetClose') || t.id === 'daySheet') { closeDay(); return; }
     var mo = t.closest('[data-more]'); if (mo) { var k = mo.getAttribute('data-more'); expanded[k] = !expanded[k]; render(); return; }
     if (t.closest('#saveOpen')) { var b = $('saveBody'), open = b.hidden; saveShown = open; b.hidden = !open; b.style.display = open ? 'grid' : 'none'; $('saveOpen').setAttribute('aria-expanded', open); $('saveOpen').textContent = open ? W.saveHide : W.saveShow; return; }
     if (t.closest('#saveDone')) { try { localStorage.setItem('gw_saved_' + slug, '1'); } catch (e2) { /* private window: it simply stays */ } render(); return; }
@@ -355,7 +364,7 @@ main { padding-bottom:32px; }
     if (t.closest('#installBtn') && deferred) { deferred.prompt(); return; }
     if (t.closest('#retry')) { load(); return; }
   });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('sheet') && !$('sheet').hidden) closeSheet(); });
+  document.addEventListener('keydown', function (e) { if (e.key !== 'Escape') return; if ($('sheet') && !$('sheet').hidden) closeSheet(); else if ($('daySheet') && !$('daySheet').hidden) closeDay(); });
 
   // ---- loading, and keeping the page current while it stays open
   function status(title, help, retry) {

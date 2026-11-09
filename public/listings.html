@@ -53,7 +53,7 @@ button, input, select, textarea { font:inherit; color:inherit; }
 button { cursor:pointer; }
 :focus-visible { outline:4px solid var(--brand-text); outline-offset:2px; border-radius:6px; }
 .gutter { padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); }
-.wrap { max-width:560px; margin:0 auto; }
+.wrap { max-width:560px; margin:0 auto; min-width:0; }
 [hidden] { display:none !important; }
 
 .mast { background:var(--brand); color:#fff; padding-top:max(12px, env(safe-area-inset-top, 0px)); padding-bottom:12px; }
@@ -61,8 +61,8 @@ button { cursor:pointer; }
 .back { flex:none; width:48px; height:48px; border-radius:50%; border:2px solid rgba(255,255,255,.55); display:grid; place-items:center; color:#fff; background:transparent; }
 .mast h1 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.5rem; line-height:1.1; text-wrap:balance; }
 .mast small { display:block; font-family:var(--font-body); font-weight:500; font-size:.9375rem; opacity:.9; margin-bottom:2px; }
-main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
-.panel { background:var(--surface); border:2px solid var(--line); border-radius:16px; padding:14px; display:grid; gap:10px; }
+main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }
+.panel { background:var(--surface); border:2px solid var(--line); border-radius:16px; padding:14px; display:grid; grid-template-columns:minmax(0,1fr); gap:10px; }
 .panel h2 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.3rem; }
 .panel h2 .n { display:inline-grid; place-items:center; width:30px; height:30px; margin-right:8px; border-radius:50%; background:var(--brand); color:#fff; font-family:var(--font-body); font-size:1rem; font-weight:700; vertical-align:2px; }
 .intro { margin:0; color:var(--muted); }
@@ -151,7 +151,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
 .agree input { width:26px; height:26px; flex:none; accent-color:var(--brand); margin-top:2px; }
 .agree.bad { border-color:var(--bad); }
 .bar { position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--surface); border-top:2px solid var(--line); padding-top:10px; padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
-.bar .wrap { display:grid; gap:8px; }
+.bar .wrap { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
 .err { margin:0; padding:10px 12px; border-radius:12px; background:var(--bad-tint); color:var(--bad); font-weight:600; }
 .status { padding:24px 0 24px; display:grid; gap:14px; justify-items:start; }
 .status h1 { margin:0; font-family:var(--font-display); font-size:1.6rem; line-height:1.15; }
@@ -269,7 +269,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
   }
   function renderBrowse() {
     document.title = W.title + ' · ' + data.org.name;
-    var html = mast(data.org.name, W.title, '/go/' + slug) + '<main class="gutter"><div class="wrap" style="display:grid;gap:12px">' + noticeHtml() + (data.intro ? '<p class="intro">' + esc(data.intro) + '</p>' : '') +
+    var html = mast(data.org.name, W.title, '/go/' + slug) + '<main class="gutter"><div class="wrap" style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px">' + noticeHtml() + (data.intro ? '<p class="intro">' + esc(data.intro) + '</p>' : '') +
       '<a class="btn solid big" id="addBtn" href="#new">' + ico(I.plus, 22) + esc(W.add) + '</a>' +
       '<div class="searchwrap"><div class="search" role="search"><span aria-hidden="true">' + ico(I.search, 22) + '</span><input id="fSearch" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="' + esc(W.searchHint) + '" aria-label="' + esc(W.searchLabel) + '" value="' + esc(q) + '"><button type="button" class="clear" data-clear aria-label="Clear the search"' + (q ? '' : ' hidden') + '>' + ico(I.close, 20) + '</button></div><div class="chips" id="chips" role="group" aria-label="Groups"></div></div>' +
       '<div id="list"></div></div></main>';
@@ -365,7 +365,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; gap:14px; }
     var days = N.day_choices.map(function (d) { return [d, d === 7 ? '1 week' : d === 14 ? '2 weeks' : d === 21 ? '3 weeks' : d === 30 ? '1 month' : d + ' days']; });
     var warn = function (s) { return hasContact(s) ? '<span class="warnline">Please take out phone numbers, email addresses and web links. People contact you through a button that hands them your email.</span>' : ''; };
     var photos = f.photos.map(function (p, i) { return '<div class="ph"><img src="' + esc(p.preview) + '" alt="Picture ' + (i + 1) + '"><button type="button" data-rmphoto="' + i + '" aria-label="Remove picture ' + (i + 1) + '"><span>' + ico(I.close, 16) + '</span></button></div>'; }).join('');
-    var html = mast('Add a listing', data.org.name, '/listings/' + slug) + '<main class="gutter" style="padding-bottom:170px"><div class="wrap" style="display:grid;gap:14px">' + noticeHtml() +
+    var html = mast('Add a listing', data.org.name, '/listings/' + slug) + '<main class="gutter" style="padding-bottom:170px"><div class="wrap" style="display:grid;grid-template-columns:minmax(0,1fr);gap:14px">' + noticeHtml() +
       '<section class="panel"><h2><span class="n">1</span>What are you offering?</h2>' +
       '<div class="f' + (badField === 'kind' ? ' bad' : '') + '"><span class="lbl">It is…</span>' + seg(kinds, f.kind, 'data-fkind') + '</div>' +
       '<div class="f' + (badField === 'category' ? ' bad' : '') + '"><span class="lbl">Group</span>' + seg(cats, f.category, 'data-fcat') + '</div>' +

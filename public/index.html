@@ -52,6 +52,21 @@
   .tabs { display:flex; gap:6px; margin-bottom:16px; flex-wrap:wrap; }
   .tabs button { flex:1; padding:11px 8px; border:1px solid var(--stone); background:var(--surface); border-radius:11px; font-size:14.5px; font-weight:600; color:var(--pine); }
   .tabs button.active { background:var(--pine); color:#F3F1E7; border-color:var(--pine); }
+  /* the admin's two levels: four sections (big, with a picture), then a quiet row of tabs inside the section */
+  .tscroll { max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .tabs.sections { display:grid; grid-template-columns:repeat(var(--cols, 4), minmax(0, 1fr)); gap:6px; margin-bottom:6px; }
+  .tabs.sections button { display:grid; justify-items:center; align-content:center; gap:3px; padding:9px 4px 8px; min-height:62px; font-size:14px; line-height:1.15; text-align:center; overflow-wrap:anywhere; }
+  .tabs.sections button svg { width:24px; height:24px; }
+  .fold > summary { min-height:48px; display:flex; align-items:center; justify-content:space-between; gap:10px; cursor:pointer; list-style:none; font-family:var(--font-display, inherit); font-weight:600; font-size:19px; color:var(--ink); }
+  .fold > summary::-webkit-details-marker { display:none; }
+  .fold > summary::after { content:''; width:10px; height:10px; border-right:2.4px solid var(--slate); border-bottom:2.4px solid var(--slate); transform:rotate(45deg); margin:-4px 4px 0 0; flex:none; }
+  .fold[open] > summary::after { transform:rotate(-135deg); margin-top:4px; }
+  .fold[open] > summary { margin-bottom:6px; }
+  .tabs.subtabs { display:flex; flex-wrap:nowrap; justify-content:space-between; gap:2px; overflow-x:auto; margin:0 0 14px; border-bottom:1px solid var(--line); scrollbar-width:none; }
+  .tabs.subtabs::-webkit-scrollbar { display:none; }
+  .tabs.subtabs button { flex:0 0 auto; min-width:44px; border:0; border-bottom:3px solid transparent; border-radius:0; background:none; min-height:48px; padding:10px 9px 7px; font-size:15px; color:var(--slate); }
+  .tabs.subtabs button.active { background:none; color:var(--pine); border-bottom-color:var(--brass); }
+  @media (max-width:380px) { .tabs.subtabs button { padding:10px 6px 7px; font-size:14.5px; } }
   .error { background:var(--bad-dim); color:var(--bad); padding:13px; border-radius:11px; margin:10px 0; font-size:15.5px; }
   .info { background:var(--good-dim); color:var(--good); padding:13px; border-radius:11px; margin:10px 0; font-size:15.5px; }
   .hint { background:var(--brass-dim); color:var(--slate); padding:11px 13px; border-radius:11px; margin:10px 0; font-size:14px; }
@@ -1214,16 +1229,39 @@ const ADMIN_TABS_BY_ROLE = {
   finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles'],
   priest: ['registrations', 'parishpage', 'repository', 'listings', 'candles'],
 };
+// Thirteen tabs in one wrapping block was too many to find anything in. They are now four sections (what people do all day, in the order they
+// do it), and each section has its own short row of tabs. A role only sees the tabs it is allowed; a section with one tab shows that tab's own
+// name and has no second row.
+const ADMIN_GROUPS = [
+  { id: 'campaigns', label: 'Campaigns', icon: '<path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8Z"/><path d="M14 7v10" stroke-dasharray="2 2.2"/>', tabs: ['campaigns', 'registrations', 'overview', 'sales'] },
+  { id: 'money', label: 'Money', icon: '<circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.6-.9-1.6-1.3-2.8-1.3-1.6 0-2.7.8-2.7 2 0 3 5.6 1.5 5.6 4.5 0 1.2-1.1 2-2.9 2-1.3 0-2.4-.5-3-1.4M12 6.5v1.4M12 16.1v1.4"/>', tabs: ['cash', 'attention'] },
+  { id: 'page', label: 'Parish page', icon: '<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M3.5 9h17M8 14h8M8 17h5"/>', tabs: ['parishpage', 'repository', 'listings', 'candles'] },
+  { id: 'manage', label: 'Manage', icon: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>', tabs: ['users', 'bin', 'privacy'] },
+];
+const ADMIN_SUB_LABELS = { parishpage: 'Page' };
+const adminLastTab = {};   // the tab last used in each section, so going back to a section returns to where you were
+function adminAllowedTabs() { return ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin; }
+function adminGroupOf(tab) { return ADMIN_GROUPS.find(g => g.tabs.includes(tab)); }
+function adminNavHtml() {
+  const allowed = adminAllowedTabs(), groups = ADMIN_GROUPS.map(g => ({ ...g, mine: g.tabs.filter(t => allowed.includes(t)) })).filter(g => g.mine.length);
+  const cur = adminGroupOf(adminTab), curG = groups.find(g => cur && g.id === cur.id) || groups[0];
+  const gl = (g) => g.mine.length === 1 ? ADMIN_TAB_LABELS[g.mine[0]] : g.label;
+  const top = groups.map(g => `<button type="button" class="${g === curG ? 'active' : ''}" data-group="${g.id}" aria-pressed="${g === curG}" onclick="setAdminGroup('${g.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${g.icon}</svg><span>${gl(g)}</span></button>`).join('');
+  const sub = curG.mine.length > 1 ? `<div class="tabs subtabs" role="tablist" aria-label="${curG.label}">${curG.mine.map(t => `<button type="button" role="tab" class="${adminTab === t ? 'active' : ''}" aria-selected="${adminTab === t}" data-tab="${t}" onclick="setAdminTab('${t}')">${ADMIN_SUB_LABELS[t] || ADMIN_TAB_LABELS[t]}</button>`).join('')}</div>` : '';
+  return `<div class="tabs sections" style="--cols:${groups.length}">${top}</div>${sub}`;
+}
+function setAdminGroup(id) {
+  const g = ADMIN_GROUPS.find(x => x.id === id), allowed = adminAllowedTabs(), mine = g.tabs.filter(t => allowed.includes(t));
+  setAdminTab(mine.includes(adminLastTab[id]) ? adminLastTab[id] : mine[0]);
+}
 async function renderAdmin() {
-  const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
+  const tabs = adminAllowedTabs();
   if (!tabs.includes(adminTab)) adminTab = tabs[0];
   const canSell = state.user.role === 'admin' || state.user.role === 'superadmin';
   document.getElementById('app').innerHTML = h`
     ${canSell ? `<button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>` : ''}
     <div id="retentionBanner"></div>
-    <div class="tabs">
-      ${tabs.map(t => `<button class="${adminTab===t?'active':''}" data-tab="${t}" onclick="setAdminTab('${t}')">${ADMIN_TAB_LABELS[t]}</button>`).join('')}
-    </div>
+    <div id="adminNav"></div>
     <div id="adminContent"></div>
   `;
   if (state.user.role === 'superadmin') renderRetentionBanner();
@@ -1238,7 +1276,8 @@ function adminEl(seq) { return seq === adminSeq ? document.getElementById('admin
 function setAdminTab(t) { adminTab = t; dispatchAdminTab(); }
 function dispatchAdminTab() {
   adminSeq++;
-  document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
+  const gr = adminGroupOf(adminTab); if (gr) adminLastTab[gr.id] = adminTab;
+  const nav = document.getElementById('adminNav'); if (nav) nav.innerHTML = adminNavHtml();
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
   ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, listings: renderListingsTab, candles: renderCandlesTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
@@ -1311,8 +1350,45 @@ async function renderCampaignsTab() {
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = h`
     ${state.user.role==='superadmin' && !org ? `<div class="card"><div class="error">Could not load church settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
-    ${org ? `<div class="card">
-      <h3 style="margin-top:0">Church details</h3>
+    <div class="card">
+      <div class="fh-top" style="margin-bottom:8px"><h3 style="margin:0">Campaigns</h3>${state.user.role==='superadmin' ? `<button class="primary" style="margin-left:auto" onclick="openCampaignWizard()">+ New Campaign</button>` : ''}</div>
+      <table>
+        <tr><th>Name</th><th>Tiers</th><th>Blocks</th><th>Status</th><th></th></tr>
+        ${campaigns.map(c => `<tr>
+          <td>${esc(c.name)}</td>
+          <td>${esc(tierSummary(c))}</td>
+          <td>${esc(blockSummary(c))}</td>
+          <td>${campaignStatusBadge(c)}${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
+          <td class="tiny-actions">
+            ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="${c.kind === 'registration' ? 'openRegForm' : 'openCampaignSettings'}('${c.id}')">⚙ Settings</button>
+            ${c.is_draft ? `<button class="small" onclick="doOpenCampaign('${c.id}')">Open</button>` : `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>`}
+            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
+          </td>
+        </tr>`).join('')}
+      </table>
+      <p class="muted">A campaign appears on the Sell screen only while it is open: not a draft, switched on, and between its opening and closing dates. "Public only" campaigns never appear there for a Seller.</p>
+    </div>
+    ${state.user.role==='superadmin' && campaigns.length ? `
+    <details class="card fold"><summary>Add a series to an existing campaign</summary>
+      <p class="muted">A physical top-up, or a second online series. The new numbers can't overlap any number already in that campaign.</p>
+      <label>Campaign</label>
+      <select id="asCampaign">${campaigns.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+      <label>Type</label>
+      <select id="asType" onchange="document.getElementById('asPrefixWrap').style.display = this.value==='digital' ? '' : 'none'">
+        <option value="physical">Physical (printed tickets)</option>
+        <option value="digital">Online</option>
+      </select>
+      <label>Name <span class="muted">(optional — e.g. Top-up, Online 2)</span></label>
+      <input id="asLabel">
+      <div class="row">
+        <div><label>First number</label><input id="asStart" type="number" inputmode="numeric" min="1"></div>
+        <div><label>Last number</label><input id="asEnd" type="number" inputmode="numeric" min="1"></div>
+      </div>
+      <div id="asPrefixWrap" style="display:none"><label>Display prefix <span class="muted">(optional, online only — e.g. O)</span></label><input id="asPrefix"></div>
+      <button class="primary" onclick="doAddSeries()">Add series</button>
+      <div id="addSeriesResult"></div>
+    </details>` : ''}
+    ${org ? `<details class="card fold"><summary>Church details</summary>
       <p class="muted">Shown on every ticket message and on the public buy page, for every campaign.</p>
       <label>Address</label>
       <input id="orgAddressInput" placeholder="e.g. 2 Witham Road, Osterley, TW7 4AJ" value="${esc(org.address||'')}">
@@ -1336,58 +1412,12 @@ async function renderCampaignsTab() {
       <input id="orgLotteryUntilInput" type="date" value="${esc(org.lottery_valid_until||'')}">
       <button class="small" style="margin-top:8px" onclick="doSaveOrgLottery()">Save</button>
       <div id="orgLotteryResult"></div>
-    </div>` : ''}
-    ${state.user.role==='superadmin' ? `<div class="card">
-      <h3 style="margin-top:0">SumUp connection</h3>
+    </details>` : ''}
+    ${state.user.role==='superadmin' ? `<details class="card fold"><summary>SumUp connection</summary>
       <p class="muted">Checks that Pay by Link will work: creates a £0.01 test link and cancels it straight away. No money moves.</p>
       <button class="small" onclick="doSumupCheck()">Test SumUp connection</button>
       <div id="sumupCheckResult"></div>
-    </div>` : ''}
-    <div class="card">
-      <h3 style="margin-top:0">Existing Campaigns</h3>
-      <table>
-        <tr><th>Name</th><th>Tiers</th><th>Blocks</th><th>Status</th><th></th></tr>
-        ${campaigns.map(c => `<tr>
-          <td>${esc(c.name)}</td>
-          <td>${esc(tierSummary(c))}</td>
-          <td>${esc(blockSummary(c))}</td>
-          <td>${campaignStatusBadge(c)}${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
-          <td class="tiny-actions">
-            ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="${c.kind === 'registration' ? 'openRegForm' : 'openCampaignSettings'}('${c.id}')">⚙ Settings</button>
-            ${c.is_draft ? `<button class="small" onclick="doOpenCampaign('${c.id}')">Open</button>` : `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>`}
-            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
-          </td>
-        </tr>`).join('')}
-      </table>
-      <p class="muted">A campaign appears on the Sell screen only while it is open: not a draft, switched on, and between its opening and closing dates. "Public only" campaigns never appear there for a Seller.</p>
-    </div>
-    ${state.user.role==='superadmin' && campaigns.length ? `
-    <div class="card">
-      <h3 style="margin-top:0">Add a series to an existing campaign</h3>
-      <p class="muted">A physical top-up, or a second online series. The new numbers can't overlap any number already in that campaign.</p>
-      <label>Campaign</label>
-      <select id="asCampaign">${campaigns.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-      <label>Type</label>
-      <select id="asType" onchange="document.getElementById('asPrefixWrap').style.display = this.value==='digital' ? '' : 'none'">
-        <option value="physical">Physical (printed tickets)</option>
-        <option value="digital">Online</option>
-      </select>
-      <label>Name <span class="muted">(optional — e.g. Top-up, Online 2)</span></label>
-      <input id="asLabel">
-      <div class="row">
-        <div><label>First number</label><input id="asStart" type="number" inputmode="numeric" min="1"></div>
-        <div><label>Last number</label><input id="asEnd" type="number" inputmode="numeric" min="1"></div>
-      </div>
-      <div id="asPrefixWrap" style="display:none"><label>Display prefix <span class="muted">(optional, online only — e.g. O)</span></label><input id="asPrefix"></div>
-      <button class="primary" onclick="doAddSeries()">Add series</button>
-      <div id="addSeriesResult"></div>
-    </div>` : ''}
-    ${state.user.role==='superadmin' ? `
-    <div class="card">
-      <h3 style="margin-top:0">Add New Campaign</h3>
-      <p class="muted">A short set of questions — raffle or not, who can buy it, prices, and the tickets themselves.</p>
-      <button class="primary" onclick="openCampaignWizard()">+ New Campaign</button>
-    </div>` : ''}
+    </details>` : ''}
   `;
 }
 async function doSaveThankYou() {
@@ -3303,11 +3333,38 @@ function gwWords() { return GW_WORDING[GW_VERTICAL]; }
 function gwOkUrl(u) { u = String(u || '').trim(); return /^https:\/\/[^\s\/$.?#][^\s]*\.[^\s]+$/i.test(u) && !/["'<>]/.test(u) && u.length <= 2000; }
 function gwShort(iso) { const [y, m, d] = String(iso).split('-').map(Number); return `${d} ${MONTHS_SHORT[m - 1]}`; }
 function gwAddDays(naive, n) { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(naive); if (!m) return ''; const t = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + n, +m[4], +m[5])); return t.toISOString().slice(0, 16); }
+// The top of a parish-page service (Repository, Listings, Candles): its name, whether it is open (the switch), one line about it, the two link
+// buttons, and the long explanation folded away under "How it works". Below it, a segmented control moves between that service's screens.
+//   c = { title, enabled, switchAria, onSwitch, blurb, how, pagePath, copy, see, seeLabel, extra, views: [{ id, label }], active, viewVar, paint }
+function featureHead(c) {
+  const tools = c.pagePath
+    ? `<button class="small" onclick="${c.copy}">Copy link</button><button class="small" onclick="${c.see}">${c.seeLabel || 'View the page'}</button>`
+    : '';
+  const noAddr = c.pagePath ? '' : '<div class="hint">The parish page has no address yet, so this cannot be opened. The SuperAdmin gives it one under Parish page &rarr; Page.</div>';
+  return `<div class="card fh"><div class="fh-top gw-switchrow"><h3>${c.title}</h3>${c.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}<label class="gw-switch" style="margin-left:auto"><input type="checkbox" ${c.enabled ? 'checked' : ''} aria-label="${esc(c.switchAria)}" onchange="${c.onSwitch}"><span></span></label></div>
+    <p class="fh-blurb">${c.blurb}</p>${noAddr}<div class="fh-tools">${tools}<button type="button" class="small fh-howbtn" aria-label="How it works" title="How it works" aria-expanded="false" onclick="const p = this.parentNode.nextElementSibling; p.hidden = !p.hidden; this.setAttribute('aria-expanded', String(!p.hidden))"><span class="fh-i">i</span></button></div>
+    <p class="fh-how" hidden>${c.how}</p>${c.extra || ''}</div>
+    <div class="seg" role="group" aria-label="${esc(c.title)} screens">${c.views.map(v => `<button type="button" aria-pressed="${c.active === v.id}" onclick="${c.viewVar}='${v.id}'; ${c.paint}()">${v.label}</button>`).join('')}</div>`;
+}
 function gwStyle() {
   if (document.getElementById('gwStyle')) return;
   const st = document.createElement('style'); st.id = 'gwStyle';
   st.textContent = `
   .gw-lede { margin:0 0 12px; color:var(--slate); font-size:14.5px; }
+  .fh { display:grid; gap:10px; }
+  .fh-top { gap:10px; min-height:44px; }
+  .fh-top h3 { margin:0; }
+  .fh-top .gw-status { margin-left:0; }
+  .fh-blurb { margin:0; color:var(--slate); font-size:15px; }
+  .fh-tools { display:flex; flex-wrap:wrap; gap:8px; }
+  .fh-tools .small { min-height:44px; }
+  .fh-howbtn { display:inline-grid; place-items:center; min-width:44px; padding:0 10px; }
+  .fh-i { display:inline-grid; place-items:center; width:20px; height:20px; border:1.6px solid var(--pine); border-radius:50%; font:italic 700 12.5px Georgia, serif; }
+  .fh-how { margin:0; padding:10px 12px; border-radius:10px; background:var(--paper); color:var(--slate); font-size:14.5px; }
+  .seg { display:flex; gap:4px; padding:4px; margin:0 0 12px; background:var(--line); border-radius:13px; overflow-x:auto; scrollbar-width:none; }
+  .seg::-webkit-scrollbar { display:none; }
+  .seg button { flex:1 0 auto; min-height:44px; padding:0 14px; border:0; border-radius:10px; background:transparent; color:var(--ink); font-size:15px; font-weight:600; white-space:nowrap; }
+  .seg button[aria-pressed="true"] { background:var(--surface); color:var(--pine); box-shadow:0 1px 3px rgba(0,0,0,.2); }
   .gw-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
   .gw-pill { min-height:44px; padding:0 14px; border-radius:999px; border:1.5px solid var(--stone); background:var(--surface); font-size:14.5px; font-weight:600; color:var(--ink); }
   .gw-pill[aria-checked="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -3764,14 +3821,13 @@ function repoPaint() {
   window.scrollTo(0, y);
 }
 function repoHeadHtml() {
-  const { d } = repo, o = d.org, s = d.settings, url = o.page_path ? location.origin + o.page_path : '';
-  const pill = (v, label) => `<button type="button" aria-pressed="${repo.view === v}" onclick="repo.view='${v}'; repoPaint()">${label}</button>`;
-  return `<div class="card"><h3 style="margin-top:0">Repository ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
-    <p class="gw-lede">Parishioners choose items, pick the Mass where they will collect, and pay by card. You see the orders here; the repository volunteer makes each one up and hands it out after Mass.</p>
-    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="repoCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="repoSeeShop()">See the shop</button></div>` : '<div class="hint">The parish page has no address yet, so the shop cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
-    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for online orders</b><div class="muted">Switch off to stop new orders at once. Orders already made stay on the list.${!o.slug ? '' : ' A shopping-bag shortcut appears on the parish page while it is open.'}</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for online orders" onchange="repoSetEnabled(this)"><span></span></label></div>
-    ${(() => { const sl = repoSyncLine(); return `<div class="${sl.warn ? 'hint' : 'muted'}" style="margin-top:10px">${esc(sl.text)}${sl.warn ? ` <button class="small" style="min-height:44px;margin-top:6px" onclick="repo.view='items'; repoPaint()">Update the stock from SumUp</button>` : ''}</div>`; })()}
-    <div class="rp-pills" role="group" aria-label="Repository sections">${pill('orders', 'Orders')}${pill('items', 'Items (' + d.items.length + ')')}${pill('settings', 'Mass times &amp; cut-off')}</div></div>`;
+  const { d } = repo, o = d.org, s = d.settings;
+  const sl = repoSyncLine();
+  return featureHead({ title: 'Repository', enabled: s.enabled, switchAria: 'Open for online orders', onSwitch: 'repoSetEnabled(this)', pagePath: o.page_path, copy: 'repoCopyLink()', see: 'repoSeeShop()', seeLabel: 'View the shop',
+    blurb: 'Parishioners order items online and collect them after Mass.',
+    how: 'Parishioners choose items, pick the Mass where they will collect, and pay by card. You see the orders here; the repository volunteer makes each one up and hands it out after Mass. Switch off to stop new orders at once; orders already made stay on the list.' + (o.slug ? ' A shopping-bag shortcut appears on the parish page while it is open.' : ''),
+    extra: `<div class="${sl.warn ? 'hint' : 'muted'}">${esc(sl.text)}${sl.warn ? ` <button class="small" style="min-height:44px;margin-top:6px" onclick="repo.view='items'; repoPaint()">Update the stock from SumUp</button>` : ''}</div>`,
+    views: [{ id: 'orders', label: 'Orders' }, { id: 'items', label: 'Items (' + d.items.length + ')' }, { id: 'settings', label: 'Mass times &amp; cut-off' }], active: repo.view, viewVar: 'repo.view', paint: 'repoPaint' });
 }
 function repoCopyLink() { const url = location.origin + repo.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
 function repoSeeShop() { if (!repo.d.settings.enabled) toast('The shop is closed, so visitors would see “not taking orders”.', 'error'); window.open(repo.d.org.page_path, '_blank', 'noopener'); }
@@ -4090,14 +4146,12 @@ function lstPaint() {
   window.scrollTo(0, y);
 }
 function lstHeadHtml() {
-  const { d } = lst, o = d.org, s = d.settings, c = d.counts, url = o.page_path ? location.origin + o.page_path : '';
-  const pill = (v, label) => `<button type="button" aria-pressed="${lst.view === v}" onclick="lst.view='${v}'; lstPaint()">${label}</button>`;
-  return `<div class="card"><h3 style="margin-top:0">Listings ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
-    <p class="gw-lede">A noticeboard for parishioners: things for sale, things given away, and services. People contact the lister by email only (the address is never shown on the page). You approve every listing before it appears. The church takes no part in any deal and the page says so.</p>
-    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="lstCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="lstSeePage()">See the page</button></div>` : '<div class="hint">The parish page has no address yet, so Listings cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
-    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for listings</b><div class="muted">Switch off to hide the page and stop new listings. A shortcut appears on the parish page while it is open.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for listings" onchange="lstSetEnabled(this)"><span></span></label></div>
-    ${c.waiting ? `<div class="hint" style="margin-top:10px"><b>${c.waiting} listing${c.waiting === 1 ? ' is' : 's are'} waiting for you to approve.</b></div>` : ''}
-    <div class="rp-pills" role="group" aria-label="Listings sections">${pill('waiting', 'Waiting' + (c.waiting ? ' (' + c.waiting + ')' : ''))}${pill('live', 'Live (' + c.live + ')' + (c.reported ? ' ⚑' + c.reported : ''))}${pill('ended', 'Ended')}${pill('settings', 'Settings')}</div></div>`;
+  const { d } = lst, o = d.org, s = d.settings, c = d.counts;
+  return featureHead({ title: 'Listings', enabled: s.enabled, switchAria: 'Open for listings', onSwitch: 'lstSetEnabled(this)', pagePath: o.page_path, copy: 'lstCopyLink()', see: 'lstSeePage()', seeLabel: 'View the page',
+    blurb: 'A noticeboard for parishioners: things for sale, free, and services.',
+    how: 'People contact the lister by email only (the address is never shown on the page). You approve every listing before it appears. The church takes no part in any deal and the page says so. Switch off to hide the page and stop new listings; a shortcut appears on the parish page while it is open.',
+    extra: c.waiting ? `<div class="hint"><b>${c.waiting} listing${c.waiting === 1 ? ' is' : 's are'} waiting for you to approve.</b></div>` : '',
+    views: [{ id: 'waiting', label: 'Waiting' + (c.waiting ? ' (' + c.waiting + ')' : '') }, { id: 'live', label: 'Live (' + c.live + ')' + (c.reported ? ' ⚑' + c.reported : '') }, { id: 'ended', label: 'Ended' }, { id: 'settings', label: 'Settings' }], active: lst.view, viewVar: 'lst.view', paint: 'lstPaint' });
 }
 function lstCopyLink() { const url = location.origin + lst.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
 function lstSeePage() { if (!lst.d.settings.enabled) toast('Listings is closed, so visitors would see “not open”.', 'error'); window.open(lst.d.org.page_path, '_blank', 'noopener'); }
@@ -4209,13 +4263,11 @@ function cndPaint() {
   window.scrollTo(0, y);
 }
 function cndHeadHtml() {
-  const { d } = cnd, o = d.org, s = d.settings, url = o.page_path ? location.origin + o.page_path : '';
-  const pill = (v, label) => `<button type="button" aria-pressed="${cnd.view === v}" onclick="cnd.view='${v}'; cnd.cancelId=null; cndPaint()">${label}</button>`;
-  return `<div class="card"><h3 style="margin-top:0">Light a Candle ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
-    <p class="gw-lede">Parishioners choose a candle stand, a day (the coming week, Monday to Sunday) and a number of candles, and give an offering by card. A volunteer lights them; you tick each one as it is lit. Any “who is it for” note is seen here only and is never put in an email.</p>
-    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="cndCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="cndSeePage()">See the page</button></div>` : '<div class="hint">The parish page has no address yet, so Light a Candle cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
-    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for candle requests</b><div class="muted">Switch off to hide the page and stop new requests. A candle shortcut appears on the parish page while it is open.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for candle requests" onchange="cndSetEnabled(this)"><span></span></label></div>
-    <div class="rp-pills" role="group" aria-label="Candles sections">${pill('requests', 'Requests')}${pill('settings', 'Settings')}${pill('email', 'Thursday email')}</div></div>`;
+  const { d } = cnd, o = d.org, s = d.settings;
+  return featureHead({ title: 'Light a Candle', enabled: s.enabled, switchAria: 'Open for candle requests', onSwitch: 'cndSetEnabled(this)', pagePath: o.page_path, copy: 'cndCopyLink()', see: 'cndSeePage()', seeLabel: 'View the page',
+    blurb: 'Parishioners ask for candles to be lit, and give an offering by card.',
+    how: 'They choose a candle stand, a day (the coming week, Monday to Sunday) and a number of candles. A volunteer lights them and you tick each one as it is lit. Any “who is it for” note is seen here only and is never put in an email. Switch off to hide the page and stop new requests; a candle shortcut appears on the parish page while it is open.',
+    views: [{ id: 'requests', label: 'Requests' }, { id: 'settings', label: 'Settings' }, { id: 'email', label: 'Thursday email' }], active: cnd.view, viewVar: 'cnd.view', paint: 'cndPaint' });
 }
 function cndCopyLink() { const url = location.origin + cnd.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
 function cndSeePage() { if (!cnd.d.settings.enabled) toast('Light a Candle is closed, so visitors would see “not open”.', 'error'); window.open(cnd.d.org.page_path, '_blank', 'noopener'); }
@@ -4227,8 +4279,8 @@ async function cndSetEnabled(box) {
 // ---- requests
 function cndWeekChips() {
   const d = cnd.d, add = (iso, n) => { const t = new Date(iso + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
-  const list = [[add(d.this_monday, -7), 'Last week'], [d.this_monday, 'This week'], [d.next_monday === d.this_monday ? add(d.this_monday, 7) : d.next_monday, 'Next week'], [add(d.next_monday, 7), 'The week after']];
-  return `<div class="rp-pills" role="group" aria-label="Week">${list.map(([m, label]) => `<button type="button" aria-pressed="${cnd.monday === m}" onclick="cndGoWeek('${m}')">${label}</button>`).join('')}</div>`;
+  const list = [[add(d.this_monday, -7), 'Last', 'Last week'], [d.this_monday, 'This', 'This week'], [d.next_monday === d.this_monday ? add(d.this_monday, 7) : d.next_monday, 'Next', 'Next week'], [add(d.next_monday, 7), 'After', 'The week after next']];
+  return `<div class="seg" role="group" aria-label="Week">${list.map(([m, label, full]) => `<button type="button" aria-pressed="${cnd.monday === m}" aria-label="${full}" title="${full}" onclick="cndGoWeek('${m}')">${label}</button>`).join('')}</div>`;
 }
 async function cndGoWeek(m) {
   cnd.monday = m; cnd.cancelId = null;
@@ -4353,6 +4405,14 @@ async function cndPreview() {
   try { const r = await call('digest_preview'); cnd.preview = r.text; cndPaint(); toast('✓ This is what the email would say'); }
   catch (e) { toast(e.message, 'error'); }
 }
+
+// A wide table (Users, Sales, Reports...) scrolls inside its own box instead of stretching the whole page sideways on a phone.
+(function () {
+  const wrap = (t) => { if (!t.parentNode || (t.parentElement && t.parentElement.classList.contains('tscroll'))) return; const d = document.createElement('div'); d.className = 'tscroll'; t.parentNode.insertBefore(d, t); d.appendChild(t); };
+  const all = (root) => { if (root.nodeType !== 1) return; if (root.tagName === 'TABLE') wrap(root); else root.querySelectorAll('table').forEach(wrap); };
+  new MutationObserver((ms) => { for (const m of ms) m.addedNodes.forEach(all); }).observe(document.body, { childList: true, subtree: true });
+  all(document.body);
+})();
 </script>
 </body>
 </html>
