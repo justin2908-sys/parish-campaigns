@@ -38,3 +38,9 @@
   from = "/go/*"
   to = "/go.html"
   status = 200
+
+# The Repository (parish shop) online, at /shop/<address>. The same page also shows an order's own page at /shop.html?order=<id>.
+[[redirects]]
+  from = "/shop/*"
+  to = "/shop.html"
+  status = 200

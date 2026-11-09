@@ -1207,12 +1207,12 @@ function shareMenuHtml(a) {
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
 // Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
-const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
 const ADMIN_TABS_BY_ROLE = {
-  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'users', 'bin', 'privacy'],
-  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage'],
-  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage'],
-  priest: ['registrations', 'parishpage'],
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage', 'repository'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository'],
+  priest: ['registrations', 'parishpage', 'repository'],
 };
 async function renderAdmin() {
   const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
@@ -1241,7 +1241,7 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -3603,6 +3603,306 @@ render();
 startUpdateWatcher();
 // Lets the app open with no signal (see sw.js) — sales themselves always need the network.
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+</script>
+<script>
+// ================= THE REPOSITORY (parish shop) — Admin tab =================
+// Orders (who, what, which Mass; tick prepared and collected; print the Thursday list), Items (bring them across from SumUp's export, then
+// keep them here), and Mass times and the order cut-off. Every button says what it did, in words, where the person is looking.
+let repo = null;
+const REPO_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const repoMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
+function repoStyle() {
+  if (document.getElementById('repoStyle')) return;
+  const st = document.createElement('style'); st.id = 'repoStyle';
+  st.textContent = `
+  .rp-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+  .rp-pills button { min-height:48px; padding:0 16px; border-radius:999px; border:1.5px solid var(--stone); background:var(--surface); font-size:15px; font-weight:700; color:var(--ink); }
+  .rp-pills button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .rp-weeks { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 12px; }
+  .rp-weeks button { min-height:44px; padding:0 14px; border-radius:10px; border:1.5px solid var(--stone); background:var(--surface); font-weight:600; font-size:14.5px; color:var(--ink); }
+  .rp-weeks button[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-dim); }
+  .rp-sum { display:flex; flex-wrap:wrap; gap:6px 16px; margin:0 0 10px; font-weight:600; }
+  .rp-slot { margin:16px 0 6px; font-size:16.5px; }
+  .rp-order { border:1.5px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:10px; background:var(--paper); display:grid; gap:6px; }
+  .rp-order.cancelled { opacity:.6; }
+  .rp-order.collected { background:var(--good-dim); }
+  .rp-top { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; }
+  .rp-ref { font-size:20px; letter-spacing:.04em; }
+  .rp-name { font-weight:700; font-size:16.5px; overflow-wrap:anywhere; }
+  .rp-lines { font-size:15.5px; overflow-wrap:anywhere; }
+  .rp-act { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .rp-act button { min-height:44px; }
+  .rp-cancel { border:1.5px solid var(--bad); border-radius:10px; padding:10px; background:var(--surface); display:grid; gap:8px; }
+  .rp-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+  .rp-item b.nm { overflow-wrap:anywhere; }
+  .rp-item.off { opacity:.62; }
+  .rp-cat { margin:14px 0 2px; font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--slate); }
+  .rp-chip { display:inline-block; font-size:12.5px; font-weight:700; padding:1px 8px; border-radius:999px; background:var(--line); color:var(--ink); margin-left:4px; vertical-align:middle; }
+  .rp-chip.low { background:var(--warn-dim); color:var(--warn); } .rp-chip.out { background:var(--bad-dim); color:var(--bad); }
+  .rp-slotrow { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1.2fr) minmax(0,1fr) auto; gap:8px; align-items:end; margin-bottom:8px; }
+  @media (max-width:520px) { .rp-slotrow { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } }
+  .rp-box { border:1.5px solid var(--line); border-radius:12px; padding:12px; background:var(--paper); margin-top:12px; }
+  .rp-skip { margin:6px 0 0; padding-left:18px; font-size:14px; color:var(--slate); }
+  #repoPrintPanel table { width:100%; border-collapse:collapse; margin:6px 0 14px; font-size:14px; }
+  #repoPrintPanel th, #repoPrintPanel td { border:1px solid #999; padding:6px 8px; text-align:left; vertical-align:top; }
+  #repoPrintPanel .tick { width:26px; height:18px; display:inline-block; border:1.5px solid #333; border-radius:3px; vertical-align:middle; }
+  @media print {
+    body > *:not(#repoPrintPanel):not(#regTablePanel) { display:none !important; }
+    #repoPrintPanel { position:static !important; inset:auto !important; overflow:visible !important; padding:0 !important; background:#fff !important; color:#000 !important; }
+    #repoPrintPanel .noprint { display:none !important; }
+    #repoPrintPanel .slotblock { break-inside:avoid; }
+  }`;
+  document.head.appendChild(st);
+}
+function repoDraftFrom(d) {
+  return { slots: d.settings.slots.map(s => ({ id: s.id, label: s.label, weekday: s.weekday, time: s.time })), cutoff_weekday: d.settings.cutoff_weekday, cutoff_time: d.settings.cutoff_time, intro_text: d.settings.intro_text || '' };
+}
+async function renderRepositoryTab() {
+  const seq = adminSeq;
+  let d;
+  try { d = await call('shop_get'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
+  gwStyle(); repoStyle();
+  repo = { d, view: 'orders', orders: null, weekend: null, imp: { text: '', result: null, busy: false }, form: null, filter: '', draft: repoDraftFrom(d), cancelId: null, removeArm: null };
+  try { repo.orders = await call('shop_orders', {}); repo.weekend = repo.orders.weekend; } catch (e) { repo.orders = { weekends: [], orders: [], totals: { orders: 0, to_prepare: 0, taken: 0 }, weekend: null, weekend_label: '' }; }
+  if (adminSeq === seq) repoPaint();
+}
+async function repoReload(parts) {   // refetch; only the parts just saved take the server's version, so nothing typed elsewhere is lost
+  repo.d = await call('shop_get');
+  const fresh = repoDraftFrom(repo.d);
+  for (const p of parts || []) repo.draft[p] = fresh[p];
+  repoPaint();
+}
+async function repoLoadOrders(weekend) {
+  repo.orders = await call('shop_orders', weekend ? { weekend } : {});
+  repo.weekend = repo.orders.weekend; repo.cancelId = null;
+  repoPaint();
+}
+function repoPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'repository' || !repo) return;
+  const y = window.scrollY;
+  el.innerHTML = repoHeadHtml() + (repo.view === 'orders' ? repoOrdersHtml() : repo.view === 'items' ? repoItemsHtml() : repoSettingsHtml());
+  window.scrollTo(0, y);
+}
+function repoHeadHtml() {
+  const { d } = repo, o = d.org, s = d.settings, url = o.page_path ? location.origin + o.page_path : '';
+  const pill = (v, label) => `<button type="button" aria-pressed="${repo.view === v}" onclick="repo.view='${v}'; repoPaint()">${label}</button>`;
+  return `<div class="card"><h3 style="margin-top:0">Repository ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
+    <p class="gw-lede">Parishioners choose items, pick the Mass where they will collect, and pay by card. You see the orders here; the repository volunteer makes each one up and hands it out after Mass.</p>
+    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="repoCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="repoSeeShop()">See the shop</button></div>` : '<div class="hint">The parish page has no address yet, so the shop cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
+    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for online orders</b><div class="muted">Switch off to stop new orders at once. Orders already made stay on the list.${!o.slug ? '' : ' A shopping-bag shortcut appears on the parish page while it is open.'}</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for online orders" onchange="repoSetEnabled(this)"><span></span></label></div>
+    <div class="rp-pills" role="group" aria-label="Repository sections">${pill('orders', 'Orders')}${pill('items', 'Items (' + d.items.length + ')')}${pill('settings', 'Mass times &amp; cut-off')}</div></div>`;
+}
+function repoCopyLink() { const url = location.origin + repo.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
+function repoSeeShop() { if (!repo.d.settings.enabled) toast('The shop is closed, so visitors would see “not taking orders”.', 'error'); window.open(repo.d.org.page_path, '_blank', 'noopener'); }
+async function repoSetEnabled(box) {
+  const want = box.checked;
+  try { await call('shop_set_settings', { enabled: want }); toast(want ? '✓ The repository is now open for orders' : '✓ The repository is now closed to new orders'); await repoReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+
+// ---- Orders
+const REPO_STATUS = { paid: ['To prepare', 'sched'], prepared: ['Prepared', 'live'], collected: ['Collected', 'live'], awaiting_payment: ['Not paid yet', ''], cancelled: ['Cancelled', ''] };
+function repoOrderHtml(o) {
+  const st = REPO_STATUS[o.status] || [o.status, ''], paid = ['paid', 'prepared', 'collected'].includes(o.status);
+  const lines = o.lines.map(l => `${l.qty} × ${esc(l.name)}`).join(', ');
+  const acts = [];
+  if (o.status === 'paid') acts.push(`<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoMark('${o.id}','prepared')">✓ Prepared</button>`);
+  if (o.status === 'prepared') acts.push(`<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoMark('${o.id}','collected')">✓ Collected</button>`, `<button class="small" onclick="repoMark('${o.id}','paid')">Not prepared after all</button>`);
+  if (o.status === 'collected') acts.push(`<button class="small" onclick="repoMark('${o.id}','prepared')">Not collected after all</button>`);
+  if (o.status !== 'cancelled') acts.push(`<button class="small" onclick="repo.cancelId='${o.id}'; repoPaint()">Cancel this order…</button>`);
+  const cancel = repo.cancelId === o.id ? `<div class="rp-cancel"><b>Cancel ${esc(o.ref)}?</b>
+      <div><label for="rpWhy">Why? (kept on the record)</label><input id="rpWhy" maxlength="150" placeholder="e.g. item damaged, asked to cancel" autocomplete="off"></div>
+      ${paid ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="rpRefund" style="width:auto;margin:0" checked> Note that I have refunded this in SumUp</label>
+        <div><label for="rpAmt">Amount refunded (£)</label><input id="rpAmt" inputmode="decimal" value="${o.total.toFixed(2)}" autocomplete="off"></div>
+        <div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it on the payment, so the books agree.</div>` : ''}
+      <div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="repoCancel('${o.id}', ${paid})">Yes, cancel the order</button><button class="small" onclick="repo.cancelId=null; repoPaint()">Keep it</button></div></div>` : '';
+  return `<div class="rp-order ${o.status}"><div class="rp-top"><b class="rp-ref">${esc(o.ref)}</b><span class="rp-name">${esc(o.name || '—')}</span><span class="gw-status ${st[1]}">${esc(st[0])}</span></div>
+    <div class="rp-lines">${lines}</div>
+    <div class="muted">${repoMoney(o.total)}${o.contact ? ' · ' + esc(o.contact) : ''}${o.status === 'cancelled' && o.cancel_reason ? ' · ' + esc(o.cancel_reason) : ''}${o.refunded ? ' · refunded ' + repoMoney(o.refunded) : ''}</div>
+    ${acts.length ? `<div class="rp-act">${acts.join('')}</div>` : ''}${cancel}</div>`;
+}
+function repoOrdersHtml() {
+  const od = repo.orders;
+  const weeks = od.weekends.length ? `<div class="rp-weeks" role="group" aria-label="Collection weekend">${od.weekends.map(w => `<button type="button" aria-pressed="${w.weekend === od.weekend}" onclick="repoLoadOrders('${w.weekend}')">${esc(w.label.replace(/^\w+ /, 'Sat '))} · ${w.orders}${w.to_prepare ? ` (${w.to_prepare} to prepare)` : ''}</button>`).join('')}</div>` : '';
+  const bySlot = new Map();
+  for (const o of od.orders) { if (!bySlot.has(o.slot_label)) bySlot.set(o.slot_label, []); bySlot.get(o.slot_label).push(o); }
+  const slots = [...bySlot.entries()].sort((a, b) => String(a[1][0].collect_date).localeCompare(String(b[1][0].collect_date)) || a[0].localeCompare(b[0]));
+  return `<div class="card"><h3 style="margin-top:0">Orders${od.weekend_label ? ' for the weekend of ' + esc(od.weekend_label) : ''}</h3>
+    <p class="gw-lede">Orders made by Wednesday midnight are for that weekend (the cut-off can be changed under Mass times &amp; cut-off). Each order is made up under its reference with the person's name, and handed out at the church door after the Mass they chose.</p>
+    ${weeks}
+    ${od.orders.length ? `<div class="rp-sum"><span>${od.totals.orders} order${od.totals.orders === 1 ? '' : 's'}</span><span>${od.totals.to_prepare} still to prepare</span><span>${repoMoney(od.totals.taken)} paid</span></div>
+      <div class="gw-btns" style="margin:0 0 6px"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoPrint()">🖨 Print the list for the volunteer</button><button class="small" onclick="repoLoadOrders('${od.weekend || ''}'); toast('✓ List refreshed')">Refresh</button></div>
+      ${slots.map(([label, list]) => `<h4 class="rp-slot">${esc(label)}</h4>${list.map(repoOrderHtml).join('')}`).join('')}`
+      : `<p class="muted" style="margin:6px 0 0">No orders yet${od.weekend_label ? ' for this weekend' : ''}. They appear here as soon as someone orders and pays.</p>`}</div>`;
+}
+async function repoMark(id, status) {
+  try {
+    await call('shop_order_mark', { order_id: id, status });
+    toast(status === 'prepared' ? '✓ Marked as prepared' : status === 'collected' ? '✓ Marked as collected' : '✓ Put back to “to prepare”');
+    await repoLoadOrders(repo.weekend);
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function repoCancel(id, paid) {
+  const why = (document.getElementById('rpWhy') || {}).value || '';
+  if (!why.trim()) { toast('Please say why, so it is on the record.', 'error'); return; }
+  const body = { order_id: id, reason: why };
+  const refundBox = document.getElementById('rpRefund');
+  if (paid && refundBox && refundBox.checked) body.refund_amount = (document.getElementById('rpAmt') || {}).value;
+  try {
+    const r = await call('shop_order_cancel', body);
+    toast(r.refunded ? `✓ Order cancelled, and the ${repoMoney(r.refunded)} refund is recorded` : '✓ Order cancelled and the stock put back');
+    repo.cancelId = null; await repoLoadOrders(repo.weekend); await repoReload();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function repoPrint() {
+  const od = repo.orders, live = od.orders.filter(o => ['paid', 'prepared', 'collected'].includes(o.status));
+  if (!live.length) { toast('There are no paid orders to print for this weekend.', 'error'); return; }
+  let el = document.getElementById('repoPrintPanel');
+  if (!el) { el = document.createElement('div'); el.id = 'repoPrintPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:44;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const bySlot = new Map();
+  for (const o of live) { if (!bySlot.has(o.slot_label)) bySlot.set(o.slot_label, []); bySlot.get(o.slot_label).push(o); }
+  const slots = [...bySlot.entries()].sort((a, b) => String(a[1][0].collect_date).localeCompare(String(b[1][0].collect_date)) || a[0].localeCompare(b[0]));
+  const pick = new Map();
+  for (const o of live) for (const l of o.lines) pick.set(l.name, (pick.get(l.name) || 0) + l.qty);
+  el.innerHTML = `<div style="max-width:900px;margin:0 auto">
+    <div class="noprint" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap"><h3 style="margin:0">Print the list</h3>
+      <div class="tiny-actions"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="window.print(); toast('✓ Print window opened — choose a printer, or “Save as PDF”')">🖨 Print</button> <button class="small" onclick="repoClosePrint()">Close</button></div></div>
+    <h2 style="margin:0 0 2px">Repository orders — collect the weekend of ${esc(od.weekend_label)}</h2>
+    <div class="muted" style="margin-bottom:10px">${live.length} paid order${live.length === 1 ? '' : 's'} · printed ${esc(new Date().toLocaleDateString('en-GB'))} · put each order in an envelope or bag marked with its reference and the name</div>
+    <div class="slotblock"><b>All the items to get out (every Mass together)</b><table><tr><th>Item</th><th>Total</th></tr>${[...pick.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([n, q]) => `<tr><td>${esc(n)}</td><td>${q}</td></tr>`).join('')}</table></div>
+    ${slots.map(([label, list]) => `<div class="slotblock"><h3 style="margin:10px 0 0">${esc(label)}</h3><table><tr><th>Ref</th><th>Name</th><th>Items</th><th>Made up</th><th>Collected</th></tr>${list.map(o => `<tr><td><b>${esc(o.ref)}</b></td><td>${esc(o.name || '')}</td><td>${o.lines.map(l => `${l.qty} × ${esc(l.name)}`).join('<br>')}</td><td><span class="tick"></span></td><td><span class="tick"></span></td></tr>`).join('')}</table></div>`).join('')}
+  </div>`;
+}
+function repoClosePrint() { const el = document.getElementById('repoPrintPanel'); if (el) el.remove(); }
+
+// ---- Items
+function repoStockChip(i) {
+  if (i.stock === null) return '';
+  if (i.stock === 0) return '<span class="rp-chip out">Sold out</span>';
+  return `<span class="rp-chip ${i.stock <= 3 ? 'low' : ''}">${i.stock} in stock</span>`;
+}
+function repoItemRows() {
+  const q = repo.filter.trim().toLowerCase();
+  const list = repo.d.items.filter(i => !q || [i.name, i.category, i.sku].join(' ').toLowerCase().includes(q));
+  if (!list.length) return `<p class="muted" style="margin:8px 0 0">${repo.d.items.length ? 'No item matches that.' : 'No items yet. Bring them across from SumUp above, or add one by hand.'}</p>`;
+  let last = null, out = '';
+  for (const i of list) {
+    if ((i.category || '') !== last) { last = i.category || ''; out += `<div class="rp-cat">${esc(last || 'No category')}</div>`; }
+    out += `<div class="rp-item ${i.available ? '' : 'off'}"><div><b class="nm">${esc(i.name)}</b> <span>${repoMoney(i.price)}</span>${repoStockChip(i)}${i.sku ? `<div class="muted" style="font-size:13.5px">Code ${esc(i.sku)}</div>` : ''}</div>
+      <div class="rp-act"><label class="gw-onpage" style="margin:0"><span class="gw-switch" style="width:48px;height:28px"><input type="checkbox" ${i.available ? 'checked' : ''} aria-label="${esc(i.name)} is on sale" onchange="repoToggleItem('${i.id}', this)"><span></span></span><span class="muted" style="font-weight:600">${i.available ? 'On sale' : 'Off'}</span></label>
+      <button class="small" onclick="repoEditItem('${i.id}')">Edit</button>
+      ${repo.removeArm === i.id ? `<button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="repoRemoveItem('${i.id}')">Yes, remove</button><button class="small" onclick="repo.removeArm=null; repoDrawItems()">Keep</button>` : `<button class="small" onclick="repo.removeArm='${i.id}'; repoDrawItems()">Remove</button>`}</div></div>`;
+  }
+  return out;
+}
+function repoDrawItems() { const box = document.getElementById('repoItemRows'); if (box) box.innerHTML = repoItemRows(); }
+function repoImportHtml() {
+  const imp = repo.imp, r = imp.result;
+  return `<div class="card"><h3 style="margin-top:0">Bring your items across from SumUp</h3>
+    <p class="gw-lede">SumUp cannot send its item list to us directly, but it can export it as a file. In SumUp: open <b>Catalog</b>, then <b>Items</b>, then press <b>Export</b>. Open that file here. You do this once; after that the items live here. Doing it again later refreshes the names and prices and keeps your stock counts.</p>
+    <label for="repoFile">The exported file (.csv)</label><input id="repoFile" type="file" accept=".csv,.txt,text/csv,text/plain" onchange="repoPickFile(this)">
+    <label for="repoPaste" style="margin-top:10px">…or paste its contents</label><textarea id="repoPaste" rows="3" placeholder="Item name,Price,Category…" oninput="repo.imp.text=this.value; repo.imp.result=null">${esc(imp.text)}</textarea>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" ${imp.busy ? 'disabled' : ''} onclick="repoImportCheck()">Check the file</button></div>
+    <div id="repoImportOut">${r ? repoImportResultHtml(r) : ''}</div></div>`;
+}
+function repoImportResultHtml(r) {
+  const skipped = r.skipped_count ? `<div class="muted" style="margin-top:6px">${r.skipped_count} line${r.skipped_count === 1 ? '' : 's'} left out:</div><ul class="rp-skip">${r.skipped.slice(0, 8).map(s => `<li>line ${s.line}${s.name ? ' (' + esc(s.name) + ')' : ''}: ${esc(s.reason)}</li>`).join('')}${r.skipped_count > 8 ? `<li>and ${r.skipped_count - 8} more</li>` : ''}</ul>` : '';
+  if (r.committed) return `<div class="rp-box" style="border-color:var(--good)"><b>✓ Done.</b> ${r.new_items} new item${r.new_items === 1 ? '' : 's'} added, ${r.updated} refreshed. Check the Items list below; set stock counts where you want them.${skipped}</div>`;
+  if (!r.found) return `<div class="rp-box"><b>I found no items I could use.</b>${skipped}</div>`;
+  return `<div class="rp-box"><b>I found ${r.found} item${r.found === 1 ? '' : 's'}:</b> ${r.new_items} new, ${r.updated} already here (their name and price will be refreshed; stock and on/off kept).
+    <div class="muted" style="font-size:13.5px;margin-top:4px">Using the columns: name “${esc(r.columns.name)}”, price “${esc(r.columns.price)}”${r.columns.category ? `, category “${esc(r.columns.category)}”` : ''}${r.columns.variation ? `, variation “${esc(r.columns.variation)}”` : ''}.</div>
+    <ul class="rp-skip">${r.sample.map(s => `<li>${esc(s.name)} — ${repoMoney(s.price)}${s.category ? ' · ' + esc(s.category) : ''}${s.is_new ? '' : ' (already here)'}</li>`).join('')}${r.found > r.sample.length ? `<li>and ${r.found - r.sample.length} more</li>` : ''}</ul>${skipped}
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoImportCommit()">Import these ${r.found} items</button></div></div>`;
+}
+function repoPickFile(input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  if (f.size > 1500000) { toast('That file is too large (1.5 MB at most).', 'error'); return; }
+  const rd = new FileReader();
+  rd.onload = () => { repo.imp.text = String(rd.result || ''); repo.imp.result = null; const ta = document.getElementById('repoPaste'); if (ta) ta.value = repo.imp.text; toast('✓ File opened — now press “Check the file”'); };
+  rd.onerror = () => toast('I could not read that file.', 'error');
+  rd.readAsText(f);
+}
+async function repoImportCheck() {
+  if (!repo.imp.text.trim()) { toast('Choose the exported file first, or paste its contents.', 'error'); return; }
+  try { repo.imp.busy = true; repo.imp.result = await call('shop_import', { text: repo.imp.text }, 60000); toast('✓ File checked — nothing is saved yet'); }
+  catch (e) { repo.imp.result = null; toast(e.message, 'error'); }
+  repo.imp.busy = false; const o = document.getElementById('repoImportOut'); if (o) o.innerHTML = repo.imp.result ? repoImportResultHtml(repo.imp.result) : '';
+}
+async function repoImportCommit() {
+  try {
+    const r = await call('shop_import', { text: repo.imp.text, commit: true }, 60000);
+    repo.imp.result = r; repo.imp.text = ''; toast(`✓ Imported: ${r.new_items} new, ${r.updated} refreshed`);
+    await repoReload(); repo.view = 'items'; repoPaint();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function repoFormHtml() {
+  const f = repo.form; if (!f) return '';
+  return `<div class="gw-mform"><h4>${f.id ? 'Change this item' : 'Add an item'}</h4>
+    <label for="rfName">Name</label><input id="rfName" maxlength="120" value="${esc(f.name)}" autocomplete="off" oninput="repo.form.name=this.value">
+    <div class="gw-two"><div><label for="rfPrice">Price (£)</label><input id="rfPrice" inputmode="decimal" value="${esc(f.price)}" autocomplete="off" oninput="repo.form.price=this.value"></div>
+    <div><label for="rfStock">How many in stock</label><input id="rfStock" inputmode="numeric" value="${esc(f.stock)}" placeholder="leave empty if you do not count it" autocomplete="off" oninput="repo.form.stock=this.value"></div></div>
+    <div class="gw-two"><div><label for="rfCat">Category</label><input id="rfCat" maxlength="60" value="${esc(f.category)}" placeholder="e.g. Rosaries, Books" autocomplete="off" oninput="repo.form.category=this.value"></div>
+    <div><label for="rfSku">Code (optional)</label><input id="rfSku" maxlength="60" value="${esc(f.sku)}" autocomplete="off" oninput="repo.form.sku=this.value"></div></div>
+    <label for="rfDesc">A short description (optional)</label><input id="rfDesc" maxlength="300" value="${esc(f.description)}" autocomplete="off" oninput="repo.form.description=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoSaveItem()">${f.id ? 'Save changes' : 'Add this item'}</button><button class="small" onclick="repo.form=null; repoPaint()">Cancel</button></div></div>`;
+}
+function repoEditItem(id) {
+  const i = repo.d.items.find(x => x.id === id); if (!i) return;
+  repo.form = { id: i.id, name: i.name, price: i.price.toFixed(2), stock: i.stock === null ? '' : String(i.stock), category: i.category, sku: i.sku, description: i.description, available: i.available };
+  repoPaint(); const e = document.getElementById('rfName'); if (e) { e.scrollIntoView({ block: 'center' }); e.focus(); }
+}
+function repoNewItem() { repo.form = { id: null, name: '', price: '', stock: '', category: '', sku: '', description: '', available: true }; repoPaint(); const e = document.getElementById('rfName'); if (e) { e.scrollIntoView({ block: 'center' }); e.focus(); } }
+async function repoSaveItem() {
+  const f = repo.form;
+  try {
+    await call('shop_item_save', { id: f.id || undefined, name: f.name, price: f.price, stock: f.stock, category: f.category, sku: f.sku, description: f.description, available: f.available });
+    toast(f.id ? `✓ ${f.name.trim()} saved` : `✓ ${f.name.trim()} added`); repo.form = null; await repoReload();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function repoToggleItem(id, box) {
+  const want = box.checked, i = repo.d.items.find(x => x.id === id);
+  try { await call('shop_item_set_available', { id, available: want }); if (i) i.available = want; toast(want ? `✓ ${i ? i.name : 'Item'} is on sale` : `✓ ${i ? i.name : 'Item'} is off sale`); repoDrawItems(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+async function repoRemoveItem(id) {
+  const i = repo.d.items.find(x => x.id === id);
+  try { await call('shop_item_delete', { id }); repo.removeArm = null; toast(`✓ ${i ? i.name : 'Item'} removed`); await repoReload(); } catch (e) { toast(e.message, 'error'); }
+}
+function repoItemsHtml() {
+  return repoImportHtml() + `<div class="card"><div class="gw-group-head"><h3 style="margin:0">Items</h3><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine);min-height:44px" onclick="repoNewItem()">+ Add an item</button></div>
+    <p class="gw-lede">Switch an item off to hide it from the shop. Give it a stock number and it shows “Sold out” at zero, and the number goes down as people order; leave the stock empty if you do not count it.</p>
+    ${repoFormHtml()}
+    ${repo.d.items.length > 8 ? `<label for="repoSearch" style="margin-top:8px">Find an item</label><input id="repoSearch" value="${esc(repo.filter)}" placeholder="name, category or code" autocomplete="off" oninput="repo.filter=this.value; repoDrawItems()">` : ''}
+    <div id="repoItemRows">${repoItemRows()}</div></div>`;
+}
+
+// ---- Mass times and the cut-off
+function repoSettingsHtml() {
+  const dr = repo.draft, d = repo.d;
+  const slotRow = (s, i) => `<div class="rp-slotrow"><div><label for="rsL${i}">Name</label><input id="rsL${i}" maxlength="60" value="${esc(s.label)}" placeholder="e.g. Vigil Mass" autocomplete="off" oninput="repo.draft.slots[${i}].label=this.value"></div>
+    <div><label for="rsD${i}">Day</label><select id="rsD${i}" onchange="repo.draft.slots[${i}].weekday=Number(this.value)"><option value="6" ${s.weekday === 6 ? 'selected' : ''}>Saturday</option><option value="0" ${s.weekday === 0 ? 'selected' : ''}>Sunday</option></select></div>
+    <div><label for="rsT${i}">Time</label><input id="rsT${i}" type="time" value="${esc(s.time)}" oninput="repo.draft.slots[${i}].time=this.value"></div>
+    <div><button class="small" style="min-height:44px" onclick="repoRemoveSlot(${i})" aria-label="Remove this Mass">Remove</button></div></div>`;
+  return `<div class="card"><h3 style="margin-top:0">Mass times people can collect at</h3>
+    <p class="gw-lede">Add the Saturday evening Mass and each Sunday Mass. People choose one of these when they order. Collection is at the church door on the way out.</p>
+    ${dr.slots.length ? dr.slots.map(slotRow).join('') : '<p class="muted">No Mass times yet. Add the first one.</p>'}
+    <div class="gw-btns"><button class="small" onclick="repoAddSlot()">+ Add a Mass</button></div>
+    <h4 style="margin:18px 0 0;font-size:16px">When orders close each week</h4>
+    <div class="gw-two"><div><label for="rsCD">Day</label><select id="rsCD" onchange="repo.draft.cutoff_weekday=Number(this.value)">${REPO_DAYS.map((n, i) => `<option value="${i}" ${dr.cutoff_weekday === i ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div><label for="rsCT">At</label><input id="rsCT" type="time" value="${esc(dr.cutoff_time)}" oninput="repo.draft.cutoff_time=this.value"></div></div>
+    <div class="muted" style="margin-top:4px">An order placed before this is for the coming weekend. After it, the order is for the following weekend. Use 23:59 for “midnight”.</div>
+    <label for="rsIntro" style="margin-top:12px">A line of welcome at the top of the shop (optional)</label><input id="rsIntro" maxlength="400" value="${esc(dr.intro_text)}" placeholder="e.g. Collect your order after Mass, at the door." autocomplete="off" oninput="repo.draft.intro_text=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoSaveSettings()">Save Mass times and cut-off</button></div></div>
+    <div class="card"><h4 style="margin:0 0 4px">What people can choose right now</h4>${d.options_now.length ? `<ul class="rp-skip" style="margin-top:6px">${d.options_now.map(o => `<li>${esc(o.label)}</li>`).join('')}</ul>` : '<p class="muted" style="margin:0">Nothing yet. Add a Mass time and save.</p>'}</div>`;
+}
+function repoAddSlot() { if (repo.draft.slots.length >= 8) { toast('Up to eight Mass times.', 'error'); return; } repo.draft.slots.push({ id: '', label: '', weekday: repo.draft.slots.length ? 0 : 6, time: repo.draft.slots.length ? '09:30' : '18:00' }); repoPaint(); toast('Added — give it a name and a time, then press Save'); }
+function repoRemoveSlot(i) { repo.draft.slots.splice(i, 1); repoPaint(); toast('Removed — press Save to keep this change'); }
+async function repoSaveSettings() {
+  try { await call('shop_set_settings', { slots: repo.draft.slots, cutoff_weekday: repo.draft.cutoff_weekday, cutoff_time: repo.draft.cutoff_time, intro_text: repo.draft.intro_text }); toast('✓ Saved'); await repoReload(['slots', 'cutoff_weekday', 'cutoff_time', 'intro_text']); }
+  catch (e) { toast(e.message, 'error'); }
+}
 </script>
 </body>
 </html>

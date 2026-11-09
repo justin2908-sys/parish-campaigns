@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#225840">
+<title>Repository</title>
+<script>
+// Ask for the shop (or the order's status) at once, while the styles and fonts are still downloading.
+window.__shopP = (function () {
+  var qs = new URLSearchParams(location.search), order = qs.get('order');
+  var m = /^\/shop\/([^\/?#]+)\/?$/.exec(location.pathname), slug = m ? decodeURIComponent(m[1]).toLowerCase() : '';
+  if (!window.fetch || (!order && !slug)) return { slug: slug, order: order, p: null };
+  var ctl = window.AbortController ? new AbortController() : null;
+  if (ctl) setTimeout(function () { ctl.abort(); }, 25000);
+  var p = fetch(order ? '/api/public_shop_status' : '/api/public_shop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(order ? { order_id: order } : { slug: slug }), signal: ctl ? ctl.signal : undefined })
+    .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, d: d }; }); })
+    .catch(function () { return null; });
+  return { slug: slug, order: order, p: p };
+})();
+</script>
+<style>
+@font-face { font-family:'Hanken Grotesk'; font-style:normal; font-weight:400 700; font-display:swap; src:url('/fonts/HankenGrotesk-400-700.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:500; font-display:swap; src:url('/fonts/Spectral-500.woff2') format('woff2'); }
+@font-face { font-family:'Spectral'; font-style:normal; font-weight:600; font-display:swap; src:url('/fonts/Spectral-600.woff2') format('woff2'); }
+:root {
+  --bg:#f3f4f1; --surface:#ffffff; --fg:#151c18; --muted:#3d4843; --line:#c9d0cb;
+  --brand:#225840; --brand-text:#225840; --brand-tint:#e0eee6;
+  --warn:#7a3f00; --warn-tint:#fbeccd; --bad:#a31f1f; --bad-tint:#fbe3e3;
+  --font-display:"Spectral", Georgia, "Times New Roman", serif;
+  --font-body:"Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#101512; --surface:#1b2220; --fg:#f1f4f0; --muted:#c0cbc4; --line:#3a4640;
+    --brand:#2f7a58; --brand-text:#9fdcbd; --brand-tint:#1f3329;
+    --warn:#f5c070; --warn-tint:#3a2a10; --bad:#ff9a9a; --bad-tint:#3a1c1c;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#101512; --surface:#1b2220; --fg:#f1f4f0; --muted:#c0cbc4; --line:#3a4640;
+  --brand:#2f7a58; --brand-text:#9fdcbd; --brand-tint:#1f3329;
+  --warn:#f5c070; --warn-tint:#3a2a10; --bad:#ff9a9a; --bad-tint:#3a1c1c;
+  color-scheme:dark;
+}
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-body); font-size:1.0625rem; line-height:1.4; overflow-wrap:break-word; }
+a { color:inherit; text-decoration:none; }
+button, input, select { font:inherit; color:inherit; }
+button { cursor:pointer; }
+:focus-visible { outline:4px solid var(--brand-text); outline-offset:2px; border-radius:6px; }
+.gutter { padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width:560px; margin:0 auto; }
+[hidden] { display:none !important; }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+.mast { background:var(--brand); color:#fff; padding-top:max(12px, env(safe-area-inset-top, 0px)); padding-bottom:12px; }
+.mast .id { display:flex; align-items:center; gap:12px; }
+.back { flex:none; width:48px; height:48px; border-radius:50%; border:2px solid rgba(255,255,255,.55); display:grid; place-items:center; color:#fff; }
+.mast h1 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.5rem; line-height:1.1; text-wrap:balance; }
+.mast small { display:block; font-family:var(--font-body); font-weight:500; font-size:.9375rem; opacity:.9; margin-bottom:2px; }
+
+main { padding-top:14px; padding-bottom:150px; display:grid; gap:14px; }
+.panel { background:var(--surface); border:2px solid var(--line); border-radius:16px; padding:14px; display:grid; gap:10px; }
+.panel h2 { margin:0; font-family:var(--font-display); font-weight:600; font-size:1.3rem; }
+.panel h2 .n { display:inline-grid; place-items:center; width:30px; height:30px; margin-right:8px; border-radius:50%; background:var(--brand); color:#fff; font-family:var(--font-body); font-size:1rem; font-weight:700; vertical-align:2px; }
+.intro { margin:0; color:var(--muted); }
+.cut { margin:0; padding:10px 12px; border-radius:12px; background:var(--brand-tint); border-left:5px solid var(--brand-text); font-size:.9375rem; }
+.cat { margin:6px 0 0; font-size:.9375rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--brand-text); }
+
+.item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+.cat + .item { border-top:0; }
+.item h3 { margin:0; font-size:1.05rem; line-height:1.25; overflow-wrap:anywhere; }
+.item p { margin:0; color:var(--muted); font-size:.9375rem; line-height:1.3; }
+.item .price { font-weight:700; }
+.item .meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; }
+.tag { display:inline-block; padding:1px 8px; border-radius:999px; font-size:.9375rem; font-weight:600; background:var(--warn-tint); color:var(--warn); }
+.tag.out { background:var(--line); color:var(--fg); }
+.qty { display:flex; align-items:center; gap:2px; }
+.qty button { width:48px; height:48px; border-radius:50%; border:2px solid var(--brand-text); background:transparent; color:var(--brand-text); display:grid; place-items:center; padding:0; }
+.qty button:disabled { opacity:.35; cursor:default; }
+.qty button.plus { background:var(--brand); border-color:var(--brand); color:#fff; }
+.qty button.plus:disabled { opacity:.35; }
+.qty output { min-width:2.2rem; text-align:center; font-weight:700; font-size:1.15rem; }
+
+.opts { display:grid; gap:8px; }
+.opt { display:flex; align-items:center; gap:12px; min-height:56px; padding:10px 12px; border:2px solid var(--line); border-radius:12px; background:var(--surface); cursor:pointer; }
+.opt input { width:24px; height:24px; flex:none; accent-color:var(--brand); }
+.opt.on { border-color:var(--brand-text); background:var(--brand-tint); }
+.opt .wk { font-size:.9375rem; color:var(--muted); }
+
+.f { display:grid; gap:4px; }
+.f label { font-weight:700; }
+.f input { width:100%; min-height:52px; padding:10px 12px; border:2px solid var(--line); border-radius:12px; background:var(--surface); font-size:1.0625rem; }
+.f input:focus { border-color:var(--brand-text); outline:none; box-shadow:0 0 0 3px var(--brand-tint); }
+.f .help { color:var(--muted); font-size:.9375rem; }
+.f.bad input { border-color:var(--bad); }
+.trap { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
+
+.bar { position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--surface); border-top:2px solid var(--line); padding-top:10px; padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
+.bar .wrap { display:grid; gap:8px; }
+.err { margin:0; padding:10px 12px; border-radius:12px; background:var(--bad-tint); color:var(--bad); font-weight:600; }
+.pay { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:56px; padding:0 18px; border:0; border-radius:14px; background:var(--brand); color:#fff; font-weight:700; font-size:1.1rem; }
+.pay:disabled { background:var(--line); color:var(--muted); cursor:default; }
+.pay .amt { font-variant-numeric:tabular-nums; }
+.btn { min-height:48px; padding:0 16px; border-radius:12px; border:2px solid var(--brand-text); background:transparent; color:var(--brand-text); font-weight:700; }
+.btn.solid { background:var(--brand); border-color:var(--brand); color:#fff; }
+
+.status { padding:32px 0 24px; display:grid; gap:14px; justify-items:start; }
+.status h1 { margin:0; font-family:var(--font-display); font-size:1.6rem; line-height:1.15; }
+.status p { margin:0; color:var(--muted); }
+.ref { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; border:2px solid var(--brand-text); border-radius:16px; background:var(--brand-tint); }
+.ref b { font-family:var(--font-display); font-size:2.2rem; letter-spacing:.04em; line-height:1; }
+.ref .k { display:block; font-size:.9375rem; color:var(--muted); font-weight:600; }
+.ibtn { flex:none; width:52px; height:52px; border-radius:50%; border:2px solid var(--brand-text); background:transparent; color:var(--brand-text); display:grid; place-items:center; }
+.lines { margin:0; padding:0; list-style:none; display:grid; gap:4px; }
+.lines li { display:flex; justify-content:space-between; gap:12px; }
+.lines li b { font-variant-numeric:tabular-nums; }
+.note { padding:12px 14px; border-radius:12px; background:var(--warn-tint); border-left:5px solid var(--warn); }
+.toast { position:fixed; left:50%; bottom:calc(90px + env(safe-area-inset-bottom, 0px)); transform:translate(-50%,20px); opacity:0; pointer-events:none; background:var(--fg); color:var(--bg); padding:14px 20px; border-radius:12px; max-width:calc(100% - 32px); transition:opacity .2s, transform .2s; z-index:40; }
+.toast.on { opacity:1; transform:translate(-50%,0); }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+(function () {
+  'use strict';
+  var W = {
+    title: 'Repository', loading: 'Loading…', failed: 'We could not load this page.', failedHelp: 'Please check your connection and try again.', retry: 'Try again',
+    closed: 'The repository is not taking online orders right now.', closedHelp: 'Please ask at the church, or look again later.',
+    step1: 'Choose your items', step2: 'When will you collect?', step3: 'Your details',
+    collectHelp: 'Collect your order at the church door on your way out from the Mass you choose.',
+    noItems: 'There is nothing on sale just now.', noOptions: 'There are no collection times open just now. Please look again soon.',
+    soldOut: 'Sold out', onlyLeft: function (n) { return 'Only ' + n + ' left'; },
+    name: 'Your name', phone: 'Mobile number', email: 'Email address (if you prefer)', contactHelp: 'Give a mobile number or an email address, so we can reach you if there is a problem.',
+    pay: 'Pay by card', opening: 'Opening the payment…', basketEmpty: 'Choose something to order',
+    needItems: 'Please choose at least one item.', needWhen: 'Please choose when you will collect.', needName: 'Please enter your name.', needContact: 'Please give a mobile number or an email address.',
+    saved: 'Saved', copied: 'Reference copied', copiedLink: 'Link copied'
+  };
+  var DAY = 864e5;
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function gbp(n) { return '£' + (Math.round(Number(n) * 100) / 100).toFixed(2); }
+  function ico(d, s) { return '<svg width="' + (s || 24) + '" height="' + (s || 24) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
+  var I = { back: '<path d="M15 6l-6 6 6 6"/>', minus: '<path d="M6 12h12"/>', plus: '<path d="M12 6v12M6 12h12"/>', copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>', link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>' };
+  var toastEl = $('toast'), tt;
+  function say(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(tt); tt = setTimeout(function () { toastEl.classList.remove('on'); }, 2600); }
+  function safeHref(u) { u = String(u == null ? '' : u).trim(); return /^https:\/\/[^\s]+$/i.test(u) ? u : ''; }
+  function mast(name, sub, slug) {
+    var back = slug ? '<a class="back" href="/go/' + esc(slug) + '" aria-label="Back to the parish page" title="Back to the parish page">' + ico(I.back, 24) + '</a>' : '';
+    return '<header class="mast gutter"><div class="wrap"><div class="id">' + back + '<h1>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + esc(name) + '</h1></div></div></header>';
+  }
+  function status(title, help, retry, slug) {
+    $('app').innerHTML = mast(W.title, '', slug) + '<main class="gutter"><div class="wrap"><div class="status"><h1>' + esc(title) + '</h1><p>' + esc(help) + '</p>' + (retry ? '<button class="btn solid" type="button" id="retry">' + esc(W.retry) + '</button>' : '') + '</div></div></main>';
+  }
+
+  var P = window.__shopP, slug = P.slug, orderId = P.order;
+  var data = null, qty = {}, collect = '', who = { name: '', phone: '', email: '' }, busy = false, attemptRef = '', errMsg = '', badField = '';
+
+  // ---- keep a half-made basket if the page is closed (never anything personal except what they typed)
+  function key() { return 'shop_basket_' + slug; }
+  function saveBasket() { try { localStorage.setItem(key(), JSON.stringify({ qty: qty, collect: collect, who: who })); } catch (e) { /* private window: it simply is not kept */ } }
+  function loadBasket() {
+    try {
+      var b = JSON.parse(localStorage.getItem(key()) || 'null'); if (!b) return;
+      var ids = {}; data.items.forEach(function (i) { if (!i.sold_out) ids[i.id] = 1; });
+      Object.keys(b.qty || {}).forEach(function (id) { if (ids[id] && b.qty[id] > 0) qty[id] = Math.min(20, b.qty[id]); });
+      if (data.options.some(function (o) { return o.key === b.collect; })) collect = b.collect;
+      if (b.who) who = { name: String(b.who.name || ''), phone: String(b.who.phone || ''), email: String(b.who.email || '') };
+    } catch (e) { /* nothing kept */ }
+  }
+  function clearBasket() { try { localStorage.removeItem(key()); } catch (e) { /* fine */ } }
+
+  function total() { var t = 0; data.items.forEach(function (i) { t += Math.round(i.price * 100) * (qty[i.id] || 0); }); return t / 100; }
+  function count() { var n = 0; Object.keys(qty).forEach(function (k) { n += qty[k]; }); return n; }
+
+  // ---- the shop
+  function itemRow(i) {
+    var q = qty[i.id] || 0, limit = i.left !== null ? Math.min(20, i.left) : 20;
+    var tag = i.sold_out ? '<span class="tag out">' + esc(W.soldOut) + '</span>' : (i.left !== null ? '<span class="tag">' + esc(W.onlyLeft(i.left)) + '</span>' : '');
+    var ctl = i.sold_out ? '' : '<div class="qty" role="group" aria-label="Quantity of ' + esc(i.name) + '"><button type="button" data-dec="' + esc(i.id) + '" aria-label="One fewer ' + esc(i.name) + '"' + (q ? '' : ' disabled') + '>' + ico(I.minus) + '</button><output aria-live="polite">' + q + '</output><button type="button" class="plus" data-inc="' + esc(i.id) + '" aria-label="One more ' + esc(i.name) + '"' + (q >= limit ? ' disabled' : '') + '>' + ico(I.plus) + '</button></div>';
+    return '<div class="item" data-item="' + esc(i.id) + '"><div><h3>' + esc(i.name) + '</h3>' + (i.description ? '<p>' + esc(i.description) + '</p>' : '') + '<div class="meta"><span class="price">' + gbp(i.price) + '</span>' + tag + '</div></div>' + ctl + '</div>';
+  }
+  function render() {
+    var html = mast(data.org.name, W.title, slug) + '<main class="gutter"><div class="wrap" style="display:grid;gap:14px">';
+    if (data.intro || data.cutoff_text) html += '<section class="panel">' + (data.intro ? '<p class="intro">' + esc(data.intro) + '</p>' : '') + (data.cutoff_text ? '<p class="cut">' + esc(data.cutoff_text) + '</p>' : '') + '</section>';
+    // 1. items
+    html += '<section class="panel" aria-labelledby="h1"><h2 id="h1"><span class="n">1</span>' + esc(W.step1) + '</h2>';
+    if (!data.items.length) html += '<p class="intro">' + esc(W.noItems) + '</p>';
+    var last = null;
+    data.items.forEach(function (i) { if (i.category !== last) { last = i.category; if (i.category) html += '<p class="cat">' + esc(i.category) + '</p>'; } html += itemRow(i); });
+    html += '</section>';
+    // 2. when
+    html += '<section class="panel" aria-labelledby="h2"><h2 id="h2"><span class="n">2</span>' + esc(W.step2) + '</h2><p class="intro">' + esc(W.collectHelp) + '</p>';
+    if (!data.options.length) html += '<p class="note">' + esc(W.noOptions) + '</p>';
+    else { html += '<div class="opts" role="radiogroup" aria-labelledby="h2">'; data.options.forEach(function (o) { html += '<label class="opt' + (collect === o.key ? ' on' : '') + '"><input type="radio" name="collect" value="' + esc(o.key) + '"' + (collect === o.key ? ' checked' : '') + '><span>' + esc(o.label) + '</span></label>'; }); html += '</div>'; }
+    html += '</section>';
+    // 3. details
+    html += '<section class="panel" aria-labelledby="h3"><h2 id="h3"><span class="n">3</span>' + esc(W.step3) + '</h2>' +
+      '<div class="f' + (badField === 'name' ? ' bad' : '') + '"><label for="fName">' + esc(W.name) + '</label><input id="fName" type="text" autocomplete="name" maxlength="80" value="' + esc(who.name) + '"></div>' +
+      '<div class="f' + (badField === 'contact' ? ' bad' : '') + '"><label for="fPhone">' + esc(W.phone) + '</label><input id="fPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" value="' + esc(who.phone) + '"></div>' +
+      '<div class="f' + (badField === 'contact' ? ' bad' : '') + '"><label for="fEmail">' + esc(W.email) + '</label><input id="fEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" value="' + esc(who.email) + '"><span class="help">' + esc(W.contactHelp) + '</span></div>' +
+      '<div class="trap" aria-hidden="true"><label>Leave this empty<input id="fWebsite" type="text" tabindex="-1" autocomplete="off"></label></div></section>';
+    html += '</div></main>';
+    html += '<div class="bar gutter"><div class="wrap">' + (errMsg ? '<p class="err" role="alert">' + esc(errMsg) + '</p>' : '') +
+      '<button class="pay" type="button" id="payBtn"' + (busy || !count() ? ' disabled' : '') + '><span id="payLabel">' + esc(busy ? W.opening : (count() ? W.pay : W.basketEmpty)) + '</span><span class="amt" id="payAmt">' + (count() && !busy ? gbp(total()) : '') + '</span></button></div></div>';
+    var keepScroll = window.scrollY, ae = document.activeElement && document.activeElement.id;
+    $('app').innerHTML = html;
+    window.scrollTo(0, keepScroll);
+    if (ae && $(ae) && /^f(Name|Phone|Email)$/.test(ae)) { var el = $(ae); el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* not for every type */ } }
+  }
+  function refreshBar() {   // only the basket total changes while choosing, so the page is not redrawn under a thumb
+    var pb = $('payBtn'); if (!pb) return;
+    pb.disabled = busy || !count();
+    $('payLabel').textContent = busy ? W.opening : (count() ? W.pay : W.basketEmpty);
+    $('payAmt').textContent = count() && !busy ? gbp(total()) : '';
+  }
+  function setQty(id, n) {
+    var it = data.items.filter(function (x) { return x.id === id; })[0]; if (!it) return;
+    var limit = it.left !== null ? Math.min(20, it.left) : 20;
+    n = Math.max(0, Math.min(limit, n)); if (n) qty[id] = n; else delete qty[id];
+    var row = document.querySelector('[data-item="' + id + '"]');
+    if (row) { row.querySelector('output').textContent = n; row.querySelector('[data-dec]').disabled = !n; row.querySelector('[data-inc]').disabled = n >= limit; }
+    errMsg = ''; var e = document.querySelector('.err'); if (e) e.remove();
+    saveBasket(); refreshBar();
+  }
+  function fail(msg, field) { errMsg = msg; badField = field || ''; render(); var e = document.querySelector('.err'); if (e) e.scrollIntoView({ block: 'nearest' }); if (field) { var t = field === 'name' ? $('fName') : $('fPhone'); if (t) { t.scrollIntoView({ block: 'center' }); t.focus(); } } }
+  function submit() {
+    if (busy) return;
+    who.name = $('fName').value.trim(); who.phone = $('fPhone').value.trim(); who.email = $('fEmail').value.trim(); saveBasket();
+    badField = '';
+    if (!count()) return fail(W.needItems);
+    if (!collect) { errMsg = W.needWhen; render(); var o = document.querySelector('.opts'); if (o) o.scrollIntoView({ block: 'center' }); return; }
+    if (!who.name) return fail(W.needName, 'name');
+    if (!who.phone && !who.email) return fail(W.needContact, 'contact');
+    busy = true; errMsg = ''; render();
+    if (!attemptRef) attemptRef = 'a' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+    var body = { slug: slug, items: Object.keys(qty).map(function (id) { return { id: id, qty: qty[id] }; }), collect: collect, name: who.name, phone: who.phone, email: who.email, client_ref: attemptRef, website: ($('fWebsite') || {}).value || '' };
+    fetch('/api/public_shop_order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (r) {
+        if (r.ok && r.d.order_id) {
+          clearBasket();
+          var pay = safeHref(r.d.pay_url);
+          if (pay) { location.href = pay; return; }
+          location.href = '/shop.html?order=' + encodeURIComponent(r.d.order_id);
+          return;
+        }
+        busy = false; attemptRef = ''; reloadThen((r.d && r.d.error) || W.failed);
+      })
+      .catch(function () { busy = false; errMsg = W.failedHelp; render(); });
+  }
+  // after a refusal (sold out, collection time passed...) fetch the shop again so what is shown is true, and say what went wrong
+  function reloadThen(msg) {
+    fetch('/api/public_shop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.items) { data = d; Object.keys(qty).forEach(function (id) { if (!data.items.some(function (i) { return i.id === id && !i.sold_out; })) delete qty[id]; }); if (!data.options.some(function (o) { return o.key === collect; })) collect = ''; } errMsg = msg; render(); })
+      .catch(function () { errMsg = msg; render(); });
+  }
+
+  // ---- an order's own page: its reference, and where it stands
+  var polls = 0, pollTimer = null;
+  function orderPage(o) {
+    var paid = o.status === 'paid' || o.status === 'prepared' || o.status === 'collected', slugOf = o.org_slug || '';
+    var lines = o.lines.map(function (l) { return '<li><span>' + l.qty + ' × ' + esc(l.name) + '</span><b>' + gbp(l.unit_price * l.qty) + '</b></li>'; }).join('');
+    var html = mast(o.org_name || W.title, W.title, slugOf) + '<main class="gutter"><div class="wrap"><div class="status">';
+    if (paid) {
+      html += '<h1>Thank you. Your order is in.</h1><div class="ref" style="width:100%"><div><span class="k">Your order reference</span><b>' + esc(o.ref) + '</b></div><button class="ibtn" type="button" data-copy="' + esc(o.ref) + '" aria-label="Copy the reference" title="Copy the reference">' + ico(I.copy) + '</button></div>' +
+        '<p>Collect it at the church door on your way out from <b style="color:var(--fg)">' + esc(o.slot_label) + '</b>. It will be ready in an envelope or bag with this reference and your name.</p>';
+    } else if (o.status === 'cancelled') {
+      html += '<h1>This order was not completed.</h1><p>' + esc(o.ref) + ' was cancelled, so nothing is being kept for you. If you were charged, please contact the parish office.</p>' + (slugOf ? '<a class="btn solid" style="display:inline-flex;align-items:center" href="/shop/' + esc(slugOf) + '">Start a new order</a>' : '');
+    } else {
+      html += '<h1>Waiting for your payment…</h1><div class="ref" style="width:100%"><div><span class="k">Your order reference</span><b>' + esc(o.ref) + '</b></div></div><p>We are checking with the card payment. This page updates by itself. If you have not paid yet:</p>' + (safeHref(o.pay_url) ? '<a class="btn solid" style="display:inline-flex;align-items:center" href="' + esc(safeHref(o.pay_url)) + '">Go to the payment page</a>' : '');
+    }
+    if (o.status !== 'cancelled') html += '<ul class="lines" style="width:100%">' + lines + '<li style="border-top:2px solid var(--line);padding-top:6px"><span>Total</span><b>' + gbp(o.total) + '</b></li></ul>';
+    if (paid) html += '<button class="ibtn" type="button" data-copylink aria-label="Copy a link back to this page" title="Copy a link back to this page">' + ico(I.link) + '</button><p style="font-size:.9375rem">Keep this page, or copy its link, to see your reference again. If you are collecting for someone else, tell the volunteer the reference or your name.</p>';
+    html += '</div></div></main>';
+    $('app').innerHTML = html;
+    document.title = o.ref + ' · ' + W.title;
+    clearTimeout(pollTimer);
+    if (o.status === 'awaiting_payment' && polls++ < 40) pollTimer = setTimeout(function () { fetch('/api/public_shop_status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_id: orderId }) }).then(function (r) { return r.json(); }).then(function (d) { if (d && d.ref) orderPage(d); }).catch(function () { /* try again on the next beat */ }); }, 4000);
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target, b;
+    if ((b = t.closest('[data-inc]'))) { var id = b.getAttribute('data-inc'); setQty(id, (qty[id] || 0) + 1); return; }
+    if ((b = t.closest('[data-dec]'))) { var id2 = b.getAttribute('data-dec'); setQty(id2, (qty[id2] || 0) - 1); return; }
+    if (t.closest('#payBtn')) { submit(); return; }
+    if (t.closest('#retry')) { start(); return; }
+    if ((b = t.closest('[data-copy]'))) { var v = b.getAttribute('data-copy'); try { navigator.clipboard.writeText(v).then(function () { say(W.copied + ': ' + v); }, function () { say(v); }); } catch (x) { say(v); } return; }
+    if (t.closest('[data-copylink]')) { var u = location.href; try { navigator.clipboard.writeText(u).then(function () { say(W.copiedLink); }, function () { say(u); }); } catch (x2) { say(u); } return; }
+  });
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.name === 'collect') { collect = e.target.value; errMsg = ''; saveBasket(); document.querySelectorAll('.opt').forEach(function (l) { l.classList.toggle('on', l.querySelector('input').checked); }); var er = document.querySelector('.err'); if (er) er.remove(); }
+  });
+  document.addEventListener('input', function (e) {
+    if (e.target && /^f(Name|Phone|Email)$/.test(e.target.id)) { who.name = ($('fName') || {}).value || ''; who.phone = ($('fPhone') || {}).value || ''; who.email = ($('fEmail') || {}).value || ''; saveBasket(); }
+  });
+
+  function take(r) {
+    if (orderId) {
+      if (r && r.ok && r.d && r.d.ref) { orderPage(r.d); return; }
+      if (r && r.status === 404) { status('We could not find that order.', 'Please check the link, or ask at the parish office.', false, ''); return; }
+      status(W.failed, W.failedHelp, true, ''); return;
+    }
+    if (!r) { status(W.failed, W.failedHelp, true, slug); return; }
+    if (r.status === 404) { status(W.closed, W.closedHelp, false, slug); return; }
+    if (r.ok && r.d && r.d.items) { data = r.d; loadBasket(); document.title = W.title + ' · ' + data.org.name; render(); return; }
+    status(W.failed, W.failedHelp, true, slug);
+  }
+  function start() {
+    if (!orderId && !slug) { status(W.closed, W.closedHelp, false, ''); return; }
+    var p = P.p; P.p = null;
+    if (!p) p = fetch(orderId ? '/api/public_shop_status' : '/api/public_shop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(orderId ? { order_id: orderId } : { slug: slug }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, d: d }; }); }).catch(function () { return null; });
+    p.then(take);
+  }
+  status(W.loading, '', false, slug);
+  start();
+})();
+</script>
+</body>
+</html>

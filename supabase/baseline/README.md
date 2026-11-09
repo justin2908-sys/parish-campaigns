@@ -41,3 +41,5 @@ When a change is applied, this baseline is regenerated and the table above updat
 
 **Not in the file:** the nightly deletion job is included (section 8), but the extensions must be allowed by the new project, and the unused
 storage bucket `payment-evidence` is deliberately not recreated.
+
+**2026-11-09, the Repository (parish shop):** migration `20261109010000_repository_shop` added five tables (`repository_items`, `repository_settings`, `repository_weekends`, `repository_orders`, `repository_order_lines`) and three functions (`shop_place_order`, `shop_cancel_order`, `shop_reinstate_order`). They are appended to the baseline file as **section 9** (the migration's own text), not merged into sections 1 to 7, so the seven hashes above still describe the database *without* the Repository objects. To check a copy built from this file, compare sections 1 to 7 after excluding anything named `repository_*` / `shop_*`. Building a new database from the file is unaffected: run it top to bottom, section 9 last.

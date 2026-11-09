@@ -202,7 +202,8 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   const loginAs = async (token, user) => {
     const dbgLog = (m) => { if (process.env.UI_DEBUG) console.log('  step ' + m); };
     dbgLog('login: open index');
-    await open(base + '/index.html', "document.getElementById('app')");
+    // set the login from a plain page that is not the app, so the app being left cannot write its old login back over it
+    await open(base + '/theme.css', 'document.body');
     dbgLog('login: set session');
     await ev(`localStorage.setItem('pc_session', JSON.stringify({ session: ${JSON.stringify(token)}, user: ${JSON.stringify(user)}, campaigns: [], org: null, lastCampaignId: null })); 'ok'`);
     dbgLog('login: reopen');

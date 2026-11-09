@@ -1453,3 +1453,36 @@ live database, baseline re-verified).
 - The card is shown only for the date it was made for (the parish's own time zone), so a page saved on a phone never shows yesterday's feast.
 - "Notification" here means the card on the page each day. A phone push notification ("remind me daily") was offered and not chosen.
 Tests: `test/gateway/daily.test.js` (18 tests; the calendar is replaced by a stand-in, the network is off in tests).
+
+## 61. The Repository (parish shop) online — 2026-11-09 (on dev; preview only)
+
+Father sells devotional items from the parish repository using the SumUp item library. This puts the repository online on the parish page:
+a parishioner chooses items, chooses which weekend Mass to collect at, and pays by card on our page; the office sees a list of orders; the
+volunteer makes each order up under its reference and name and hands it out at the church door.
+
+- **SumUp cannot send its item list to us** (checked 2026-11-09: SumUp's developer API has no items, catalogue or inventory section; its payment
+  notification is only about payments, which we already use). SumUp's help centre does describe a CSV export (Catalog → Items → Export). So the items
+  are brought across once from that file, then kept here; doing it again refreshes names and prices and keeps stock counts and on/off.
+  The importer finds the name, price, category, code, description and variation columns by their headings, shows what it found, and saves only when told.
+  (The real SumUp export has not been seen yet: the headings it recognises are the likely ones; anything else gets a plain message listing the columns found.)
+- **Public:** `/shop/<address>` (the page address is the parish page's own). Items by category with a stepper; "Sold out" at zero, "Only n left" at 5 or fewer;
+  collection choice; name and a mobile or email; one big "Pay by card £x" bar. The price is always worked out on the server from the item list.
+  After paying, SumUp returns the buyer to `/shop.html?order=<id>`: the reference (REP-001…), where to collect, and the items; it updates itself while waiting.
+  A shopping-bag picture button on the parish page opens it (only while the repository is open). Up to £500 and 20 of an item per order.
+- **Collection:** the parish sets its Mass times (Saturday evening, Sunday Masses) and the weekly order cut-off (default Wednesday midnight, in the parish's own
+  time zone). An order made before the cut-off is for the coming weekend, after it for the following one; the next two weekends are offered.
+- **Stock:** optional per item. Taking an order takes the stock in one locked step (two people cannot both take the last one); a payment that does not
+  complete cancels the order and puts the stock back (the existing 30-minute sweep and SumUp's notification do this); a payment that arrives after
+  that takes the stock back if it is still there, otherwise the payment is put in Needs Attention with a plain note.
+- **Money:** exactly the existing card payment. Each order's payment is a normal row in `payments` (refunds, the SumUp check, the books check, Needs
+  Attention all work). Each collection weekend has one hidden campaign (`form_def.shop`) to hold those payments; it is never listed as a campaign, a form
+  or a parish-page choice. Its "keep until" is a month after the weekend, so the nightly retention job clears names and contacts as for any campaign.
+  Names and contacts are kept on the payment only, never on the order tables.
+- **Office:** Admin → Repository (Superadmin, Admin, Finance, Priest). *Orders* by weekend and Mass: reference, name, items, paid or not; tick Prepared and
+  Collected (and undo); cancel with a reason and, if refunded in SumUp, record the refund on the payment; print the list for the volunteer (all the items to
+  get out, then each Mass with tick boxes). *Items*: import, add, change, remove, switch on/off, stock. *Mass times & cut-off*, welcome line, open/closed.
+- **Database:** migration `20261109010000_repository_shop.sql` (five tables, three functions, explicit grants; applied to the live database and the
+  functions tested there inside a rolled-back transaction). Appended to the baseline as section 9.
+- Tests: `test/gateway/shop.test.js` (42 server tests), `test/gateway/ui-shop.js` (browser checks of the shop, the order page and the office screens).
+- **Not built (by decision or for later):** item photos; a separate login for the repository volunteer (the office prints the list instead); a phone alert
+  to the volunteer; refunds sent to SumUp from our screen (recorded only, as for tickets); holiday weekends closed in advance.
