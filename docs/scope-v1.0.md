@@ -1430,3 +1430,26 @@ suggested form accepts only a suggested amount, or an Other inside the limits). 
 A person is registered once they have paid; if they do not finish, the place goes back by itself (unchanged). Refunds are still recorded
 by hand as before. Once people have registered, the payment setting cannot be changed.
 Tests: 9 more server tests (38 in `registrations.test.js`) and browser checks in `ui-registrations.js`.
+
+## 60. Parish page: WhatsApp channel and "Today in the Church" — 2026-11-09 (on dev; preview only)
+
+Two additions to the public page `/go/<address>`, both switched by the parish itself (Admin → Parish page) and both additive.
+Migration `20261109000000_gateway_whatsapp_daily.sql` (two new columns on organizations: `gateway_whatsapp`, `gateway_daily`; applied to the
+live database, baseline re-verified).
+
+- **WhatsApp channel.** A "Join our WhatsApp channel" bar at the very top of the page. The admin pastes the channel link; only a real
+  `https://whatsapp.com/channel/<code>` address is accepted (anything else is refused with a plain explanation) and tracking parts are removed.
+  Empty = no bar. The page draws the bar only for such an address.
+- **Today in the Church.** A card under it, new every day with nothing to maintain: today's date, the name of the celebration (feast, memorial,
+  solemnity, Sunday or the weekday) with its season and liturgical colour, and two buttons. "Today's readings" opens the day's Mass readings on
+  **Universalis** (as read at Mass in England and Wales, Westminster diocese). "About today" opens **Vatican News'** Saint of the Day for the date.
+  The readings text is copyrighted, so it is linked, never copied.
+- **Where the day's name comes from:** the open General Roman Calendar data at calapi.inadiutorium.cz (plain http, a community service),
+  asked once per date and kept for 12 hours; a failure is remembered for 2 minutes. If it is down, the card still shows the two links, without
+  the name; the page never fails because of it.
+- **Known limit:** that data is the *General* Roman Calendar, not the England and Wales calendar, so a day that is special only in England and
+  Wales (for example a national patron) shows the general day's name. The Universalis page the button opens shows the England and Wales one.
+  A later improvement is an England and Wales overlay, checked against the bishops' calendar.
+- The card is shown only for the date it was made for (the parish's own time zone), so a page saved on a phone never shows yesterday's feast.
+- "Notification" here means the card on the page each day. A phone push notification ("remind me daily") was offered and not chosen.
+Tests: `test/gateway/daily.test.js` (18 tests; the calendar is replaced by a stand-in, the network is off in tests).

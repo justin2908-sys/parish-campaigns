@@ -141,8 +141,8 @@ test('Tenant isolation', async (t) => {
     const r = await pub('svp-osterley');
     assert.equal(r.status, 200);
     for (const s of ['org-A', 'org_id', 'Secret Child', 'Secret Teen', 'Cancelled Person', 'secret.parent', 'waiter@example.org', 'Sold To Someone', '07700900123', 'uA-sa', 'payer', 'password']) assert.ok(!r.raw.includes(s), 'public response contains ' + s);
-    assert.deepEqual(Object.keys(r.body).sort(), ['announcement', 'links', 'org', 'sections']);
-    assert.deepEqual(Object.keys(r.body.org).sort(), ['address', 'contact_email', 'hours', 'name', 'phone', 'timezone']);
+    assert.deepEqual(Object.keys(r.body).sort(), ['announcement', 'daily', 'links', 'org', 'sections']);
+    assert.deepEqual(Object.keys(r.body.org).sort(), ['address', 'contact_email', 'hours', 'name', 'phone', 'timezone', 'whatsapp']);
     const raffle = r.body.sections.involved.find(i => i.name === 'Autumn Raffle');
     assert.equal(raffle.places_left, null); assert.equal(raffle.places_total, null); assert.equal(raffle.full, false); assert.equal(raffle.waiting_list, false);
     for (const item of [...r.body.sections.involved, ...r.body.sections.registration]) assert.deepEqual(Object.keys(item).sort(), ['closes_on', 'cta', 'full', 'href', 'id', 'name', 'opens_on', 'places_left', 'places_total', 'source', 'waiting_list']);
@@ -209,7 +209,7 @@ test('What is listed, and when', async (t) => {
   await t.test('organisation details come from the organisation record', async () => {
     reset();
     const r = await pub('svp-osterley');
-    assert.deepEqual(r.body.org, { name: 'St.Vincent De Paul Church, Osterley', address: '2 Witham Road, Osterley', contact_email: 'osterley@rcdow.org', timezone: 'Europe/London', phone: '020 8560 0000', hours: 'Tue to Fri, 10am to 1pm' });
+    assert.deepEqual(r.body.org, { name: 'St.Vincent De Paul Church, Osterley', address: '2 Witham Road, Osterley', contact_email: 'osterley@rcdow.org', timezone: 'Europe/London', phone: '020 8560 0000', hours: 'Tue to Fri, 10am to 1pm', whatsapp: null });
     await call('gateway_set_address', { display_name: "St Vincent's, Osterley" }, { session: S.saA });
     assert.equal((await pub('svp-osterley')).body.org.name, "St Vincent's, Osterley");
   });

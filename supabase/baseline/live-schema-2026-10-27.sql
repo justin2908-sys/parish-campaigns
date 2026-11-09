@@ -120,7 +120,9 @@ create table public.organizations (
   timezone text not null default 'Europe/London'::text,
   display_name text,
   gateway_phone text,
-  gateway_hours text
+  gateway_hours text,
+  gateway_whatsapp text,
+  gateway_daily boolean not null default true
 );
 
 create table public.payments (
@@ -328,6 +330,8 @@ alter table organizations add constraint organizations_display_name_check CHECK 
 alter table organizations add constraint organizations_gateway_hours_check CHECK (((gateway_hours IS NULL) OR (char_length(gateway_hours) <= 120)));
 
 alter table organizations add constraint organizations_gateway_phone_check CHECK (((gateway_phone IS NULL) OR (char_length(gateway_phone) <= 40)));
+
+alter table organizations add constraint organizations_gateway_whatsapp_check CHECK (((gateway_whatsapp IS NULL) OR (char_length(gateway_whatsapp) <= 200)));
 
 alter table organizations add constraint organizations_pkey PRIMARY KEY (id);
 

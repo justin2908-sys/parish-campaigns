@@ -3433,25 +3433,74 @@ async function gwOrders(orgId) {
   return out;
 }
 
+// ---- "Today in the Church": the day's feast or celebration, and where to read the Mass readings.
+// The name of the day comes from the open General Roman Calendar data (calapi.inadiutorium.cz, which serves plain http only).
+// The readings text is copyrighted, so it is never copied: the page links to Universalis, which publishes the readings as they are read
+// at Mass in England and Wales. "About today" goes to Vatican News' Saint of the Day for that date. If the calendar service is
+// unreachable the page still shows the two links, just without the name of the day; it never fails because of it.
+const GW_LITURGY_URL = 'http://calapi.inadiutorium.cz/api/v0/en/calendars/general-en/';
+const GW_READINGS_BASE = 'https://universalis.com/europe.england.westminster/';
+const GW_SAINTS_BASE = 'https://www.vaticannews.va/en/saints/';
+const GW_COLOURS = ['white', 'red', 'green', 'violet', 'rose', 'black'];
+const GW_SEASONS = { ordinary: 'Ordinary Time', advent: 'Advent', christmas: 'Christmas', lent: 'Lent', easter: 'Easter' };
+const GW_RANKS = { solemnity: 'Solemnity', feast: 'Feast', memorial: 'Memorial', 'optional memorial': 'Optional memorial', sunday: 'Sunday' };
+const gwLiturgyCache = new Map();   // 'YYYY-MM-DD' -> { at, value }; a good answer is kept for hours, a failure only for two minutes
+async function gwLiturgicalDay(date, fetchImpl) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const hit = gwLiturgyCache.get(date), nowMs = Date.now();
+  if (hit && nowMs - hit.at < (hit.value ? 12 * 3600e3 : 120e3)) return hit.value;
+  let value = null;
+  try {
+    const [y, m, d] = date.split('-').map(Number);
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 4000);
+    let r; try { r = await (fetchImpl || fetch)(`${GW_LITURGY_URL}${y}/${m}/${d}`, { signal: ctl.signal, headers: { Accept: 'application/json' } }); } finally { clearTimeout(timer); }
+    if (r && r.ok) {
+      const j = await r.json(), c = Array.isArray(j.celebrations) ? j.celebrations[0] : null;
+      if (j.date === date && c && typeof c.title === 'string' && c.title.trim() && c.title.length <= 160) {
+        const rank = String(c.rank || '').toLowerCase();
+        value = {
+          title: c.title.trim(),
+          rank: GW_RANKS[rank] || '',
+          season: GW_SEASONS[String(j.season || '').toLowerCase()] || '',
+          colour: GW_COLOURS.includes(String(c.colour || '').toLowerCase()) ? String(c.colour).toLowerCase() : null,
+        };
+      }
+    }
+  } catch { value = null; }
+  if (gwLiturgyCache.size > 30) gwLiturgyCache.delete(gwLiturgyCache.keys().next().value);
+  gwLiturgyCache.set(date, { at: nowMs, value });
+  return value;
+}
+async function gwDaily(org, today) {
+  if (org.gateway_daily === false) return null;
+  const celebration = await gwLiturgicalDay(today);
+  return {
+    date: today, celebration,
+    readings_url: `${GW_READINGS_BASE}${today.replace(/-/g, '')}/mass.htm`,
+    about_url: `${GW_SAINTS_BASE}${today.slice(5, 7)}/${today.slice(8, 10)}.html`,
+  };
+}
+
 // ---- the public page's data
 const GATEWAY_PUBLIC_MAX = 240, GATEWAY_PUBLIC_WINDOW_SECONDS = 300;
 async function publicGateway({ slug }) {
   const s = String(slug == null ? '' : slug).trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
   const [org, hits] = await Promise.all([
-    supabase.from('organizations').select('id, name, display_name, address, contact_email, timezone, gateway_enabled, gateway_phone, gateway_hours').eq('slug', s).maybeSingle().then(r => r.data),
+    supabase.from('organizations').select('id, name, display_name, address, contact_email, timezone, gateway_enabled, gateway_phone, gateway_hours, gateway_whatsapp, gateway_daily').eq('slug', s).maybeSingle().then(r => r.data),
     clientIp ? rateHit(`gw:${clientIp}`, GATEWAY_PUBLIC_WINDOW_SECONDS) : 0,
   ]);
   if (hits > GATEWAY_PUBLIC_MAX) throw httpError(429, 'Too many requests from your connection — please wait a few minutes and try again.');
   if (!org || !org.gateway_enabled) throw httpError(404, 'This page is not available.');
   const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London';
   const now = new Date(), today = gwToday(tz, now);
-  const [linksRes, annsRes, campsRes, itemsRes, orders] = await Promise.all([
+  const [linksRes, annsRes, campsRes, itemsRes, orders, daily] = await Promise.all([
     supabase.from('gateway_links').select('position, label, sub, url').eq('org_id', org.id).order('position'),
     supabase.from('gateway_announcements').select('message, link_url, urgent, starts_at, ends_at, created_at').eq('org_id', org.id).lte('starts_at', now.toISOString()).order('created_at', { ascending: false }).limit(50),
     supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, places, waiting_list, gateway_cta').eq('org_id', org.id).eq('listed_on_gateway', true).eq('binned', false),
     supabase.from('gateway_items').select('id, section, label, url, cta, starts_on, ends_on').eq('org_id', org.id).eq('listed', true),
     gwOrders(org.id),
+    gwDaily(org, today),
   ]);
   const wording = GATEWAY_WORDING[GATEWAY_VERTICAL];
   const live = (annsRes.data || []).find(a => !a.ends_at || new Date(a.ends_at) > now);   // newest one that has started and not ended
@@ -3480,7 +3529,8 @@ async function publicGateway({ slug }) {
   const sections = {};
   for (const sec of GATEWAY_SECTIONS) sections[sec] = gwSort([...campaigns, ...manual].filter(x => x.section === sec).map(x => x.item), orders[sec]);
   return {
-    org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null },
+    org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null, whatsapp: org.gateway_whatsapp || null },
+    daily,
     links: (linksRes.data || []).map(l => ({ label: l.label, sub: l.sub || '', url: l.url })),
     announcement: live ? { message: live.message, link_url: live.link_url || null, urgent: !!live.urgent, ends_at: live.ends_at || null } : null,
     sections,
@@ -3490,7 +3540,7 @@ async function publicGateway({ slug }) {
 // ---- the admin screen
 async function gwOrg(session) {
   requireOrgRole(session, GATEWAY_ROLES);
-  const { data: org } = await supabase.from('organizations').select('id, name, slug, gateway_enabled, timezone, display_name, gateway_phone, gateway_hours').eq('id', session.org_id).maybeSingle();
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, gateway_enabled, timezone, display_name, gateway_phone, gateway_hours, gateway_whatsapp, gateway_daily').eq('id', session.org_id).maybeSingle();
   if (!org) throw httpError(404, 'Organisation not found');
   if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
   return org;
@@ -3527,7 +3577,7 @@ async function gatewayGet(session) {
   const link = (n) => { const l = (linksRes.data || []).find(x => x.position === n); return { position: n, label: l ? l.label : '', sub: l ? l.sub : '', url: l ? l.url : '' }; };
   return {
     can_manage: session.role === 'superadmin',
-    org: { name: org.name, slug: org.slug || '', enabled: !!org.gateway_enabled, timezone: tz, display_name: org.display_name || '', phone: org.gateway_phone || '', hours: org.gateway_hours || '', page_path: org.slug ? `/go/${org.slug}` : null },
+    org: { name: org.name, slug: org.slug || '', enabled: !!org.gateway_enabled, timezone: tz, display_name: org.display_name || '', phone: org.gateway_phone || '', hours: org.gateway_hours || '', whatsapp: org.gateway_whatsapp || '', daily: org.gateway_daily !== false, page_path: org.slug ? `/go/${org.slug}` : null },
     links: [link(1), link(2), link(3)],
     announcement: current ? { message: current.message, link_url: current.link_url || '', urgent: !!current.urgent, starts_at: gwIsoToLocal(current.starts_at, tz), ends_at: gwIsoToLocal(current.ends_at, tz), state: gwAnnouncementState(current, now) } : null,
     sections, today, now_local: gwIsoToLocal(now.toISOString(), tz),
@@ -3672,9 +3722,21 @@ async function campaignSetListed(session, { campaign_id, listed, cta }) {
 }
 
 // ----- the organisation's own details on the page
-async function gatewaySetDetails(session, { phone, hours }) {
+// The WhatsApp channel link: only a real channel address (https://whatsapp.com/channel/<code>) is accepted, so nothing else can be put on the button.
+function gwWhatsapp(v) {
+  const s = gwUrl(v, 'The WhatsApp channel link');
+  if (!s) return null;
+  const u = new URL(s);
+  if (!/^(www\.)?whatsapp\.com$/i.test(u.hostname) || !/^\/channel\/[A-Za-z0-9_-]{8,64}\/?$/.test(u.pathname)) {
+    throw httpError(400, 'Paste the channel link from WhatsApp. It looks like https://whatsapp.com/channel/… (open your channel, tap its name, then “Share” or “Copy link”).');
+  }
+  return `https://whatsapp.com${u.pathname.replace(/\/$/, '')}`;   // no query or tracking parts
+}
+async function gatewaySetDetails(session, { phone, hours, whatsapp, daily }) {
   const org = await gwOrg(session);
   const patch = { gateway_phone: gwText(phone, 40, 'The phone number') || null, gateway_hours: gwText(hours, 120, 'The office hours') || null };
+  if (whatsapp !== undefined) patch.gateway_whatsapp = gwWhatsapp(whatsapp);   // left out = unchanged (an older screen never wipes it)
+  if (daily !== undefined) patch.gateway_daily = !!daily;
   const { error } = await supabase.from('organizations').update(patch).eq('id', org.id);
   if (error) throw httpError(400, error.message);
   return { ok: true };

@@ -3291,7 +3291,7 @@ function gwDraftFrom(d) {
   return {
     links: d.links.map(l => ({ position: l.position, label: l.label, sub: l.sub, url: l.url })),
     ann: a ? { message: a.message, link_url: a.link_url, urgent: a.urgent, starts_at: a.starts_at, ends_at: a.ends_at } : { message: '', link_url: '', urgent: false, starts_at: '', ends_at: '' },
-    details: { phone: d.org.phone, hours: d.org.hours },
+    details: { phone: d.org.phone, hours: d.org.hours, whatsapp: d.org.whatsapp || '', daily: d.org.daily !== false },
     address: { slug: d.org.slug, display_name: d.org.display_name },
   };
 }
@@ -3335,6 +3335,12 @@ function gwHeadHtml() {
       <div id="gwSlugWarn"></div>
       <div class="gw-btns"><button class="primary" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwSaveAddress()">Save address and name</button></div>`
       : `<p class="muted" style="margin:10px 0 0">Only the SuperAdmin can change the address or switch the page on or off.</p>`}
+    <h4 style="margin:18px 0 0;font-size:16px">WhatsApp channel</h4>
+    <p class="muted" style="margin:2px 0 0">Paste your parish's WhatsApp channel link and a “Join our WhatsApp channel” button appears at the top of the page. Leave it empty for no button. In WhatsApp, open your channel, tap its name, then tap “Share” or “Copy link”.</p>
+    <label for="gwWhatsapp">Channel link</label><input id="gwWhatsapp" value="${esc(draft.details.whatsapp)}" maxlength="200" autocomplete="off" autocapitalize="off" inputmode="url" placeholder="https://whatsapp.com/channel/…" oninput="gw.draft.details.whatsapp=this.value">
+    <h4 style="margin:18px 0 0;font-size:16px">Today in the Church</h4>
+    <div class="gw-switchrow" style="margin-top:6px"><div><b>Show today's feast and Mass readings</b><div class="muted">A card near the top of the page, new every day. It names the day or saint being celebrated and links to the readings (Universalis, England and Wales) and to more about the day (Vatican News). You do nothing each day.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${draft.details.daily ? 'checked' : ''} aria-label="Show today's feast and Mass readings" onchange="gw.draft.details.daily=this.checked"><span></span></label></div>
+    <div class="gw-btns"><button class="small" onclick="gwSaveDetails()">Save WhatsApp and daily card</button></div>
     <h4 style="margin:18px 0 0;font-size:16px">Parish office details</h4>
     <p class="muted" style="margin:2px 0 0">The address and email on the page come from Church details. These two are shown under “Parish office”.</p>
     <label for="gwPhone">Phone</label><input id="gwPhone" value="${esc(draft.details.phone)}" maxlength="40" autocomplete="off" inputmode="tel" oninput="gw.draft.details.phone=this.value">
@@ -3372,7 +3378,7 @@ async function gwSaveAddress() {
   }
 }
 async function gwSaveDetails() {
-  try { await call('gateway_set_details', gw.draft.details); toast('✓ Office details saved'); await gwReload(['details']); } catch (e) { toast(e.message, 'error'); }
+  try { await call('gateway_set_details', gw.draft.details); toast('✓ Saved'); await gwReload(['details']); } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---- the three permanent links

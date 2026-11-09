@@ -12,13 +12,20 @@ const BROWSERS = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const BROWSER = BROWSERS.find(p => fs.existsSync(p));
 if (!BROWSER) { console.log('No Edge or Chrome found: skipping the browser checks.'); process.exit(0); }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// the liturgical calendar is replaced by a stand-in (this machine's own server still works as normal)
+const localFetch = global.fetch;
+global.fetch = async (url, o) => {
+  const m = /general-en\/(\d+)\/(\d+)\/(\d+)$/.exec(String(url));
+  if (m) return { ok: true, json: async () => ({ date: `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`, season: 'ordinary', celebrations: [{ title: 'Saint Leo the Great, pope and doctor', colour: 'white', rank: 'memorial' }] }) };
+  return localFetch(url, o);
+};
 
 // ---------- demo data around today's real date
 clock.live();
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
 const day = (n) => { const x = new Date(today + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const T = db.T;
-T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', display_name: null, address: '2 Witham Road, Osterley, TW7 4AJ', contact_email: 'osterley@rcdow.org', gateway_phone: '020 8560 0000', gateway_hours: 'Tue to Fri, 10:00 am to 1:00 pm' });
+T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', display_name: null, address: '2 Witham Road, Osterley, TW7 4AJ', contact_email: 'osterley@rcdow.org', gateway_phone: '020 8560 0000', gateway_hours: 'Tue to Fri, 10:00 am to 1:00 pm', gateway_whatsapp: 'https://whatsapp.com/channel/0029VaAbCdEf12345' });
 T('organizations').push({ id: 'org-B', name: 'Other Parish', slug: 'other-parish', gateway_enabled: false, timezone: 'Europe/London' });
 const sessions = { sa: addUser('uA-sa', 'superadmin', 'org-A', Date.now() + 6 * 36e5), ad: addUser('uA-ad', 'admin', 'org-A', Date.now() + 6 * 36e5), pr: addUser('uA-pr', 'priest', 'org-A', Date.now() + 6 * 36e5) };
 for (const [id, role, mobile] of [['uA-sa', 'superadmin', '07000000001'], ['uA-ad', 'admin', '07000000002'], ['uA-pr', 'priest', '07000000003']]) Object.assign(T('users').find(u => u.id === id), { mobile, name: role });
@@ -139,6 +146,25 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   check('"See all" reveals the rest in place, and the button then says "Show fewer"', after.n === 4 && after.btn === 'Show fewer', JSON.stringify(after));
   await shot('public-390-light-seeall', true);
 
+  // ---- WhatsApp channel bar and "Today in the Church" card, above the three big buttons
+  const wt = await ev(`(() => { const wa = document.querySelector('a.wa'), td = document.querySelector('section.today'), door = document.querySelector('.door'); const before = (a, b) => !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+    return { waHref: wa && wa.getAttribute('href'), waText: wa && wa.textContent, waNew: wa && wa.target === '_blank' && /noopener/.test(wa.rel), order: before(wa, td) && before(td, door),
+      head: td && td.querySelector('h2').textContent, sub: td && td.querySelector('.sub').textContent, k: td && td.querySelector('.k').textContent, cls: td && td.className,
+      btns: td ? [...td.querySelectorAll('.acts a')].map(a => a.textContent + '>' + a.getAttribute('href')) : [] }; })()`);
+  const tdy = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }), tdn = tdy.replace(/-/g, ''), [, tm, tdd] = tdy.split('-');
+  check('the WhatsApp bar is at the top, opens the channel in a new tab, and says what it is', wt.waHref === 'https://whatsapp.com/channel/0029VaAbCdEf12345' && /Join our WhatsApp channel/.test(wt.waText) && wt.waNew, JSON.stringify([wt.waHref, wt.waText]));
+  check('the WhatsApp bar, then the Today card, then the three big buttons', wt.order);
+  check('the Today card names the day, its rank, season and colour', wt.head === 'Saint Leo the Great, pope and doctor' && wt.sub === 'Memorial · Ordinary Time' && /^TODAY · /i.test(wt.k) && /c-white/.test(wt.cls), JSON.stringify([wt.head, wt.sub, wt.k, wt.cls]));
+  check('…with a readings button (Universalis) and an "About today" button (Vatican News)', wt.btns.length === 2 && wt.btns[0] === `Today’s readings>https://universalis.com/europe.england.westminster/${tdn}/mass.htm` && wt.btns[1] === `About today>https://www.vaticannews.va/en/saints/${tm}/${tdd}.html`, wt.btns.join(' | '));
+  await shot('public-390-light-top', false);
+  // switched off in the parish's settings: no bar and no card
+  T('organizations').find(o => o.id === 'org-A').gateway_whatsapp = null; T('organizations').find(o => o.id === 'org-A').gateway_daily = false;
+  await open(page, "document.querySelector('.door')");
+  check('with no WhatsApp link and the card switched off, neither appears', await ev(`!document.querySelector('a.wa') && !document.querySelector('section.today')`));
+  T('organizations').find(o => o.id === 'org-A').gateway_whatsapp = 'https://whatsapp.com/channel/0029VaAbCdEf12345'; T('organizations').find(o => o.id === 'org-A').gateway_daily = true;
+  await open(page, "document.querySelector('.door')");
+  await view(390, 844, true); await open(page, "document.querySelector('section.today')"); await shot('public-390-dark-top', false); await view(390, 844, false);
+
   // ---- notices: a normal one opens a panel; an urgent one puts its message in the bar
   await ev(`document.getElementById('notices').click()`);
   check('the notices bar opens a panel with the full message and link', await ev(`!document.getElementById('sheet').hidden && document.querySelector('#sheetBody .note p').textContent.includes('office is closed') && !!document.querySelector('#sheetBody a.more')`));
@@ -191,6 +217,19 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   const am = await ev(MEASURE_ADMIN);
   check('admin tab: no sideways scroll at 390px, tap targets 44px or larger', !am.hscroll && am.smallTargets.length === 0, am.smallTargets.slice(0, 5).join(' | ') + ' scrollWidth ' + am.scrollWidth);
   await shot('admin-390-light-admin', true);
+  // WhatsApp channel and the daily card
+  const daySwitch = `.gw-switchrow input[aria-label="Show today's feast and Mass readings"]`;
+  check('the tab shows the WhatsApp box (with the current link) and the daily-card switch', await ev(`document.getElementById('gwWhatsapp').value === 'https://whatsapp.com/channel/0029VaAbCdEf12345' && !!document.querySelector(${JSON.stringify(daySwitch)})`));
+  await typeInto('gwWhatsapp', 'https://evil.example/channel/0029VaAbCdEf12345');
+  await click('button', 'Save WhatsApp and daily card'); await waitFor(`document.getElementById('toast').textContent.length > 0`); await sleep(400);
+  check('a link that is not a WhatsApp channel is refused in plain words, and the last good one stays', /Paste the channel link/.test(await toastText()) && T('organizations').find(o => o.id === 'org-A').gateway_whatsapp === 'https://whatsapp.com/channel/0029VaAbCdEf12345', await toastText());
+  await typeInto('gwWhatsapp', 'https://whatsapp.com/channel/0029VbNewChannel9999');
+  await ev(`(() => { const b = document.querySelector(${JSON.stringify(daySwitch)}); b.checked = false; b.dispatchEvent(new Event('change', { bubbles: true })); return 'ok'; })()`);
+  await click('button', 'Save WhatsApp and daily card'); await waitFor(`document.getElementById('toast').textContent === '✓ Saved'`);
+  check('a good channel link and the switch are saved, with "✓ Saved"', (await toastText()) === '✓ Saved' && T('organizations').find(o => o.id === 'org-A').gateway_whatsapp === 'https://whatsapp.com/channel/0029VbNewChannel9999' && T('organizations').find(o => o.id === 'org-A').gateway_daily === false);
+  await typeInto('gwWhatsapp', 'https://whatsapp.com/channel/0029VaAbCdEf12345');
+  await ev(`(() => { const b = document.querySelector(${JSON.stringify(daySwitch)}); b.checked = true; b.dispatchEvent(new Event('change', { bubbles: true })); return 'ok'; })()`);
+  await click('button', 'Save WhatsApp and daily card'); await waitFor(`document.getElementById('toast').textContent === '✓ Saved'`);
   // links
   await typeInto('gwU0', 'javascript:alert(1)');
   check('a bad link address is flagged as you type', await ev(`document.getElementById('gwLm0').classList.contains('err') && document.getElementById('gwU0').classList.contains('gw-bad')`));

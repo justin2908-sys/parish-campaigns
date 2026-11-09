@@ -24,12 +24,12 @@ allp as (select * from tables union all select * from cons1 union all select * f
 select ord, count(*) pieces, md5(string_agg(ddl, E'\n\n' order by n)) hash from allp group by ord order by ord;
 ```
 
-Hashes on 2026-11-06, after migration 20261106000000_registration_party_size (18 tables, 55 keys/checks, 38 links, 21 indexes, 18 row-security switches, 13 functions, 18 permission lines). On 2026-10-27 the file was first verified (sections 1, 2 and 6 were then 9010c5c8…, 9c3ed6ba…, 331e48c2…; the other four are unchanged):
+Hashes on 2026-11-09, after migration 20261109000000_gateway_whatsapp_daily (18 tables, 56 keys/checks, 38 links, 21 indexes, 18 row-security switches, 13 functions, 18 permission lines). On 2026-10-27 the file was first verified (sections 1, 2 and 6 were then 9010c5c8…, 9c3ed6ba…, 331e48c2…; the other four are unchanged):
 
 | Section | Hash |
 |---|---|
-| 1 tables | 5d844043d4de2be81e616f26207a9386 |
-| 2 keys, unique rules, checks | 3bc7ab2eb758dbdcb659a883fdf45274 |
+| 1 tables | 4d1a12c20fd7e131e10c450f02aa3ebd |
+| 2 keys, unique rules, checks | b184ab3c1244cc834494486caa640d8d |
 | 3 links between tables | c3fb2a2f1904bd849bdaa1616c3f0f01 |
 | 4 indexes | dc2c58e79e4698245f8618ae73702a3f |
 | 5 row level security | ada629ffd53b81268199e91b15a158e8 |
