@@ -141,7 +141,7 @@ test('Tenant isolation', async (t) => {
     const r = await pub('svp-osterley');
     assert.equal(r.status, 200);
     for (const s of ['org-A', 'org_id', 'Secret Child', 'Secret Teen', 'Cancelled Person', 'secret.parent', 'waiter@example.org', 'Sold To Someone', '07700900123', 'uA-sa', 'payer', 'password']) assert.ok(!r.raw.includes(s), 'public response contains ' + s);
-    assert.deepEqual(Object.keys(r.body).sort(), ['announcement', 'daily', 'links', 'listings', 'org', 'sections', 'shop']);
+    assert.deepEqual(Object.keys(r.body).sort(), ['announcement', 'candles', 'daily', 'links', 'listings', 'org', 'sections', 'shop']);
     assert.deepEqual(Object.keys(r.body.org).sort(), ['address', 'contact_email', 'hours', 'name', 'phone', 'timezone', 'whatsapp']);
     const raffle = r.body.sections.involved.find(i => i.name === 'Autumn Raffle');
     assert.equal(raffle.places_left, null); assert.equal(raffle.places_total, null); assert.equal(raffle.full, false); assert.equal(raffle.waiting_list, false);

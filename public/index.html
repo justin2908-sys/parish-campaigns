@@ -1207,12 +1207,12 @@ function shareMenuHtml(a) {
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
 // Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
-const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', listings: 'Listings', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', listings: 'Listings', candles: 'Candles', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
 const ADMIN_TABS_BY_ROLE = {
-  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'users', 'bin', 'privacy'],
-  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage', 'repository', 'listings'],
-  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings'],
-  priest: ['registrations', 'parishpage', 'repository', 'listings'],
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage', 'repository', 'listings', 'candles'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles'],
+  priest: ['registrations', 'parishpage', 'repository', 'listings', 'candles'],
 };
 async function renderAdmin() {
   const tabs = ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin;
@@ -1241,7 +1241,7 @@ function dispatchAdminTab() {
   document.querySelectorAll('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === adminTab));
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, listings: renderListingsTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, listings: renderListingsTab, candles: renderCandlesTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -4174,6 +4174,183 @@ function lstSettingsHtml() {
 }
 async function lstSaveSettings() {
   try { await call('listings_set_settings', { intro_text: lst.draft.intro_text, price_base: lst.draft.price_base, price_per_extra_week: lst.draft.price_per_extra_week, price_per_image: lst.draft.price_per_image }); toast('✓ Saved'); await lstReload(['intro_text', 'price_base', 'price_per_extra_week', 'price_per_image']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+</script>
+<script>
+// ================= CANDLES (Light a Candle) + the Thursday email — Admin tab =================
+// Requests by day and candle stand (tick each candle once it is lit; cancel with a reason and a refund note), the settings (open/closed, the candle
+// stands, welcome line, closing time) and the Thursday email to the parish address. Every button says what it did, in words, where the person is looking.
+let cnd = null;
+const cndMoney = (n) => '£' + (Math.round(Number(n) * 100) / 100).toFixed(2);
+async function renderCandlesTab() {
+  const seq = adminSeq;
+  let d;
+  try { d = await call('candles_get'); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
+  gwStyle(); repoStyle();
+  cnd = { d, view: 'requests', monday: d.next_monday, week: null, cancelId: null, preview: null, busy: false, draft: cndDraftFrom(d) };
+  try { cnd.week = await call('candles_week', { monday: cnd.monday }); } catch (e) { toast(e.message, 'error'); }
+  if (adminSeq === seq) cndPaint();
+}
+function cndDraftFrom(d) { return { intro_text: d.settings.intro_text || '', cutoff_weekday: d.settings.cutoff_weekday, cutoff_time: d.settings.cutoff_time, altars: d.settings.altars.map(a => ({ id: a.id, name: a.name, active: a.active !== false })), to_email: d.digest.to_email || '' }; }
+async function cndReload(parts) {
+  cnd.d = await call('candles_get');
+  const fresh = cndDraftFrom(cnd.d);
+  for (const p of parts || []) cnd.draft[p] = fresh[p];
+  cnd.week = await call('candles_week', { monday: cnd.monday });
+  cndPaint();
+}
+function cndPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'candles' || !cnd) return;
+  const y = window.scrollY;
+  el.innerHTML = cndHeadHtml() + (cnd.view === 'requests' ? cndRequestsHtml() : cnd.view === 'settings' ? cndSettingsHtml() : cndEmailHtml());
+  window.scrollTo(0, y);
+}
+function cndHeadHtml() {
+  const { d } = cnd, o = d.org, s = d.settings, url = o.page_path ? location.origin + o.page_path : '';
+  const pill = (v, label) => `<button type="button" aria-pressed="${cnd.view === v}" onclick="cnd.view='${v}'; cnd.cancelId=null; cndPaint()">${label}</button>`;
+  return `<div class="card"><h3 style="margin-top:0">Light a Candle ${s.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}</h3>
+    <p class="gw-lede">Parishioners choose a candle stand, a day (the coming week, Monday to Sunday) and a number of candles, and give an offering by card. A volunteer lights them; you tick each one as it is lit. Any “who is it for” note is seen here only and is never put in an email.</p>
+    ${o.page_path ? `<div class="gw-addr"><code>${esc(url)}</code><button class="small" style="min-height:44px" onclick="cndCopyLink()">Copy link</button><button class="small" style="min-height:44px" onclick="cndSeePage()">See the page</button></div>` : '<div class="hint">The parish page has no address yet, so Light a Candle cannot be opened. The SuperAdmin gives it one in Parish page.</div>'}
+    <div class="gw-switchrow" style="margin-top:8px"><div><b>Open for candle requests</b><div class="muted">Switch off to hide the page and stop new requests. A candle shortcut appears on the parish page while it is open.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${s.enabled ? 'checked' : ''} aria-label="Open for candle requests" onchange="cndSetEnabled(this)"><span></span></label></div>
+    <div class="rp-pills" role="group" aria-label="Candles sections">${pill('requests', 'Requests')}${pill('settings', 'Settings')}${pill('email', 'Thursday email')}</div></div>`;
+}
+function cndCopyLink() { const url = location.origin + cnd.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
+function cndSeePage() { if (!cnd.d.settings.enabled) toast('Light a Candle is closed, so visitors would see “not open”.', 'error'); window.open(cnd.d.org.page_path, '_blank', 'noopener'); }
+async function cndSetEnabled(box) {
+  const want = box.checked;
+  try { await call('candles_set_settings', { enabled: want }); toast(want ? '✓ Light a Candle is now open' : '✓ Light a Candle is now closed'); await cndReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+// ---- requests
+function cndWeekChips() {
+  const d = cnd.d, add = (iso, n) => { const t = new Date(iso + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  const list = [[add(d.this_monday, -7), 'Last week'], [d.this_monday, 'This week'], [d.next_monday === d.this_monday ? add(d.this_monday, 7) : d.next_monday, 'Next week'], [add(d.next_monday, 7), 'The week after']];
+  return `<div class="rp-pills" role="group" aria-label="Week">${list.map(([m, label]) => `<button type="button" aria-pressed="${cnd.monday === m}" onclick="cndGoWeek('${m}')">${label}</button>`).join('')}</div>`;
+}
+async function cndGoWeek(m) {
+  cnd.monday = m; cnd.cancelId = null;
+  try { cnd.week = await call('candles_week', { monday: m }); cndPaint(); toast('✓ Showing ' + cnd.week.label.replace(/^Week of/, 'the week of')); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function cndRequestsHtml() {
+  const w = cnd.week;
+  if (!w) return '<div class="card"><p class="muted" style="margin:0">Could not load the week. Press a week button to try again.</p></div>' ;
+  const live = w.requests.filter(r => r.status === 'paid' || r.status === 'lit'), other = w.requests.filter(r => r.status === 'cancelled' || r.status === 'awaiting_payment');
+  const days = new Map();
+  for (const r of live) { if (!days.has(r.date)) days.set(r.date, new Map()); const a = days.get(r.date); if (!a.has(r.altar)) a.set(r.altar, []); a.get(r.altar).push(r); }
+  const t = w.totals;
+  const row = (r) => `<div class="rp-order" style="margin:0 0 8px"><div class="rp-top"><b class="rp-name">${r.candles} × ${esc(r.name || '(details cleared)')}</b><span class="gw-status ${r.status === 'lit' ? 'live' : ''}">${r.status === 'lit' ? '✓ Lit' : 'To light'}</span></div>
+      <div class="muted">${esc(r.ref)} · offering ${cndMoney(r.total)}${r.contact ? ' · ' + esc(r.contact) : ''}${r.refunded ? ' · refunded ' + cndMoney(r.refunded) : ''}</div>
+      ${r.intention ? `<div class="rp-lines">For: ${esc(r.intention)} <span class="muted">(private to the office)</span></div>` : ''}
+      <div class="rp-act"><button class="small ${r.status === 'lit' ? '' : 'primary-ish'}" ${r.status === 'lit' ? '' : 'style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)"'} aria-pressed="${r.status === 'lit'}" onclick="cndMark('${r.id}', ${r.status !== 'lit'})">${r.status === 'lit' ? 'Undo: not lit yet' : '✓ Lit'}</button><button class="small" onclick="cnd.cancelId='${r.id}'; cndPaint()">Cancel…</button></div>
+      ${cnd.cancelId === r.id ? cndCancelHtml(r) : ''}</div>`;
+  const body = days.size ? [...days.keys()].sort().map(day => `<div class="card"><h3 style="margin-top:0">${esc(w.requests.find(r => r.date === day).date_label)}</h3>${[...days.get(day).entries()].map(([altar, list]) => `<h4 style="margin:10px 0 6px;font-size:16px">${esc(altar)} <span class="muted">· ${list.reduce((s, x) => s + x.candles, 0)} candle${list.reduce((s, x) => s + x.candles, 0) === 1 ? '' : 's'}</span></h4>${list.map(row).join('')}`).join('')}</div>`).join('')
+    : '<div class="card"><p class="muted" style="margin:0">No paid candle requests for this week yet.</p></div>';
+  const rest = other.length ? `<div class="card"><h4 style="margin:0 0 6px">Not on the list</h4><p class="gw-lede">Cancelled, or still waiting for the card payment (these are never taken off the list or charged until they are paid).</p>${other.map(r => `<div class="rp-order" style="margin:0 0 6px"><div class="rp-top"><b class="rp-name">${esc(r.ref)} · ${r.candles} × ${esc(r.name || '')}</b><span class="gw-status">${r.status === 'cancelled' ? 'Cancelled' : 'Waiting for payment'}</span></div><div class="muted">${esc(r.date_label)} · ${esc(r.altar)}${r.cancel_reason ? ' · ' + esc(r.cancel_reason) : ''}</div></div>`).join('')}</div>` : '';
+  return cndWeekChips() + `<div class="card"><h3 style="margin-top:0">${esc(w.label)}</h3>
+    <div class="muted">${t.requests} request${t.requests === 1 ? '' : 's'} · ${t.candles} candle${t.candles === 1 ? '' : 's'} · ${t.to_light} still to light · offerings ${cndMoney(t.offered)}</div>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="cndPrint()">🖨 Print the list for the volunteer</button><button class="small" onclick="cndRefresh()">Refresh</button></div></div>` + body + rest;
+}
+async function cndRefresh() { try { cnd.week = await call('candles_week', { monday: cnd.monday }); cndPaint(); toast('✓ List refreshed'); } catch (e) { toast(e.message, 'error'); } }
+async function cndMark(id, lit) {
+  try { await call('candles_mark', { id, lit }); toast(lit ? '✓ Marked as lit' : '✓ Back to “to light”'); cnd.week = await call('candles_week', { monday: cnd.monday }); cndPaint(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function cndCancelHtml(r) {
+  return `<div class="rp-cancel"><b>Cancel ${esc(r.ref)}?</b><div><label for="cndWhy">Why? (kept in the record)</label><input id="cndWhy" maxlength="150" placeholder="e.g. The person asked us to cancel" autocomplete="off"></div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="cndRefund" style="width:auto;margin:0"> Note that I have refunded ${cndMoney(r.total)} in SumUp</label>
+    <div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it, so the books agree.</div>
+    <div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="cndCancel('${r.id}', ${r.total})">Yes, cancel it</button><button class="small" onclick="cnd.cancelId=null; cndPaint()">Keep it</button></div></div>`;
+}
+async function cndCancel(id, total) {
+  const why = (document.getElementById('cndWhy') || {}).value || '';
+  if (why.trim().length < 3) { toast('Please say why.', 'error'); return; }
+  const body = { id, reason: why }, box = document.getElementById('cndRefund');
+  if (box && box.checked) body.refund_amount = total;
+  try { const r = await call('candles_cancel', body); toast(r.refunded ? `✓ Cancelled, and the ${cndMoney(r.refunded)} refund is recorded` : '✓ Cancelled'); cnd.cancelId = null; await cndReload(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function cndPrint() {
+  const w = cnd.week, live = w ? w.requests.filter(r => r.status === 'paid' || r.status === 'lit') : [];
+  if (!live.length) { toast('There are no paid candle requests to print for this week.', 'error'); return; }
+  let el = document.getElementById('repoPrintPanel');
+  if (!el) { el = document.createElement('div'); el.id = 'repoPrintPanel'; el.style.cssText = 'position:fixed;inset:0;z-index:44;background:var(--paper);overflow-y:auto;padding:12px 12px 28px;'; document.body.appendChild(el); }
+  const days = new Map();
+  for (const r of live) { if (!days.has(r.date)) days.set(r.date, new Map()); const a = days.get(r.date); if (!a.has(r.altar)) a.set(r.altar, []); a.get(r.altar).push(r); }
+  el.innerHTML = `<div style="max-width:900px;margin:0 auto">
+    <div class="noprint" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap"><h3 style="margin:0">Print the list</h3>
+      <div class="tiny-actions"><label style="display:inline-flex;gap:6px;align-items:center;font-weight:500;margin-right:8px"><input type="checkbox" id="cndPrintWhy" style="width:auto;margin:0" onchange="cndPrintRedraw()"> Include “who it is for”</label><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="window.print(); toast('✓ Print window opened — choose a printer, or “Save as PDF”')">🖨 Print</button> <button class="small" onclick="repoClosePrint()">Close</button></div></div>
+    <h2 style="margin:0 0 2px">Candles to light — ${esc(w.label)}</h2>
+    <div class="muted" style="margin-bottom:10px">${w.totals.candles} candle${w.totals.candles === 1 ? '' : 's'} · printed ${esc(new Date().toLocaleDateString('en-GB'))}</div>
+    <div id="cndPrintBody"></div></div>`;
+  window.__cndPrintDays = days; cndPrintRedraw();
+}
+function cndPrintRedraw() {
+  const days = window.__cndPrintDays, why = !!(document.getElementById('cndPrintWhy') || {}).checked, host = document.getElementById('cndPrintBody'); if (!days || !host) return;
+  host.innerHTML = [...days.keys()].sort().map(day => `<div class="slotblock"><h3 style="margin:10px 0 0">${esc([...days.get(day).values()][0][0].date_label)}</h3>${[...days.get(day).entries()].map(([altar, list]) => `<b>${esc(altar)}</b><table><tr><th>Ref</th><th>Name</th><th>Candles</th>${why ? '<th>For</th>' : ''}<th>Lit</th></tr>${list.map(r => `<tr><td><b>${esc(r.ref)}</b></td><td>${esc(r.name || '')}</td><td>${r.candles}</td>${why ? `<td>${esc(r.intention)}</td>` : ''}<td><span class="tick"></span></td></tr>`).join('')}</table>`).join('')}</div>`).join('');
+}
+// ---- settings
+function cndSettingsHtml() {
+  const dr = cnd.draft;
+  const altarRow = (a, i) => `<div class="rp-slotrow"><div><label for="caN${i}">Name of the candle stand</label><input id="caN${i}" maxlength="50" value="${esc(a.name)}" autocomplete="off" oninput="cnd.draft.altars[${i}].name=this.value"></div>
+    <div><label for="caA${i}">Offer it?</label><select id="caA${i}" onchange="cnd.draft.altars[${i}].active=this.value==='1'"><option value="1" ${a.active ? 'selected' : ''}>Yes</option><option value="0" ${a.active ? '' : 'selected'}>No (hidden)</option></select></div>
+    <div></div><div><button class="small" style="min-height:44px" onclick="cndRemoveAltar(${i})" aria-label="Remove this candle stand">Remove</button></div></div>`;
+  return `<div class="card"><h3 style="margin-top:0">Candle stands</h3>
+    <p class="gw-lede">The places in the church where a candle can be lit. People choose one when they ask. Up to four.</p>
+    ${dr.altars.map(altarRow).join('')}
+    <div class="gw-btns"><button class="small" onclick="cndAddAltar()">+ Add a candle stand</button></div>
+    <h4 style="margin:18px 0 0;font-size:16px">When requests close each week</h4>
+    <div class="gw-two"><div><label for="cnCD">Day</label><select id="cnCD" onchange="cnd.draft.cutoff_weekday=Number(this.value)">${REPO_DAYS.map((n, i) => `<option value="${i}" ${dr.cutoff_weekday === i ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div><label for="cnCT">At</label><input id="cnCT" type="time" value="${esc(dr.cutoff_time)}" oninput="cnd.draft.cutoff_time=this.value"></div></div>
+    <div class="muted" style="margin-top:4px">Before this, people can ask for any day of the coming week. After it, only the following week. Use 23:59 for “midnight”.</div>
+    <label for="cnIntro" style="margin-top:12px">A line of welcome at the top (optional)</label><input id="cnIntro" maxlength="300" value="${esc(dr.intro_text)}" placeholder="e.g. A volunteer will light a candle for you, for your intentions." autocomplete="off" oninput="cnd.draft.intro_text=this.value">
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="cndSaveSettings()">Save</button></div></div>
+    <div class="card"><h4 style="margin:0 0 6px">The offering</h4><p class="muted" style="margin:0">People choose £1.50, £2, £3, £5 or another amount for each candle, between £1.50 and £5.00, up to 10 candles in a request.</p></div>`;
+}
+function cndAddAltar() { if (cnd.draft.altars.length >= 4) { toast('Up to four candle stands.', 'error'); return; } cnd.draft.altars.push({ id: '', name: '', active: true }); cndPaint(); toast('Added — give it a name, then press Save'); }
+function cndRemoveAltar(i) { if (cnd.draft.altars.length <= 1) { toast('Keep at least one candle stand.', 'error'); return; } cnd.draft.altars.splice(i, 1); cndPaint(); toast('Removed — press Save to keep this change'); }
+async function cndSaveSettings() {
+  const dr = cnd.draft;
+  if (dr.altars.some(a => !String(a.name).trim())) { toast('Give every candle stand a name.', 'error'); return; }
+  try { await call('candles_set_settings', { altars: dr.altars.map(a => ({ id: a.id, name: a.name.trim(), active: a.active })), cutoff_weekday: dr.cutoff_weekday, cutoff_time: dr.cutoff_time, intro_text: dr.intro_text }); toast('✓ Saved'); await cndReload(['altars', 'cutoff_weekday', 'cutoff_time', 'intro_text']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+// ---- the Thursday email
+function cndEmailHtml() {
+  const g = cnd.d.digest, dr = cnd.draft, when = (iso) => iso ? new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: cnd.d.org.timezone }) : '';
+  const last = g.last_status ? `<div class="${g.last_status === 'sent' ? 'hint' : 'error'}" style="margin-top:10px"><b>${g.last_status === 'sent' ? 'Last email sent' : 'The last attempt did not work'}${g.last_attempt_at ? ' · ' + esc(when(g.last_attempt_at)) : ''}</b><div>${esc(g.last_note || '')}</div></div>` : '<div class="muted" style="margin-top:10px">Nothing has been sent yet.</div>';
+  const setup = g.mail_ready ? '' : `<div class="hint" style="margin-top:10px"><b>Email sending is not set up yet.</b> It needs a parish Gmail account, set up once:
+    <ol style="margin:6px 0 0 18px;padding:0"><li>Sign in to that Gmail account and turn on 2-Step Verification (Google Account → Security).</li><li>Search “App passwords” in that Google Account, create one named “Parish Campaigns”, and copy the 16 letters.</li><li>In Netlify → your site → Site configuration → Environment variables, add <code>MAIL_USER</code> (the Gmail address) and <code>MAIL_APP_PASSWORD</code> (the 16 letters). Optional: <code>MAIL_FROM_NAME</code>.</li><li>Redeploy the site once. Then press “Send it now” below to test.</li></ol></div>`;
+  return `<div class="card"><h3 style="margin-top:0">The Thursday email ${g.enabled ? '<span class="gw-status live">On</span>' : '<span class="gw-status">Off</span>'}</h3>
+    <p class="gw-lede">Every Thursday morning (after 8am) an email goes to the parish address with next week's candle requests and the weekend's Repository orders: names, references, candles and items only. No phone numbers, no email addresses and no intentions. You can always see the full lists here; the email is a reminder.</p>
+    <div class="gw-switchrow"><div><b>Send it every Thursday</b><div class="muted">${g.mail_ready ? 'Email sending is set up.' : 'Switch on once email sending is set up.'}</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${g.enabled ? 'checked' : ''} aria-label="Send the Thursday email" onchange="cndSetDigest(this)"><span></span></label></div>
+    <label for="cnTo" style="margin-top:12px">Send it to</label><input id="cnTo" type="email" inputmode="email" maxlength="254" value="${esc(dr.to_email)}" placeholder="${esc(g.sends_to || 'the parish email address')}" autocomplete="off" oninput="cnd.draft.to_email=this.value">
+    <div class="muted" style="font-size:13.5px">Leave empty to use the parish's contact address${g.sends_to && !g.to_email ? ' (' + esc(g.sends_to) + ')' : ''}.</div>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="cndSaveTo()">Save the address</button><button class="small" onclick="cndSendNow()" ${cnd.busy ? 'disabled' : ''}>${cnd.busy ? 'Sending…' : 'Send it now'}</button><button class="small" onclick="cndPreview()">See what it would say</button></div>
+    ${last}${setup}</div>${cnd.preview ? `<div class="card"><h4 style="margin:0 0 6px">What it would say today</h4><pre style="white-space:pre-wrap;margin:0;font-family:inherit">${esc(cnd.preview)}</pre></div>` : ''}`;
+}
+async function cndSetDigest(box) {
+  const want = box.checked;
+  try { await call('digest_set', { enabled: want }); toast(want ? '✓ The Thursday email is on' : '✓ The Thursday email is off'); await cndReload(); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
+}
+async function cndSaveTo() {
+  try { await call('digest_set', { to_email: cnd.draft.to_email }); toast(cnd.draft.to_email.trim() ? '✓ Saved. It will go to ' + cnd.draft.to_email.trim() : '✓ Saved. It will go to the parish contact address'); await cndReload(['to_email']); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function cndSendNow() {
+  cnd.busy = true; cndPaint();
+  try { const r = await call('digest_send_now'); toast(`✓ Sent to ${r.to}`); }
+  catch (e) { toast(e.message, 'error'); }
+  cnd.busy = false;
+  try { cnd.d = await call('candles_get'); } catch { /* keep what is shown */ }
+  cndPaint();
+}
+async function cndPreview() {
+  try { const r = await call('digest_preview'); cnd.preview = r.text; cndPaint(); toast('✓ This is what the email would say'); }
   catch (e) { toast(e.message, 'error'); }
 }
 </script>

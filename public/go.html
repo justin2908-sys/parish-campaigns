@@ -185,7 +185,7 @@ main { padding-bottom:32px; }
       loading: 'Loading…', copied: 'Copied ', copiedLink: 'Link copied', seeAll: 'See all', showFewer: 'Show fewer',
       full: 'Full', waiting: 'Join waiting list', isNew: 'New',
       // the shortcut buttons show pictures only; these words are for screen readers and for the tooltip
-      waJoin: 'Join our WhatsApp channel', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services',
+      waJoin: 'Join our WhatsApp channel', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services', candleAria: 'Light a candle',
       today: 'Today', readings: 'Today’s Mass readings', about: 'About today’s saint or feast', readingsTitle: 'Mass readings for today',
       todaySource: 'Readings: Universalis (England & Wales). Day: General Roman Calendar.',
       icons: ['hall', 'mass', 'news']   // the three permanent links are drawn in this order
@@ -204,7 +204,8 @@ main { padding-bottom:32px; }
     saint: '<ellipse cx="12" cy="4.6" rx="4.2" ry="1.7"/><circle cx="12" cy="11.6" r="3.2"/><path d="M5.5 21c0-3.6 2.9-5.6 6.5-5.6s6.5 2 6.5 5.6"/>',
     calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/>',
     tag: '<path d="M3 12V4h8l10 10-8 8L3 12Z"/><circle cx="7.5" cy="8.5" r="1.2"/>',
-    bag: '<path d="M6 8h12l1.2 12H4.8L6 8Z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>'   // the Repository (parish shop): a shopping bag
+    bag: '<path d="M6 8h12l1.2 12H4.8L6 8Z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>',   // the Repository (parish shop): a shopping bag
+    candle: '<path d="M12 2.5c1.3 1.5 1.8 2.6 1.8 3.5a1.8 1.8 0 0 1-3.6 0c0-.9.5-2 1.8-3.5Z"/><rect x="9" y="9.5" width="6" height="9" rx="1"/><path d="M12 8v1.5M6 21.5h12M7.5 18.5h9"/>'   // Light a Candle: a flame over a candle on its stand
   };
   var DAY = 864e5;
   function $(id) { return document.getElementById(id); }
@@ -261,8 +262,9 @@ main { padding-bottom:32px; }
   function icon(name, size) { return '<svg width="' + (size || 30) + '" height="' + (size || 30) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
   // The permanent shortcuts are pictures only (each still has its words for screen readers and as a tooltip): WhatsApp, email.
   // Only a WhatsApp channel address is ever drawn.
-  function iconRow(o, shop, listings) {
+  function iconRow(o, shop, listings, candles) {
     var u = String(o.whatsapp || '').trim(), parts = [];
+    if (candles && /^\/candles\/[a-z0-9-]+$/.test(String(candles.path || ''))) parts.push('<a class="ic" href="' + esc(candles.path) + '" aria-label="' + esc(W.candleAria) + '" title="' + esc(W.candleAria) + '">' + icon('candle') + '</a>');
     if (listings && /^\/listings\/[a-z0-9-]+$/.test(String(listings.path || ''))) parts.push('<a class="ic" href="' + esc(listings.path) + '" aria-label="' + esc(W.listAria) + '" title="' + esc(W.listAria) + '">' + icon('tag') + '</a>');
     if (shop && /^\/shop\/[a-z0-9-]+$/.test(String(shop.path || ''))) parts.push('<a class="ic" href="' + esc(shop.path) + '" aria-label="' + esc(W.shopAria) + '" title="' + esc(W.shopAria) + '">' + icon('bag') + '</a>');
     if (/^https:\/\/(www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+\/?$/i.test(u)) parts.push('<a class="ic" href="' + esc(u) + '" target="_blank" rel="noopener" aria-label="' + esc(W.waJoin) + '" title="' + esc(W.waJoin) + '">' + icon('whatsapp') + '</a>');
@@ -293,7 +295,7 @@ main { padding-bottom:32px; }
         ? '<button class="notices urgent gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.urgentNotice + ': ' + n.message + '. Tap to read.') + '"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;color:var(--warn)"><path d="M12 3 2 20h20L12 3ZM12 10v5M12 18v.01"/></svg><span class="txt"><span class="lab">' + esc(W.urgentLabel) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>'
         : '<button class="notices gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.notice + ': ' + n.message + '. Tap to read.') + '"><span class="txt"><span class="lab">' + esc(W.notices) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>';
     }
-    html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '') + iconRow(o, data.shop, data.listings) + todayCard(tz, today);
+    html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '') + iconRow(o, data.shop, data.listings, data.candles) + todayCard(tz, today);
     var doors = (data.links || []).map(function (l, i) {
       var h = safeHref(l.url); if (!h) return '';
       return '<a class="door" href="' + esc(h) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[W.icons[i] || 'link'] + '</svg></span><span><h2>' + esc(l.label) + '</h2>' + (l.sub ? '<p>' + esc(l.sub) + '</p>' : '') + '</span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>';

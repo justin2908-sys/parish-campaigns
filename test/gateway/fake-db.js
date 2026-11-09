@@ -8,10 +8,12 @@ function createFakeDb(clock) {
   const T = (n) => (tables[n] = tables[n] || []);
   const joins = { ticket_blocks: 'block_id' };   // tickets.block_id -> ticket_blocks, for "ticket_blocks!inner(type)"
   const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']],
-    repository_weekends: [['org_id', 'weekend']], repository_items: [['org_id', 'sumup_variant_id']], listings: [['org_id', 'client_ref'], ['token']], listing_months: [['org_id', 'month']], listings_settings: [['org_id']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
+    repository_weekends: [['org_id', 'weekend']], repository_items: [['org_id', 'sumup_variant_id']], listings: [['org_id', 'client_ref'], ['token']], listing_months: [['org_id', 'month']], listings_settings: [['org_id']], candle_months: [['org_id', 'month']], candle_settings: [['org_id']], weekly_digest: [['org_id']], candle_requests: [['org_id', 'ref_no'], ['org_id', 'client_ref']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
   const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
     repository_items: () => ({ available: true, stock: null, sort: 0, featured: false }),
     listings: () => ({ views: 0, contacts: 0, reports: 0, featured: false, images: [], description: '' }),
+    candle_settings: () => ({ enabled: false, altars: [{ id: 'mary', name: 'Altar of Our Lady', active: true }, { id: 'anthony', name: 'Altar of St Anthony of Padua', active: true }], intro_text: null, cutoff_weekday: 3, cutoff_time: '23:59', next_ref: 1 }),
+    weekly_digest: () => ({ enabled: false, to_email: null, last_week_start: null, last_sent_at: null, last_status: null, last_note: null, last_attempt_at: null }),
     listings_settings: () => ({ enabled: false, intro_text: null, price_base: 3, price_per_extra_week: 1.5, price_per_image: 0.5 }),
     repository_settings: () => ({ enabled: false, slots: [], cutoff_weekday: 3, cutoff_time: '23:59', intro_text: null, next_ref: 1 }) };
   let seq = 0;
@@ -225,6 +227,11 @@ function createFakeDb(clock) {
       for (const l of ls) { const it = T('repository_items').find(x => x.id === l.item_id); if (it && it.stock !== null && it.stock !== undefined) it.stock -= l.qty; }
       Object.assign(o, { status: 'paid', cancel_reason: null, cancelled_at: null, paid_at: new Date(clock.now()).toISOString() });
       return { data: 'paid', error: null };
+    }
+    if (name === 'candle_next_ref') {   // as the SQL function: take the next number in one step
+      let st = T('candle_settings').find(x => x.org_id === a.p_org);
+      if (!st) { st = { ...defaults.candle_settings(), org_id: a.p_org }; T('candle_settings').push(st); }
+      const n = st.next_ref; st.next_ref += 1; return { data: n, error: null };
     }
     if (name === 'listing_event') {   // once per visitor per day, as in the SQL function
       const ev = T('listing_events');

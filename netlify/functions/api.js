@@ -850,6 +850,7 @@ async function syncCheckout(payment) {
     await supabase.from('registrations').update({ status: 'submitted' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // a paid registration is now in
     await shopOrderPaid(payment);   // a Repository order for this payment is now paid (or is taken back if it had been given up)
     await listingPaid(payment);     // a Listings fee: the listing now waits for the office to approve it
+    await candlePaid(payment);      // a candle request: now paid, so it goes on the list
     return 'paid';
   }
   if ((data.status === 'FAILED' || data.status === 'EXPIRED') && payment.status === 'pending') {
@@ -857,6 +858,7 @@ async function syncCheckout(payment) {
     await supabase.from('registrations').update({ status: 'cancelled', decision_note: 'Payment not completed' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // the place goes back
     await shopOrderFailed(payment);   // a Repository order for this payment is cancelled and its stock goes back
     await listingFailed(payment);     // a Listings fee that never came: the listing is cancelled
+    await candleFailed(payment);      // a candle request that was never paid is cancelled
     // A PHYSICAL ticket stays 'held' — it's already in someone's hand, so it must never
     // quietly become resellable; only an explicit Admin Void does that. An ONLINE ticket was
     // never physically handed to anyone, so an unpaid one is simply released back to its series.
@@ -3507,7 +3509,7 @@ async function publicGateway({ slug }) {
   if (!org || !org.gateway_enabled) throw httpError(404, 'This page is not available.');
   const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London';
   const now = new Date(), today = gwToday(tz, now);
-  const [linksRes, annsRes, campsRes, itemsRes, orders, daily, shopRow, listingsRow] = await Promise.all([
+  const [linksRes, annsRes, campsRes, itemsRes, orders, daily, shopRow, listingsRow, candlesRow] = await Promise.all([
     supabase.from('gateway_links').select('position, label, sub, url').eq('org_id', org.id).order('position'),
     supabase.from('gateway_announcements').select('message, link_url, urgent, starts_at, ends_at, created_at').eq('org_id', org.id).lte('starts_at', now.toISOString()).order('created_at', { ascending: false }).limit(50),
     supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, places, waiting_list, gateway_cta').eq('org_id', org.id).eq('listed_on_gateway', true).eq('binned', false),
@@ -3516,6 +3518,7 @@ async function publicGateway({ slug }) {
     gwDaily(org, today),
     shopSettings(org.id),
     listingSettings(org.id),
+    candleSettings(org.id),
   ]);
   const wording = GATEWAY_WORDING[GATEWAY_VERTICAL];
   const live = (annsRes.data || []).find(a => !a.ends_at || new Date(a.ends_at) > now);   // newest one that has started and not ended
@@ -3546,6 +3549,7 @@ async function publicGateway({ slug }) {
   return {
     org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null, whatsapp: org.gateway_whatsapp || null },
     daily,
+    candles: candlesRow && candlesRow.enabled && candleActiveAltars(candlesRow).length ? { path: `/candles/${s}` } : null,   // Light a Candle, only while it is open
     listings: listingsRow && listingsRow.enabled ? { path: `/listings/${s}` } : null,   // the Listings shortcut, only while it is open
     shop: shopRow && shopRow.enabled ? { path: `/shop/${s}` } : null,   // the Repository: a shopping-bag shortcut on the page, only while it is open for orders
     links: (linksRes.data || []).map(l => ({ label: l.label, sub: l.sub || '', url: l.url })),
@@ -3831,7 +3835,7 @@ async function ledgerCheck(session, { campaign_id } = {}) {
   const scoped = campaign_id ? [campaign_id] : ids;
   if (!scoped.length) return { ok: true, problems: [], checked: { payments: 0, tickets: 0 } };
   const nameOf = Object.fromEntries((orgCampaigns || []).map(c => [c.id, c.name]));
-  const [payments, sold, tiersRes, blocksRes, regsRes, unsoldRes, shopOrdersRes, listingsRes] = await Promise.all([
+  const [payments, sold, tiersRes, blocksRes, regsRes, unsoldRes, shopOrdersRes, listingsRes, candlesRes] = await Promise.all([
     fetchAll(() => supabase.from('payments').select('id, campaign_id, method, status, amount, ticket_snapshot, sumup_transaction_code, created_at, attention_done_at').in('campaign_id', scoped).order('id')),
     fetchAll(() => supabase.from('tickets').select('id, campaign_id, block_id, ticket_number, status, payment_id').in('campaign_id', scoped).neq('status', 'unsold').order('id')),
     supabase.from('tiers').select('id, price').in('campaign_id', scoped),
@@ -3840,10 +3844,11 @@ async function ledgerCheck(session, { campaign_id } = {}) {
     supabase.from('tickets').select('id', { count: 'exact', head: true }).in('campaign_id', scoped).eq('status', 'unsold').not('payment_id', 'is', null),
     supabase.from('repository_orders').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
     supabase.from('listings').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
+    supabase.from('candle_requests').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
   ]);
   const price = Object.fromEntries((tiersRes.data || []).map(t => [t.id, Number(t.price)]));
   const prefix = Object.fromEntries((blocksRes.data || []).map(b => [b.id, b.number_prefix || '']));
-  const regPay = new Set([...(regsRes.data || []), ...(shopOrdersRes.data || []), ...(listingsRes.data || [])].map(r => r.payment_id));   // payments for a registration or a Repository order hold no tickets, on purpose
+  const regPay = new Set([...(regsRes.data || []), ...(shopOrdersRes.data || []), ...(listingsRes.data || []), ...(candlesRes.data || [])].map(r => r.payment_id));   // payments for a registration or a Repository order hold no tickets, on purpose
   const byId = new Map(payments.map(p => [p.id, p]));
   const live = new Map();
   for (const t of sold) if (t.payment_id) { if (!live.has(t.payment_id)) live.set(t.payment_id, []); live.get(t.payment_id).push(t); }
@@ -4044,7 +4049,7 @@ async function shopWeekendCampaign(orgId, weekend) {
   }
   return c.id;
 }
-const shopIsHiddenCampaign = (c) => !!(c && c.form_def && (c.form_def.shop || c.form_def.listings));   // the Repository's weekend campaigns and the Listings months
+const shopIsHiddenCampaign = (c) => !!(c && c.form_def && (c.form_def.shop || c.form_def.listings || c.form_def.candles));   // the Repository's weekend campaigns, the Listings months and the Candles months
 
 // ----- the public side
 async function shopOrgBySlug(slug) {
@@ -5089,3 +5094,371 @@ async function cashPending(session, { seller_id } = {}) {
   return { sellers, seller: { id: seller_id, name: userBy.get(seller_id).name, total: campaigns.reduce((s, c) => s + pennies(c.total), 0) / 100, count: mine.length, campaigns, recent } };
 }
 Object.assign(actions, { cash_pending: (s, b) => cashPending(s, b) });
+
+// ---------- Light a Candle, and the Thursday email ----------
+// A parishioner asks for candles to be lit at one of the parish's candle stands on a chosen day (any day of the next weeks, Monday to Sunday), and gives an
+// offering of £1.50 to £5 a candle by card on the page. Requests for a week close on the cut-off (Wednesday midnight, as for the Repository), so the list for
+// that week is complete when it goes out on Thursday. The office sees the list in Admin and ticks each one "lit"; on Thursday morning an email goes to the
+// parish office with the candles for the coming week and the Repository orders for the coming weekend, as a reminder (the Admin screen is the real record).
+// The payment is the ordinary SumUp card payment (a row in `payments`, held in one hidden campaign a month); the person's name and contact stay on the
+// payment only. An optional intention ("who it is for") is private to the office: never in the email, and cleared a month after the day.
+const CANDLE_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const CANDLE_MIN = 1.5, CANDLE_MAX = 5, CANDLE_SUGGESTED = [1.5, 2, 3, 5], CANDLE_MAX_CANDLES = 10, CANDLE_WEEKS_OFFERED = 4;
+const candleRef = (n) => `CAN-${String(n).padStart(3, '0')}`;
+const candleDefaultAltars = () => [{ id: 'mary', name: 'Altar of Our Lady', active: true }, { id: 'anthony', name: 'Altar of St Anthony of Padua', active: true }];
+
+async function candleSettings(orgId, { create } = {}) {
+  let { data } = await supabase.from('candle_settings').select('*').eq('org_id', orgId).maybeSingle();
+  if (!data && create) {
+    await supabase.from('candle_settings').upsert({ org_id: orgId }, { onConflict: 'org_id' });
+    ({ data } = await supabase.from('candle_settings').select('*').eq('org_id', orgId).maybeSingle());
+  }
+  return data || { org_id: orgId, enabled: false, altars: candleDefaultAltars(), intro_text: null, cutoff_weekday: 3, cutoff_time: '23:59', next_ref: 1 };
+}
+const candleActiveAltars = (st) => (Array.isArray(st.altars) ? st.altars : []).filter(a => a && a.active !== false);
+// The weeks on offer: the next Mondays whose cut-off has not passed, each with its seven days.
+function candleWeeks(settings, tz, now) {
+  const today = gwToday(tz, now), toMon = (1 - shopWeekdayOf(today) + 7) % 7, back = (1 - settings.cutoff_weekday + 7) % 7;
+  const out = [];
+  for (let w = 0; w < 10 && out.length < CANDLE_WEEKS_OFFERED; w++) {
+    const monday = shopAddDays(today, toMon + 7 * w);
+    const closesIso = gwLocalToIso(`${shopAddDays(monday, -back)}T${settings.cutoff_time}`, tz);
+    if (!closesIso || new Date(closesIso) <= now) continue;
+    out.push({ monday, closes_at: closesIso, label: `Week of ${shopDayLabel(monday)}`, dates: Array.from({ length: 7 }, (_, i) => { const d = shopAddDays(monday, i); return { date: d, label: shopDayLabel(d), short: new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', timeZone: 'UTC' }) }; }) });
+  }
+  return out;
+}
+const candleCutoffText = (s) => `Requests for a week close on ${SHOP_WEEKDAYS[s.cutoff_weekday]} ${s.cutoff_time === '23:59' ? 'midnight' : shopTimeLabel(s.cutoff_time)}, so the list is ready for the Thursday before it.`;
+async function candleMonthCampaign(orgId, today) {
+  const month = today.slice(0, 7);
+  const find = async () => { const { data } = await supabase.from('candle_months').select('campaign_id').eq('org_id', orgId).eq('month', month).maybeSingle(); return data ? data.campaign_id : null; };
+  const have = await find();
+  if (have) return have;
+  const [y, m] = month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const { data: c, error } = await supabase.from('campaigns').insert({ org_id: orgId, name: `Candles, ${label}`, kind: 'registration', age_restricted: false, public_only: false, public_page_enabled: false,
+    active: true, is_draft: false, listed_on_gateway: false, keep_until: shopAddDays(last, 75), form_def: { candles: true, month } }).select().single();
+  if (error || !c) throw httpError(500, 'Could not start your request — please try again.');
+  const { error: linkErr } = await supabase.from('candle_months').insert({ org_id: orgId, month, campaign_id: c.id });
+  if (linkErr) { await supabase.from('campaigns').delete().eq('id', c.id); const again = await find(); if (again) return again; throw httpError(500, 'Could not start your request — please try again.'); }
+  return c.id;
+}
+// The intention is cleared a month after its day.
+async function candlesSweep(orgId, now) {
+  const cut = shopAddDays(now.toISOString().slice(0, 10), -30);
+  await supabase.from('candle_requests').update({ intention: null }).eq('org_id', orgId).lt('light_date', cut).not('intention', 'is', null);
+}
+
+// ----- the public side
+async function candleOrgBySlug(slug) {
+  const s = String(slug == null ? '' : slug).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  if (!org) throw httpError(404, 'This page is not available.');
+  const settings = await candleSettings(org.id);
+  if (!settings.enabled || !candleActiveAltars(settings).length) throw httpError(404, 'Candle requests are not open right now.');
+  return { org, settings, tz: gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London' };
+}
+async function publicCandles({ slug }) {
+  const { org, settings, tz } = await candleOrgBySlug(slug);
+  try { if ((await rateHit(`csweep:${org.id}`, 21600)) === 1) await candlesSweep(org.id, new Date()); } catch { /* housekeeping only */ }
+  return {
+    org: { name: org.display_name || org.name }, intro: settings.intro_text || null,
+    altars: candleActiveAltars(settings).map(a => ({ id: a.id, name: a.name })),
+    offering: { min: CANDLE_MIN, max: CANDLE_MAX, suggested: CANDLE_SUGGESTED }, max_candles: CANDLE_MAX_CANDLES,
+    weeks: candleWeeks(settings, tz, new Date()).map(w => ({ monday: w.monday, label: w.label, dates: w.dates })),
+    cutoff_text: candleCutoffText(settings),
+  };
+}
+async function publicCandleRequest({ slug, light_date, altar_id, candles, per_candle, name, phone, email, intention, client_ref, website }) {
+  if (website) return { ok: true, request_id: null, ref: '', status: 'awaiting_payment' };   // the hidden spam-trap box was filled in: pretend, store nothing
+  if (clientIp && (await rateHit(`candle:${clientIp}`, 3600)) > 30) throw httpError(429, 'Too many requests from your connection — please try again later.');
+  client_ref = cleanClientRef(client_ref);
+  const { org, settings, tz } = await candleOrgBySlug(slug);
+  if (client_ref) {   // a lost reply and a second tap must not light twice
+    const { data: again } = await supabase.from('candle_requests').select('*').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+    if (again) {
+      const { data: pay } = again.payment_id ? await supabase.from('payments').select('link_url').eq('id', again.payment_id).maybeSingle() : { data: null };
+      return { ok: true, request_id: again.id, ref: candleRef(again.ref_no), status: again.status, total: Number(again.total), pay_url: again.status === 'awaiting_payment' && pay ? pay.link_url : null, replay: true };
+    }
+  }
+  const cleanedName = cleanName(name, 'Your name');
+  if (!cleanedName) throw httpError(400, 'Please enter your name.');
+  const hasPhone = !!String(phone || '').trim(), hasEmail = !!String(email || '').trim();
+  if (!hasPhone && !hasEmail) throw httpError(400, 'Please give a mobile number or an email address, so we can reach you if there is a problem.');
+  const phoneV = hasPhone ? validateRegPhone(phone, 'your mobile number') : null;
+  const emailV = hasEmail ? validateRegEmail(email, 'your email address') : null;
+  const altar = candleActiveAltars(settings).find(a => a.id === altar_id);
+  if (!altar) throw httpError(400, 'Please choose where the candle should be lit.');
+  const week = candleWeeks(settings, tz, new Date()).find(w => w.dates.some(d => d.date === light_date));
+  if (!week) throw httpError(409, 'That day is no longer open for requests — please choose another.');
+  const n = Number(candles);
+  if (!Number.isInteger(n) || n < 1 || n > CANDLE_MAX_CANDLES) throw httpError(400, `Please choose from 1 to ${CANDLE_MAX_CANDLES} candles.`);
+  const each = Math.round(Number(per_candle) * 100) / 100;
+  if (!Number.isFinite(each) || each < CANDLE_MIN || each > CANDLE_MAX) throw httpError(400, `The offering for each candle is from £${CANDLE_MIN.toFixed(2)} to £${CANDLE_MAX.toFixed(2)}.`);
+  const total = Math.round(each * 100) * n / 100;
+  const why = intention ? listingBody(intention, 120, 'The intention') : '';
+  await enforcePublicPurchaseLimits(emailV || phoneV, 1);
+  const today = gwToday(tz, new Date());
+  const campaignId = await candleMonthCampaign(org.id, today);
+  const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaignId, method: 'link', amount: total, status: 'pending', seller_id: null, payer_name: cleanedName, contact_value: emailV || phoneV, client_ip: clientIp || null }).select().single();
+  if (payErr) throw httpError(500, 'Could not start your payment — please try again.');
+  const voidPayment = (w) => supabase.from('payments').update({ status: 'void', voided: true, void_reason: w }).eq('id', pay.id);
+  const { data: refData, error: refErr } = await supabase.rpc('candle_next_ref', { p_org: org.id });
+  const refNo = Array.isArray(refData) ? refData[0] : refData;
+  if (refErr || !refNo) { await voidPayment('request not saved'); throw httpError(500, 'Could not save your request — please try again.'); }
+  const { data: row, error } = await supabase.from('candle_requests').insert({ org_id: org.id, ref_no: refNo, payment_id: pay.id, light_date, altar_id: altar.id, altar_name: altar.name, candles: n, per_candle: each, total, intention: why || null, client_ref, status: 'awaiting_payment' }).select().single();
+  if (error || !row) { await voidPayment('request not saved'); throw httpError(500, 'Could not save your request — please try again.'); }
+  const created = await createSumupCheckout({ payment_id: pay.id, refSuffix: '', amount: total, campaignName: 'Candles', ticketNumbers: [candleRef(refNo)],
+    description: `Candles ${candleRef(refNo)}, ${altar.name}`, redirectUrl: `${baseUrl}/candles.html?request=${row.id}` });
+  if (!created.ok) { await supabase.from('candle_requests').update({ status: 'cancelled', cancel_reason: 'Could not start the payment', cancelled_at: new Date().toISOString() }).eq('id', row.id); await voidPayment('could not create SumUp payment link'); throw httpError(502, created.message); }
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', pay.id);
+  return { ok: true, request_id: row.id, ref: candleRef(refNo), status: 'awaiting_payment', total, pay_url: created.pay_url };
+}
+async function publicCandleStatus({ request_id }) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(request_id || ''))) throw httpError(400, 'request is required');
+  let { data: r } = await supabase.from('candle_requests').select('*').eq('id', request_id).maybeSingle();
+  if (!r) throw httpError(404, 'Request not found');
+  let pay = null;
+  if (r.payment_id) {
+    ({ data: pay } = await supabase.from('payments').select('*').eq('id', r.payment_id).maybeSingle());
+    if (pay && r.status === 'awaiting_payment') { try { await syncCheckout(pay); } catch { /* SumUp unreachable: show what we know */ } ({ data: r } = await supabase.from('candle_requests').select('*').eq('id', request_id).maybeSingle()); }
+  }
+  const { data: org } = await supabase.from('organizations').select('name, display_name, slug').eq('id', r.org_id).maybeSingle();
+  return { ref: candleRef(r.ref_no), status: r.status, date_label: shopDayLabel(String(r.light_date)), altar: r.altar_name, candles: r.candles, per_candle: Number(r.per_candle), total: Number(r.total),
+    pay_url: r.status === 'awaiting_payment' && pay ? pay.link_url : null, org_name: org ? (org.display_name || org.name) : '', org_slug: org ? org.slug : null };
+}
+async function candlePaid(payment) {
+  try {
+    const { data: r } = await supabase.from('candle_requests').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (r && (r.status === 'awaiting_payment' || (r.status === 'cancelled'))) await supabase.from('candle_requests').update({ status: 'paid', paid_at: new Date().toISOString(), cancel_reason: null, cancelled_at: null }).eq('id', r.id);
+  } catch { /* the payment itself is already recorded; the office can see the request */ }
+}
+async function candleFailed(payment) {
+  try {
+    const { data: r } = await supabase.from('candle_requests').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (r && r.status === 'awaiting_payment') await supabase.from('candle_requests').update({ status: 'cancelled', cancel_reason: 'Payment not completed', cancelled_at: new Date().toISOString() }).eq('id', r.id);
+  } catch { /* the sweep will try again */ }
+}
+
+// ----- the office side
+async function candlesOrg(session) {
+  requireOrgRole(session, CANDLE_ROLES);
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone, contact_email').eq('id', session.org_id).maybeSingle();
+  if (!org) throw httpError(404, 'Organisation not found');
+  if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
+  return org;
+}
+const mailReady = () => !!(mailer || (process.env.MAIL_USER && process.env.MAIL_APP_PASSWORD));
+async function digestRow(orgId, { create } = {}) {
+  let { data } = await supabase.from('weekly_digest').select('*').eq('org_id', orgId).maybeSingle();
+  if (!data && create) { await supabase.from('weekly_digest').upsert({ org_id: orgId }, { onConflict: 'org_id' }); ({ data } = await supabase.from('weekly_digest').select('*').eq('org_id', orgId).maybeSingle()); }
+  return data || { org_id: orgId, enabled: false, to_email: null, last_week_start: null, last_sent_at: null, last_status: null, last_note: null, last_attempt_at: null };
+}
+function digestShape(d, org) {
+  return { enabled: !!d.enabled, to_email: d.to_email || '', sends_to: d.to_email || org.contact_email || '', mail_ready: mailReady(), last_sent_at: d.last_sent_at || null, last_attempt_at: d.last_attempt_at || null, last_status: d.last_status || null, last_note: d.last_note || '', last_week_start: d.last_week_start || null };
+}
+async function candlesGet(session) {
+  const org = await candlesOrg(session), settings = await candleSettings(org.id, { create: true }), now = new Date();
+  try { await candlesSweep(org.id, now); } catch { /* housekeeping only */ }
+  const dg = await digestRow(org.id, { create: true });
+  const today = gwToday(org.timezone, now), nextMonday = shopAddDays(today, ((1 - shopWeekdayOf(today) + 7) % 7) || 7);
+  return {
+    org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/candles/${org.slug}` : null, timezone: org.timezone },
+    settings: { enabled: !!settings.enabled, altars: Array.isArray(settings.altars) ? settings.altars : candleDefaultAltars(), intro_text: settings.intro_text || '', cutoff_weekday: settings.cutoff_weekday, cutoff_time: settings.cutoff_time },
+    digest: digestShape(dg, org), next_monday: nextMonday, this_monday: shopAddDays(today, -((shopWeekdayOf(today) + 6) % 7)),
+  };
+}
+async function candlesWeek(session, { monday } = {}) {
+  const org = await candlesOrg(session);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(monday || '')) || shopWeekdayOf(String(monday)) !== 1) throw httpError(400, 'Choose a Monday.');
+  const { data: rows } = await supabase.from('candle_requests').select('*').eq('org_id', org.id).gte('light_date', monday).lte('light_date', shopAddDays(monday, 6)).order('ref_no', { ascending: true }).limit(2000);
+  const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
+  const { data: pays } = payIds.length ? await supabase.from('payments').select('id, payer_name, contact_value, status, refund_amount').in('id', payIds) : { data: [] };
+  const payOf = new Map((pays || []).map(p => [p.id, p]));
+  const out = (rows || []).map(r => { const p = payOf.get(r.payment_id); return { id: r.id, ref: candleRef(r.ref_no), status: r.status, date: String(r.light_date), date_label: shopDayLabel(String(r.light_date)), altar: r.altar_name, candles: r.candles, per_candle: Number(r.per_candle), total: Number(r.total),
+    name: p ? (p.payer_name || '(details cleared)') : '', contact: p ? (p.contact_value || '') : '', intention: r.intention || '', lit_at: r.lit_at, cancel_reason: r.cancel_reason || '', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, payment_id: r.payment_id }; });
+  const live = out.filter(r => r.status === 'paid' || r.status === 'lit');
+  return { monday, label: `Week of ${shopDayLabel(monday)}`, requests: out, totals: { requests: live.length, candles: live.reduce((s, r) => s + r.candles, 0), to_light: live.filter(r => r.status === 'paid').reduce((s, r) => s + r.candles, 0), offered: Math.round(live.reduce((s, r) => s + r.total * 100, 0)) / 100 } };
+}
+async function candlesMark(session, { id, lit }) {
+  const org = await candlesOrg(session);
+  const { data: r } = await supabase.from('candle_requests').select('id, status').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!r) throw httpError(404, 'Request not found');
+  if (!['paid', 'lit'].includes(r.status)) throw httpError(400, r.status === 'awaiting_payment' ? 'This request has not been paid yet.' : 'This request was cancelled.');
+  await supabase.from('candle_requests').update(lit ? { status: 'lit', lit_at: new Date().toISOString() } : { status: 'paid', lit_at: null }).eq('id', r.id);
+  return { ok: true, status: lit ? 'lit' : 'paid' };
+}
+async function candlesCancel(session, { id, reason, refund_amount, refund_note }) {
+  const org = await candlesOrg(session);
+  const { data: r } = await supabase.from('candle_requests').select('id, status, payment_id, ref_no').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!r) throw httpError(404, 'Request not found');
+  if (r.status === 'cancelled') throw httpError(400, 'This request is already cancelled.');
+  const why = gwText(reason, 150, 'The reason', { required: true });
+  let refunded = null;
+  if (refund_amount !== undefined && refund_amount !== null && refund_amount !== '') {
+    if (!r.payment_id || !['paid', 'lit'].includes(r.status)) throw httpError(400, 'This request was not paid, so there is nothing to refund.');
+    refunded = (await recordRefund(session, { payment_id: r.payment_id, amount: refund_amount, note: refund_note || `Candles ${candleRef(r.ref_no)} cancelled: ${why}` })).refund_amount;
+  }
+  await supabase.from('candle_requests').update({ status: 'cancelled', cancel_reason: `Cancelled by the office: ${why}`, cancelled_at: new Date().toISOString() }).eq('id', r.id);
+  return { ok: true, status: 'cancelled', refunded };
+}
+async function candlesSetSettings(session, b) {
+  const org = await candlesOrg(session), patch = { updated_at: new Date().toISOString() };
+  const current = await candleSettings(org.id, { create: true });
+  if (b.intro_text !== undefined) patch.intro_text = gwText(b.intro_text, 300, 'The welcome line') || null;
+  if (b.cutoff_weekday !== undefined) { const d = Number(b.cutoff_weekday); if (!Number.isInteger(d) || d < 0 || d > 6) throw httpError(400, 'Choose the day requests close.'); patch.cutoff_weekday = d; }
+  if (b.cutoff_time !== undefined) { if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.cutoff_time))) throw httpError(400, 'Give the closing time like 23:59.'); patch.cutoff_time = String(b.cutoff_time); }
+  if (b.altars !== undefined) {
+    if (!Array.isArray(b.altars) || !b.altars.length || b.altars.length > 4) throw httpError(400, 'Add from one to four candle stands.');
+    const seen = new Set();
+    patch.altars = b.altars.map(a => { let id = String((a && a.id) || '').trim(); if (!/^[a-z0-9]{2,12}$/.test(id) || seen.has(id)) id = 'a' + crypto.randomBytes(3).toString('hex'); seen.add(id); return { id, name: gwText(a && a.name, 50, 'The name of the candle stand', { required: true }), active: !(a && a.active === false) }; });
+  }
+  if (b.enabled !== undefined) {
+    if (b.enabled) {
+      if (!org.slug) throw httpError(400, 'Give the parish page an address first (Admin → Parish page).');
+      if (!candleActiveAltars({ altars: patch.altars || current.altars }).length) throw httpError(400, 'Switch on at least one candle stand before opening.');
+    }
+    patch.enabled = !!b.enabled;
+  }
+  const { error } = await supabase.from('candle_settings').update(patch).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+// ----- the Thursday email
+let mailer = null;   // tests put a stand-in here; otherwise the parish Gmail account sends it (MAIL_USER and MAIL_APP_PASSWORD, set once in Netlify)
+exports.setMailer = (fn) => { mailer = fn; };
+async function sendMail(msg) {
+  if (mailer) return mailer(msg);
+  const nodemailer = require('nodemailer');
+  const tr = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_APP_PASSWORD } });
+  return tr.sendMail({ from: `"${process.env.MAIL_FROM_NAME || 'Parish Campaigns'}" <${process.env.MAIL_USER}>`, to: msg.to, subject: msg.subject, text: msg.text, html: msg.html });
+}
+const digestEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Everything the volunteer needs and nothing more: names, altars, days, candle counts, order references and items. No phone numbers, no email
+// addresses, and never an intention.
+async function digestContent(org, monday) {
+  const tz = org.timezone, sunday = shopAddDays(monday, 6), sat = shopAddDays(monday, 5);
+  const { data: reqs } = await supabase.from('candle_requests').select('*').eq('org_id', org.id).gte('light_date', monday).lte('light_date', sunday).in('status', ['paid', 'lit']).order('ref_no', { ascending: true }).limit(2000);
+  const payIds = [...(reqs || []).map(r => r.payment_id)].filter(Boolean);
+  const { data: orders } = await supabase.from('repository_orders').select('*').eq('org_id', org.id).gte('collect_date', sat).lte('collect_date', sunday).in('status', ['paid', 'prepared']).order('ref_no', { ascending: true }).limit(2000);
+  const orderIds = (orders || []).map(o => o.id);
+  const { data: lines } = orderIds.length ? await supabase.from('repository_order_lines').select('order_id, item_name, qty').in('order_id', orderIds) : { data: [] };
+  const orderPay = [...(orders || []).map(o => o.payment_id)].filter(Boolean);
+  const allPay = [...new Set([...payIds, ...orderPay])];
+  const { data: pays } = allPay.length ? await supabase.from('payments').select('id, payer_name').in('id', allPay) : { data: [] };
+  const nameOf = new Map((pays || []).map(p => [p.id, p.payer_name || '(name cleared)']));
+  // candles: day, then candle stand
+  const days = new Map();
+  for (const r of reqs || []) { const d = String(r.light_date); if (!days.has(d)) days.set(d, new Map()); const al = days.get(d); if (!al.has(r.altar_name)) al.set(r.altar_name, []); al.get(r.altar_name).push({ name: nameOf.get(r.payment_id) || '', n: r.candles, lit: r.status === 'lit' }); }
+  const candleTotal = (reqs || []).reduce((s, r) => s + r.candles, 0);
+  // repository: collection Mass, then order
+  const slots = new Map();
+  for (const o of orders || []) { if (!slots.has(o.slot_label)) slots.set(o.slot_label, []); slots.get(o.slot_label).push({ ref: shopRef(o.ref_no), name: nameOf.get(o.payment_id) || '', lines: (lines || []).filter(l => l.order_id === o.id).map(l => ({ name: l.item_name, qty: l.qty })) }); }
+  const pick = new Map();
+  for (const l of lines || []) pick.set(l.item_name, (pick.get(l.item_name) || 0) + l.qty);
+  const title = `${org.name}: Thursday list`, weekLabel = `Week of ${shopDayLabel(monday)}`;
+  const t = [title, weekLabel, '', `LIGHT A CANDLE: ${(reqs || []).length} request${(reqs || []).length === 1 ? '' : 's'}, ${candleTotal} candle${candleTotal === 1 ? '' : 's'}`];
+  const h = [`<h2 style="margin:0 0 4px">${digestEsc(title)}</h2><p style="margin:0 0 16px;color:#555">${digestEsc(weekLabel)}</p>`, `<h3 style="margin:16px 0 6px">Light a candle: ${(reqs || []).length} request${(reqs || []).length === 1 ? '' : 's'}, ${candleTotal} candle${candleTotal === 1 ? '' : 's'}</h3>`];
+  if (!days.size) { t.push('No candle requests for this week.'); h.push('<p>No candle requests for this week.</p>'); }
+  for (const d of [...days.keys()].sort()) {
+    t.push('', shopDayLabel(d)); h.push(`<p style="margin:10px 0 2px"><b>${digestEsc(shopDayLabel(d))}</b></p>`);
+    for (const [altar, list] of days.get(d)) {
+      const n = list.reduce((s, x) => s + x.n, 0);
+      t.push(`  ${altar} (${n} candle${n === 1 ? '' : 's'}): ${list.map(x => `${x.name} x${x.n}${x.lit ? ' (lit)' : ''}`).join('; ')}`);
+      h.push(`<p style="margin:0 0 4px 12px">${digestEsc(altar)} <span style="color:#555">(${n} candle${n === 1 ? '' : 's'})</span>: ${list.map(x => `${digestEsc(x.name)} &times;${x.n}${x.lit ? ' (lit)' : ''}`).join('; ')}</p>`);
+    }
+  }
+  t.push('', `REPOSITORY ORDERS FOR THE WEEKEND (${shopDayLabel(sat)} and ${shopDayLabel(sunday)}): ${(orders || []).length} paid order${(orders || []).length === 1 ? '' : 's'}`);
+  h.push(`<h3 style="margin:20px 0 6px">Repository orders for the weekend (${digestEsc(shopDayLabel(sat))} and ${digestEsc(shopDayLabel(sunday))}): ${(orders || []).length} paid order${(orders || []).length === 1 ? '' : 's'}</h3>`);
+  if (!slots.size) { t.push('No paid orders yet for this weekend.'); h.push('<p>No paid orders yet for this weekend.</p>'); }
+  for (const label of [...slots.keys()].sort()) {
+    t.push('', label); h.push(`<p style="margin:10px 0 2px"><b>${digestEsc(label)}</b></p>`);
+    for (const o of slots.get(label)) { const what = o.lines.map(l => `${l.qty} x ${l.name}`).join(', '); t.push(`  ${o.ref}  ${o.name}: ${what}`); h.push(`<p style="margin:0 0 4px 12px"><b>${digestEsc(o.ref)}</b> ${digestEsc(o.name)}: ${digestEsc(o.lines.map(l => `${l.qty} × ${l.name}`).join(', '))}</p>`); }
+  }
+  if (pick.size) {
+    const items = [...pick.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    t.push('', 'All the items to get out: ' + items.map(([n, q]) => `${n} x${q}`).join('; ')); h.push(`<p style="margin:12px 0 2px"><b>All the items to get out:</b> ${digestEsc(items.map(([n, q]) => `${n} ×${q}`).join('; '))}</p>`);
+  }
+  const foot = 'This is a reminder. The full lists (including any intentions for candles) are in the parish Campaigns screen, under Admin: Candles and Repository. Orders not yet paid are not included.';
+  t.push('', foot); h.push(`<p style="margin:20px 0 0;color:#555;font-size:13px">${digestEsc(foot)}</p>`);
+  return { subject: `Thursday list: ${weekLabel}`, text: t.join('\n'), html: `<div style="font-family:Arial,sans-serif;font-size:15px;color:#111">${h.join('')}</div>`, counts: { requests: (reqs || []).length, candles: candleTotal, orders: (orders || []).length } };
+}
+// Sends the email for one organisation. A normal (scheduled) run only sends on a Thursday morning (8 o'clock or after, the parish's own time), once a week,
+// and only if it is switched on; a forced run (the "Send now" button) always sends. The result is written down either way, so the office can see it.
+async function digestSend(orgId, { force, now } = {}) {
+  now = now || new Date();
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, contact_email').eq('id', orgId).maybeSingle();
+  if (!org) return { skipped: 'no organisation' };
+  const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London';
+  org.timezone = tz; org.name = org.display_name || org.name;
+  const row = await digestRow(orgId, { create: true });
+  const today = gwToday(tz, now), dow = shopWeekdayOf(today), monday = shopAddDays(today, ((1 - dow + 7) % 7) || 7);
+  if (!force) {
+    if (!row.enabled) return { skipped: 'switched off' };
+    const hour = gwParts(now.getTime(), tz).h;
+    if (dow !== 4 || hour < 8) return { skipped: 'not Thursday morning yet' };
+    if (row.last_week_start && String(row.last_week_start) === monday && row.last_status === 'sent') return { skipped: 'already sent this week' };
+  }
+  const to = row.to_email || org.contact_email;
+  const record = async (patch) => { await supabase.from('weekly_digest').update({ ...patch, last_attempt_at: now.toISOString(), updated_at: now.toISOString() }).eq('org_id', orgId); };
+  if (!to) { await record({ last_status: 'failed', last_note: 'There is no email address to send it to.' }); return { ok: false, error: 'There is no email address to send it to.' }; }
+  if (!mailReady()) { await record({ last_status: 'failed', last_note: 'Email sending has not been set up yet.' }); return { ok: false, error: 'Email sending has not been set up yet.' }; }
+  try {
+    const c = await digestContent(org, monday);
+    await sendMail({ to, subject: c.subject, text: c.text, html: c.html });
+    await record({ last_status: 'sent', last_sent_at: now.toISOString(), last_week_start: monday, last_note: `Sent to ${to}: ${c.counts.requests} candle request${c.counts.requests === 1 ? '' : 's'}, ${c.counts.orders} repository order${c.counts.orders === 1 ? '' : 's'}.` });
+    return { ok: true, to, counts: c.counts };
+  } catch (e) {
+    const msg = String(e && e.message || 'The email could not be sent.').slice(0, 250);
+    await record({ last_status: 'failed', last_note: msg });
+    return { ok: false, error: msg };
+  }
+}
+// Called by the scheduled function three times on Thursday mornings (so a failed attempt is tried again an hour later).
+exports.runWeeklyDigests = async (now) => {
+  const { data: rows } = await supabase.from('weekly_digest').select('org_id').eq('enabled', true);
+  const out = [];
+  for (const r of rows || []) { try { out.push({ org: r.org_id, ...(await digestSend(r.org_id, { now })) }); } catch (e) { out.push({ org: r.org_id, ok: false, error: String(e && e.message) }); } }
+  return out;
+};
+async function digestSetSettings(session, b) {
+  const org = await candlesOrg(session);
+  const patch = { updated_at: new Date().toISOString() };
+  if (b.to_email !== undefined) patch.to_email = String(b.to_email || '').trim() ? validateRegEmail(b.to_email, 'the email address') : null;
+  if (b.enabled !== undefined) patch.enabled = !!b.enabled;
+  await digestRow(org.id, { create: true });
+  const { error } = await supabase.from('weekly_digest').update(patch).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+async function digestSendNow(session) {
+  const org = await candlesOrg(session);
+  if (!mailReady()) throw httpError(400, 'Email sending has not been set up yet. It needs the parish Gmail account and an app password added once in Netlify (the steps are in the Admin screen).');
+  const r = await digestSend(org.id, { force: true });
+  if (!r.ok) throw httpError(502, r.error || 'The email could not be sent.');
+  return { ok: true, to: r.to, counts: r.counts };
+}
+async function digestPreview(session) {
+  const org = await candlesOrg(session);
+  const { data: o } = await supabase.from('organizations').select('id, name, display_name, timezone').eq('id', org.id).maybeSingle();
+  const tz = org.timezone, today = gwToday(tz, new Date()), monday = shopAddDays(today, ((1 - shopWeekdayOf(today) + 7) % 7) || 7);
+  const c = await digestContent({ id: org.id, name: o.display_name || o.name, timezone: tz }, monday);
+  return { subject: c.subject, text: c.text, counts: c.counts };
+}
+
+Object.assign(actions, {
+  public_candles: (s, b) => publicCandles(b),
+  public_candle_request: (s, b) => publicCandleRequest(b),
+  public_candle_status: (s, b) => publicCandleStatus(b),
+  candles_get: (s) => candlesGet(s),
+  candles_week: (s, b) => candlesWeek(s, b),
+  candles_mark: (s, b) => candlesMark(s, b),
+  candles_cancel: (s, b) => candlesCancel(s, b),
+  candles_set_settings: (s, b) => candlesSetSettings(s, b),
+  digest_set: (s, b) => digestSetSettings(s, b),
+  digest_send_now: (s) => digestSendNow(s),
+  digest_preview: (s) => digestPreview(s),
+});
+READ_ONLY_PUBLIC.add('public_candles');
