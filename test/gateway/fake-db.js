@@ -8,9 +8,11 @@ function createFakeDb(clock) {
   const T = (n) => (tables[n] = tables[n] || []);
   const joins = { ticket_blocks: 'block_id' };   // tickets.block_id -> ticket_blocks, for "ticket_blocks!inner(type)"
   const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']],
-    repository_weekends: [['org_id', 'weekend']], repository_items: [['org_id', 'sumup_variant_id']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
+    repository_weekends: [['org_id', 'weekend']], repository_items: [['org_id', 'sumup_variant_id']], listings: [['org_id', 'client_ref'], ['token']], listing_months: [['org_id', 'month']], listings_settings: [['org_id']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
   const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
     repository_items: () => ({ available: true, stock: null, sort: 0, featured: false }),
+    listings: () => ({ views: 0, contacts: 0, reports: 0, featured: false, images: [], description: '' }),
+    listings_settings: () => ({ enabled: false, intro_text: null, price_base: 3, price_per_extra_week: 1.5, price_per_image: 0.5 }),
     repository_settings: () => ({ enabled: false, slots: [], cutoff_weekday: 3, cutoff_time: '23:59', intro_text: null, next_ref: 1 }) };
   let seq = 0;
   const faults = [];   // { table, op, when? }: the next matching write fails once, so tests can see what the code does when the database refuses
@@ -224,13 +226,22 @@ function createFakeDb(clock) {
       Object.assign(o, { status: 'paid', cancel_reason: null, cancelled_at: null, paid_at: new Date(clock.now()).toISOString() });
       return { data: 'paid', error: null };
     }
+    if (name === 'listing_event') {   // once per visitor per day, as in the SQL function
+      const ev = T('listing_events');
+      if (ev.some(e => e.listing_id === a.p_listing && e.kind === a.p_kind && e.day === a.p_day && e.ip_hash === a.p_ip)) return { data: false, error: null };
+      ev.push({ listing_id: a.p_listing, kind: a.p_kind, day: a.p_day, ip_hash: a.p_ip });
+      const l = T('listings').find(x => x.id === a.p_listing);
+      if (l) { const k = { view: 'views', contact: 'contacts', report: 'reports' }[a.p_kind]; l[k] = (l[k] || 0) + 1; }
+      return { data: true, error: null };
+    }
     return { data: null, error: null };   // rate_reset, rate_prune
   };
 
   // Supabase Storage: only the upload the Repository uses; what was stored is kept in `uploads` so tests can look at it
   const uploads = [];
-  const storage = { from: (bucket) => ({ upload: async (path, buf, opts) => { uploads.push({ bucket, path, bytes: buf.length, opts }); return { data: { path }, error: null }; } }) };
-  return { client: { from: builder, rpc, storage }, tables, T, faults, uploads };
+  const removed = [];
+  const storage = { from: (bucket) => ({ upload: async (path, buf, opts) => { uploads.push({ bucket, path, bytes: buf.length, opts }); return { data: { path }, error: null }; }, remove: async (paths) => { removed.push(...paths); return { data: null, error: null }; } }) };
+  return { client: { from: builder, rpc, storage }, tables, T, faults, uploads, removed };
 }
 
 module.exports = { createFakeDb };

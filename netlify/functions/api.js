@@ -849,12 +849,14 @@ async function syncCheckout(payment) {
     await supabase.from('tickets').update({ status: 'paid' }).eq('payment_id', payment.id);
     await supabase.from('registrations').update({ status: 'submitted' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // a paid registration is now in
     await shopOrderPaid(payment);   // a Repository order for this payment is now paid (or is taken back if it had been given up)
+    await listingPaid(payment);     // a Listings fee: the listing now waits for the office to approve it
     return 'paid';
   }
   if ((data.status === 'FAILED' || data.status === 'EXPIRED') && payment.status === 'pending') {
     await supabase.from('payments').update({ status: 'failed' }).eq('id', payment.id);
     await supabase.from('registrations').update({ status: 'cancelled', decision_note: 'Payment not completed' }).eq('payment_id', payment.id).eq('status', 'awaiting_payment');   // the place goes back
     await shopOrderFailed(payment);   // a Repository order for this payment is cancelled and its stock goes back
+    await listingFailed(payment);     // a Listings fee that never came: the listing is cancelled
     // A PHYSICAL ticket stays 'held' — it's already in someone's hand, so it must never
     // quietly become resellable; only an explicit Admin Void does that. An ONLINE ticket was
     // never physically handed to anyone, so an unpaid one is simply released back to its series.
@@ -941,7 +943,7 @@ async function listCampaigns(session, { include_inactive } = {}) {
   }
   // Something to sell from only appears while it is actually open: not before its opening date, not after it closes.
   if (sellableOnly) visible = visible.filter(c => c.kind !== 'registration' && campaignOpenState(c) === 'open');
-  visible = visible.filter(c => !(c.form_def && c.form_def.shop));   // the Repository's hidden weekend campaigns are never listed
+  visible = visible.filter(c => !shopIsHiddenCampaign(c));   // the Repository's weekend campaigns and the Listings months are never listed
 
   return {
     campaigns: visible.map(c => ({
@@ -3498,7 +3500,7 @@ async function publicGateway({ slug }) {
   if (!org || !org.gateway_enabled) throw httpError(404, 'This page is not available.');
   const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London';
   const now = new Date(), today = gwToday(tz, now);
-  const [linksRes, annsRes, campsRes, itemsRes, orders, daily, shopRow] = await Promise.all([
+  const [linksRes, annsRes, campsRes, itemsRes, orders, daily, shopRow, listingsRow] = await Promise.all([
     supabase.from('gateway_links').select('position, label, sub, url').eq('org_id', org.id).order('position'),
     supabase.from('gateway_announcements').select('message, link_url, urgent, starts_at, ends_at, created_at').eq('org_id', org.id).lte('starts_at', now.toISOString()).order('created_at', { ascending: false }).limit(50),
     supabase.from('campaigns').select('id, name, kind, active, binned, is_draft, public_page_enabled, opens_on, closes_on, places, waiting_list, gateway_cta').eq('org_id', org.id).eq('listed_on_gateway', true).eq('binned', false),
@@ -3506,6 +3508,7 @@ async function publicGateway({ slug }) {
     gwOrders(org.id),
     gwDaily(org, today),
     shopSettings(org.id),
+    listingSettings(org.id),
   ]);
   const wording = GATEWAY_WORDING[GATEWAY_VERTICAL];
   const live = (annsRes.data || []).find(a => !a.ends_at || new Date(a.ends_at) > now);   // newest one that has started and not ended
@@ -3536,6 +3539,7 @@ async function publicGateway({ slug }) {
   return {
     org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null, whatsapp: org.gateway_whatsapp || null },
     daily,
+    listings: listingsRow && listingsRow.enabled ? { path: `/listings/${s}` } : null,   // the Listings shortcut, only while it is open
     shop: shopRow && shopRow.enabled ? { path: `/shop/${s}` } : null,   // the Repository: a shopping-bag shortcut on the page, only while it is open for orders
     links: (linksRes.data || []).map(l => ({ label: l.label, sub: l.sub || '', url: l.url })),
     announcement: live ? { message: live.message, link_url: live.link_url || null, urgent: !!live.urgent, ends_at: live.ends_at || null } : null,
@@ -3794,7 +3798,7 @@ READ_ONLY_PUBLIC.add('public_gateway');   // a pure look-up, so the flood check 
 const baseHandler = exports.handler;
 exports.handler = async (event) => {
   const res = await baseHandler(event);
-  if (res && res.statusCode === 200 && String(event.path || '').split('/').pop() === 'public_shop') {   // the shop window may be reused for half a minute; the order itself always checks the live stock
+  if (res && res.statusCode === 200 && ['public_shop', 'public_listings'].includes(String(event.path || '').split('/').pop())) {   // the shop window may be reused for half a minute; the order itself always checks the live stock
     res.headers = { ...res.headers, 'Cache-Control': 'public, max-age=30, stale-while-revalidate=120' };
   }
   if (res && res.statusCode === 200 && String(event.path || '').split('/').pop() === 'public_gateway') {
@@ -3820,7 +3824,7 @@ async function ledgerCheck(session, { campaign_id } = {}) {
   const scoped = campaign_id ? [campaign_id] : ids;
   if (!scoped.length) return { ok: true, problems: [], checked: { payments: 0, tickets: 0 } };
   const nameOf = Object.fromEntries((orgCampaigns || []).map(c => [c.id, c.name]));
-  const [payments, sold, tiersRes, blocksRes, regsRes, unsoldRes, shopOrdersRes] = await Promise.all([
+  const [payments, sold, tiersRes, blocksRes, regsRes, unsoldRes, shopOrdersRes, listingsRes] = await Promise.all([
     fetchAll(() => supabase.from('payments').select('id, campaign_id, method, status, amount, ticket_snapshot, sumup_transaction_code, created_at, attention_done_at').in('campaign_id', scoped).order('id')),
     fetchAll(() => supabase.from('tickets').select('id, campaign_id, block_id, ticket_number, status, payment_id').in('campaign_id', scoped).neq('status', 'unsold').order('id')),
     supabase.from('tiers').select('id, price').in('campaign_id', scoped),
@@ -3828,10 +3832,11 @@ async function ledgerCheck(session, { campaign_id } = {}) {
     supabase.from('registrations').select('payment_id').not('payment_id', 'is', null).in('campaign_id', scoped),
     supabase.from('tickets').select('id', { count: 'exact', head: true }).in('campaign_id', scoped).eq('status', 'unsold').not('payment_id', 'is', null),
     supabase.from('repository_orders').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
+    supabase.from('listings').select('payment_id').not('payment_id', 'is', null).eq('org_id', session.org_id),
   ]);
   const price = Object.fromEntries((tiersRes.data || []).map(t => [t.id, Number(t.price)]));
   const prefix = Object.fromEntries((blocksRes.data || []).map(b => [b.id, b.number_prefix || '']));
-  const regPay = new Set([...(regsRes.data || []), ...(shopOrdersRes.data || [])].map(r => r.payment_id));   // payments for a registration or a Repository order hold no tickets, on purpose
+  const regPay = new Set([...(regsRes.data || []), ...(shopOrdersRes.data || []), ...(listingsRes.data || [])].map(r => r.payment_id));   // payments for a registration or a Repository order hold no tickets, on purpose
   const byId = new Map(payments.map(p => [p.id, p]));
   const live = new Map();
   for (const t of sold) if (t.payment_id) { if (!live.has(t.payment_id)) live.set(t.payment_id, []); live.get(t.payment_id).push(t); }
@@ -4032,7 +4037,7 @@ async function shopWeekendCampaign(orgId, weekend) {
   }
   return c.id;
 }
-const shopIsHiddenCampaign = (c) => !!(c && c.form_def && c.form_def.shop);
+const shopIsHiddenCampaign = (c) => !!(c && c.form_def && (c.form_def.shop || c.form_def.listings));   // the Repository's weekend campaigns and the Listings months
 
 // ----- the public side
 async function shopOrgBySlug(slug) {
@@ -4619,3 +4624,415 @@ Object.assign(actions, {
   shop_order_cancel: (s, b) => shopOrderCancel(s, b),
 });
 READ_ONLY_PUBLIC.add('public_shop');
+
+// ---------- Listings (the parish classifieds) ----------
+// Parishioners offer goods or services (for sale, free, or a service) for 1 to 4 weeks. Everything is by email only: the lister's address is never
+// on the page; a visitor presses "Copy email address" and the address is handed over then (counted, and limited per visitor). The office approves
+// each listing before it appears, and the lister's days start from approval. A listing fee is suggested from its length and pictures; the lister may
+// choose either suggestion or "Other", including 0. A fee is an ordinary SumUp card payment (a row in `payments`, so refunds, the books check and
+// Needs Attention all work); each month has one hidden campaign to hold them. The church takes no part in any deal and checks nothing: the page says so.
+const LISTING_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const LISTING_CATEGORIES = ['Services & trades', 'Food & baking', 'Furniture & home', 'Clothes & children', 'Garden & outdoors', 'Other'];
+const LISTING_KINDS = { sell: 'For sale', free: 'Free to a good home', service: 'Service offered' };
+const LISTING_DAY_CHOICES = [7, 14, 21, 30], LISTING_MAX_IMAGES = 4, LISTING_MAX_FEE = 200, LISTING_DISCLAIMER_VERSION = 1;
+const LISTING_ACTIVE = ['awaiting_payment', 'pending_review', 'live'], LISTING_ENDED = ['rejected', 'withdrawn', 'removed', 'expired', 'cancelled'];
+const LISTING_DISCLAIMER = 'Listings are between parishioners. The church does not check, recommend or guarantee any listing, takes no payment from and has no part in any deal between the people involved, and is not responsible for the goods or services offered or their quality. Please check things for yourself, directly with the person who listed them.';
+const LISTING_AGREEMENT = 'I understand that the church does not check or guarantee my listing, takes no part in any deal and is not responsible for the goods or services offered. I have not put a phone number or email address in my listing.';
+const listingToken = () => crypto.randomBytes(16).toString('hex');
+const roundUpHalf = (n) => Math.ceil(n * 2 - 1e-9) / 2;
+
+async function listingSettings(orgId, { create } = {}) {
+  let { data } = await supabase.from('listings_settings').select('*').eq('org_id', orgId).maybeSingle();
+  if (!data && create) {
+    await supabase.from('listings_settings').upsert({ org_id: orgId }, { onConflict: 'org_id' });
+    ({ data } = await supabase.from('listings_settings').select('*').eq('org_id', orgId).maybeSingle());
+  }
+  return data || { org_id: orgId, enabled: false, intro_text: null, price_base: 3, price_per_extra_week: 1.5, price_per_image: 0.5 };
+}
+// The two suggested amounts for a listing of this length and number of pictures. The page never works these out itself: it reads this table.
+function listingQuote(st, days, images) {
+  const extraWeeks = Math.max(0, Math.round(days / 7) - 1);
+  const raw = Number(st.price_base) + extraWeeks * Number(st.price_per_extra_week) + images * Number(st.price_per_image);
+  const suggested = Math.min(LISTING_MAX_FEE, Math.max(0, roundUpHalf(raw)));
+  let supporter = Math.min(LISTING_MAX_FEE, roundUpHalf(suggested * 1.5));
+  if (supporter < suggested + 1) supporter = Math.min(LISTING_MAX_FEE, suggested + 1);
+  return { suggested, supporter };
+}
+function listingQuoteTable(st) {
+  const out = [];
+  for (const days of LISTING_DAY_CHOICES) for (let n = 0; n <= LISTING_MAX_IMAGES; n++) out.push({ days, images: n, ...listingQuote(st, days, n) });
+  return out;
+}
+const listingImageBase = () => `${String(process.env.SUPABASE_URL || '').replace(/\/$/, '')}/storage/v1/object/public/listings/`;
+
+// ----- what a lister may write: plain words. No email address, no phone number, no web address (they are how people get contacted or tricked)
+function listingBody(v, max, what, { min = 0, multiline = false } = {}) {
+  let s = String(v == null ? '' : v).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ');
+  s = multiline ? s.split('\n').map(l => l.replace(/[ \t]+/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim() : s.replace(/\s+/g, ' ').trim();
+  if (s.length < min) throw httpError(400, `${what} is too short (at least ${min} characters).`);
+  if (s.length > max) throw httpError(400, `${what} is too long (${max} characters at most).`);
+  return s;
+}
+function listingContactDetail(s) {   // true if the text holds an email address, a web address or a phone number
+  if (/[^\s@]+@[^\s@]+\.[^\s@]+/.test(s) || /(https?:\/\/|www\.)\S+/i.test(s)) return true;
+  for (const m of s.matchAll(/\+?\d[\d\s().-]{7,}\d/g)) if (m[0].replace(/\D/g, '').length >= 9) return true;
+  return false;
+}
+function listingCheckText(s, what) {
+  if (listingContactDetail(s)) throw httpError(400, `Please don't put phone numbers, email addresses or web links in ${what}. People contact you through the “Copy email address” button, so your email stays private.`);
+  return s;
+}
+function listingCheckImage(b64, maxBytes) {
+  const s = String(b64 == null ? '' : b64);
+  if (!s || s.length > Math.ceil(maxBytes * 1.4) + 8) throw httpError(400, 'A picture is too large.');
+  const buf = Buffer.from(s, 'base64');
+  if (!buf.length || buf.length > maxBytes) throw httpError(400, 'A picture is too large.');
+  const isWebp = buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  if (!isWebp && !isJpeg) throw httpError(400, 'Pictures must be WebP or JPEG.');
+  return { buf, ext: isWebp ? 'webp' : 'jpg', type: isWebp ? 'image/webp' : 'image/jpeg' };
+}
+async function listingMonthCampaign(orgId, today) {
+  const month = today.slice(0, 7);
+  const find = async () => { const { data } = await supabase.from('listing_months').select('campaign_id').eq('org_id', orgId).eq('month', month).maybeSingle(); return data ? data.campaign_id : null; };
+  const have = await find();
+  if (have) return have;
+  const [y, m] = month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const { data: c, error } = await supabase.from('campaigns').insert({
+    org_id: orgId, name: `Listings, ${label}`, kind: 'registration', age_restricted: false, public_only: false, public_page_enabled: false,
+    active: true, is_draft: false, listed_on_gateway: false, keep_until: shopAddDays(last, 75), form_def: { listings: true, month },
+  }).select().single();
+  if (error || !c) throw httpError(500, 'Could not start your listing — please try again.');
+  const { error: linkErr } = await supabase.from('listing_months').insert({ org_id: orgId, month, campaign_id: c.id });
+  if (linkErr) {
+    await supabase.from('campaigns').delete().eq('id', c.id);
+    const again = await find();
+    if (again) return again;
+    throw httpError(500, 'Could not start your listing — please try again.');
+  }
+  return c.id;
+}
+
+// ----- the public side
+async function listingOrgBySlug(slug) {
+  const s = String(slug == null ? '' : slug).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  if (!org) throw httpError(404, 'This page is not available.');
+  const settings = await listingSettings(org.id);
+  if (!settings.enabled) throw httpError(404, 'Listings are not open right now.');
+  return { org, settings, tz: gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London' };
+}
+const listingLive = (l, nowMs) => l.status === 'live' && l.ends_at && new Date(l.ends_at).getTime() > nowMs;
+const listingImg = (l, which) => ((Array.isArray(l.images) ? l.images : []).map(i => i[which]).filter(Boolean));
+function listingDaysLeft(l, nowMs) { return Math.max(0, Math.ceil((new Date(l.ends_at).getTime() - nowMs) / 864e5)); }
+// How high a listing sits: what the office pinned, how new it is, and how much people have looked at it and asked about it (per day it has been up, so a
+// new listing is not buried by an old one). It is not influenced by what was paid.
+function listingScore(l, nowMs) {
+  const age = Math.max(0, (nowMs - new Date(l.starts_at || l.created_at).getTime()) / 864e5);
+  const rate = ((l.views || 0) + 3 * (l.contacts || 0)) / (age + 2);
+  return (l.featured ? 6 : 0) + (age < 3 ? 5 : age < 7 ? 3 : age < 14 ? 1 : 0) + Math.log2(1 + rate * 7) * 2;
+}
+// Housekeeping, at most every half hour: listings whose time is up are marked ended; a listing that ended (or was refused or withdrawn) more than two
+// weeks ago loses its email address, text and pictures. Visitors' counted-once markers older than 90 days go.
+async function listingsSweep(orgId, now) {
+  const nowIso = now.toISOString();
+  await supabase.from('listings').update({ status: 'expired' }).eq('org_id', orgId).eq('status', 'live').lt('ends_at', nowIso);
+  const cut = new Date(now.getTime() - 14 * 864e5).toISOString();
+  const { data: old } = await supabase.from('listings').select('id, images, ends_at, reviewed_at, created_at').eq('org_id', orgId).in('status', LISTING_ENDED).is('purged_at', null).limit(60);
+  const due = (old || []).filter(l => String(l.ends_at || l.reviewed_at || l.created_at) < cut);
+  for (const l of due) {
+    const files = (Array.isArray(l.images) ? l.images : []).flatMap(i => [i.t, i.f]).filter(Boolean);
+    if (files.length) { try { await supabase.storage.from('listings').remove(files); } catch { /* the row is still cleared; a stray file is harmless */ } }
+    await supabase.from('listings').update({ email: null, display_name: null, description: '', images: [], purged_at: nowIso }).eq('id', l.id).eq('org_id', orgId);
+  }
+  await supabase.from('listing_events').delete().lt('day', new Date(now.getTime() - 90 * 864e5).toISOString().slice(0, 10));
+}
+async function publicListings({ slug }) {
+  const { org, settings, tz } = await listingOrgBySlug(slug);
+  const now = new Date(), nowMs = now.getTime();
+  try { if ((await rateHit(`lsweep:${org.id}`, 1800)) === 1) await listingsSweep(org.id, now); } catch { /* housekeeping only */ }
+  const { data: rows } = await supabase.from('listings').select('id, title, description, category, kind, price_text, display_name, images, featured, views, contacts, starts_at, ends_at, status, created_at').eq('org_id', org.id).eq('status', 'live').limit(500);
+  const live = (rows || []).filter(l => listingLive(l, nowMs)).map(l => ({ l, score: listingScore(l, nowMs), age: Math.max(0, (nowMs - new Date(l.starts_at || l.created_at).getTime()) / 864e5) }));
+  live.sort((a, b) => b.score - a.score || String(b.l.starts_at).localeCompare(String(a.l.starts_at)));
+  const card = (x) => ({ id: x.l.id, title: x.l.title, snippet: String(x.l.description || '').replace(/\s+/g, ' ').slice(0, 140), category: x.l.category, kind: x.l.kind, price: x.l.price_text || '', name: x.l.display_name || '',
+    thumb: listingImg(x.l, 't')[0] || null, pictures: listingImg(x.l, 't').length, is_new: x.age < 7, days_left: listingDaysLeft(x.l, nowMs), pick: !!x.l.featured });
+  const top = (list, n) => list.slice(0, n).map(x => x.l.id);
+  const shelves = [
+    { key: 'picks', title: 'Picked by the office', ids: top(live.filter(x => x.l.featured), 6) },
+    { key: 'new', title: 'Just added', ids: top(live.filter(x => x.age < 7).sort((a, b) => a.age - b.age), 8) },
+    { key: 'viewed', title: 'Most viewed', ids: top(live.filter(x => x.l.views >= 3).sort((a, b) => (b.l.views / (b.age + 2)) - (a.l.views / (a.age + 2))), 8) },
+    { key: 'contacted', title: 'Most asked about', ids: top(live.filter(x => x.l.contacts >= 1).sort((a, b) => (b.l.contacts / (b.age + 2)) - (a.l.contacts / (a.age + 2))), 8) },
+  ].filter(sh => sh.ids.length >= 2 || (sh.key === 'picks' && sh.ids.length));
+  const count = (f) => { const m = new Map(); for (const x of live) m.set(f(x.l), (m.get(f(x.l)) || 0) + 1); return m; };
+  const cats = count(l => l.category), kinds = count(l => l.kind);
+  return {
+    org: { name: org.display_name || org.name },
+    intro: settings.intro_text || null, disclaimer: LISTING_DISCLAIMER, agreement: LISTING_AGREEMENT, agreement_version: LISTING_DISCLAIMER_VERSION,
+    img_base: listingImageBase(),
+    categories: LISTING_CATEGORIES.map(c => ({ name: c, count: cats.get(c) || 0 })),
+    kinds: Object.entries(LISTING_KINDS).map(([k, label]) => ({ key: k, label, count: kinds.get(k) || 0 })),
+    shelves, listings: live.map(card),
+    new_listing: { max_images: LISTING_MAX_IMAGES, day_choices: LISTING_DAY_CHOICES, quotes: listingQuoteTable(settings), max_fee: LISTING_MAX_FEE },
+  };
+}
+async function listingForVisitor(slug, id) {
+  const { org, tz } = await listingOrgBySlug(slug);
+  if (!/^[0-9a-f-]{36}$/i.test(String(id || ''))) throw httpError(404, 'That listing is not available.');
+  const { data: l } = await supabase.from('listings').select('*').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!l || !listingLive(l, Date.now())) throw httpError(404, 'That listing is no longer available.');
+  return { org, tz, l };
+}
+const listingDay = (tz) => gwToday(tz, new Date());
+async function publicListingView({ slug, id }) {
+  const { tz, l } = await listingForVisitor(slug, id);
+  if (clientIp) { try { await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'view', p_day: listingDay(tz), p_ip: clientIp }); } catch { /* a missed count is harmless */ } }
+  return { id: l.id, title: l.title, description: l.description, category: l.category, kind: l.kind, price: l.price_text || '', name: l.display_name || '', images: listingImg(l, 'f'), thumbs: listingImg(l, 't'),
+    days_left: listingDaysLeft(l, Date.now()), ends_label: new Date(l.ends_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: tz }), disclaimer: LISTING_DISCLAIMER };
+}
+// The email address is only ever sent here, on a press of the button, to one visitor at a time (40 an hour), and the press is counted (once a day per visitor).
+async function publicListingContact({ slug, id }) {
+  if (clientIp && (await rateHit(`lcontact:${clientIp}`, 3600)) > 40) throw httpError(429, 'Too many requests from your connection — please try again later.');
+  const { tz, l } = await listingForVisitor(slug, id);
+  if (!l.email) throw httpError(404, 'That listing is no longer available.');
+  if (clientIp) { try { await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'contact', p_day: listingDay(tz), p_ip: clientIp }); } catch { /* a missed count is harmless */ } }
+  return { ok: true, email: l.email, subject: `Your listing: ${l.title}` };
+}
+async function publicListingReport({ slug, id, reason }) {
+  if (clientIp && (await rateHit(`lreport:${clientIp}`, 3600)) > 10) throw httpError(429, 'Too many reports from your connection — please try again later.');
+  const { tz, l } = await listingForVisitor(slug, id);
+  const why = listingBody(reason, 200, 'The reason', { min: 3 });
+  let counted = true;
+  if (clientIp) { const { data } = await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'report', p_day: listingDay(tz), p_ip: clientIp }); counted = data !== false; }
+  if (counted) await supabase.from('listing_reports').insert({ listing_id: l.id, reason: why });
+  return { ok: true };
+}
+
+async function publicListingCreate(b) {
+  if (b.website) return { ok: true, token: null, status: 'pending_review' };   // the hidden spam-trap box was filled in: pretend, store nothing
+  if (clientIp && (await rateHit(`lnew:${clientIp}`, 86400)) > 8) throw httpError(429, 'Too many listings from your connection today — please try again tomorrow.');
+  const { org, settings, tz } = await listingOrgBySlug(b.slug);
+  const client_ref = cleanClientRef(b.client_ref);
+  if (client_ref) {   // a lost reply and a second tap must not list twice
+    const { data: again } = await supabase.from('listings').select('id, token, status, fee, payment_id').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+    if (again) {
+      const { data: pay } = again.payment_id ? await supabase.from('payments').select('link_url').eq('id', again.payment_id).maybeSingle() : { data: null };
+      return { ok: true, token: again.token, status: again.status, fee: Number(again.fee), pay_url: again.status === 'awaiting_payment' && pay ? pay.link_url : null, replay: true };
+    }
+  }
+  if (b.agree !== true) throw httpError(400, 'Please tick the box to say you understand the church does not check or guarantee listings.');
+  const title = listingCheckText(listingBody(b.title, 70, 'The title', { min: 5 }), 'the title');
+  const description = listingCheckText(listingBody(b.description, 1200, 'The description', { min: 20, multiline: true }), 'the description');
+  const priceText = b.price_text ? listingCheckText(listingBody(b.price_text, 40, 'The price'), 'the price') : '';
+  const displayName = b.display_name ? listingCheckText(listingBody(b.display_name, 40, 'Your name'), 'your name') : '';
+  if (!LISTING_CATEGORIES.includes(b.category)) throw httpError(400, 'Please choose a category.');
+  if (!LISTING_KINDS[b.kind]) throw httpError(400, 'Please say whether it is for sale, free, or a service.');
+  const days = Number(b.days);
+  if (!Number.isInteger(days) || days < 7 || days > 30) throw httpError(400, 'A listing runs for 1 to 4 weeks (7 to 30 days).');
+  if (b.email === undefined || !String(b.email).trim()) throw httpError(400, 'Please give your email address. It is how people reach you, and it is never shown on the page.');
+  const email = validateRegEmail(b.email, 'your email address');
+  const images = Array.isArray(b.images) ? b.images : [];
+  if (images.length > LISTING_MAX_IMAGES) throw httpError(400, `Up to ${LISTING_MAX_IMAGES} pictures, please.`);
+  const prepared = images.map(i => ({ t: listingCheckImage(i && i.t, 40000), f: listingCheckImage(i && i.f, 150000) }));
+  const amount = Math.round(Number(b.amount) * 100) / 100;
+  if (b.amount === undefined || b.amount === null || b.amount === '' || !Number.isFinite(amount) || amount < 0 || amount > LISTING_MAX_FEE) throw httpError(400, `Please choose what you would like to give for your listing (£0 to £${LISTING_MAX_FEE}). £0 is fine.`);
+  const { count: open } = await supabase.from('listings').select('id', { count: 'exact', head: true }).eq('org_id', org.id).eq('email', email).in('status', LISTING_ACTIVE);
+  if ((open || 0) >= 3) throw httpError(409, 'You already have three listings open with this email address. Please wait for one to finish, or withdraw one.');
+
+  const today = gwToday(tz, new Date()), token = listingToken();
+  let payment = null;
+  if (amount > 0) {
+    await enforcePublicPurchaseLimits(email, 1);
+    const campaignId = await listingMonthCampaign(org.id, today);
+    const { data: pay, error: payErr } = await supabase.from('payments').insert({ campaign_id: campaignId, method: 'link', amount, status: 'pending', seller_id: null, payer_name: displayName || 'Listing', contact_value: email, client_ip: clientIp || null }).select().single();
+    if (payErr) throw httpError(500, 'Could not start your payment — please try again.');
+    payment = pay;
+  }
+  const voidPayment = (why) => (payment ? supabase.from('payments').update({ status: 'void', voided: true, void_reason: why }).eq('id', payment.id) : null);
+  const { data: row, error } = await supabase.from('listings').insert({
+    org_id: org.id, token, title, description, category: b.category, kind: b.kind, price_text: priceText || null, display_name: displayName || null, email, days,
+    status: amount > 0 ? 'awaiting_payment' : 'pending_review', fee: amount, payment_id: payment ? payment.id : null, agreed_version: LISTING_DISCLAIMER_VERSION, agreed_at: new Date().toISOString(), client_ref,
+  }).select().single();
+  if (error || !row) {
+    await voidPayment('listing not saved');
+    if (error && error.code === '23505' && client_ref) {
+      const { data: again } = await supabase.from('listings').select('token, status, fee').eq('org_id', org.id).eq('client_ref', client_ref).maybeSingle();
+      if (again) return { ok: true, token: again.token, status: again.status, fee: Number(again.fee), replay: true };
+    }
+    throw httpError(500, 'Could not save your listing — please try again.');
+  }
+  const stored = [];
+  const undo = async () => { try { if (stored.length) await supabase.storage.from('listings').remove(stored); } catch { /* stray files are harmless */ } await supabase.from('listings').delete().eq('id', row.id); await voidPayment('listing not saved'); };
+  const paths = [];
+  for (let n = 0; n < prepared.length; n++) {
+    const t = `${org.id}/${row.id}/${n}-t.${prepared[n].t.ext}`, f = `${org.id}/${row.id}/${n}-f.${prepared[n].f.ext}`;
+    for (const [p, im] of [[t, prepared[n].t], [f, prepared[n].f]]) {
+      const { error: upErr } = await supabase.storage.from('listings').upload(p, im.buf, { contentType: im.type, upsert: true, cacheControl: '31536000' });
+      if (upErr) { await undo(); throw httpError(500, 'Could not store your pictures — please try again.'); }
+      stored.push(p);
+    }
+    paths.push({ t, f });
+  }
+  if (paths.length) await supabase.from('listings').update({ images: paths }).eq('id', row.id);
+  if (!payment) return { ok: true, token, status: 'pending_review', fee: 0 };
+  const created = await createSumupCheckout({ payment_id: payment.id, refSuffix: '', amount, campaignName: 'Listings', ticketNumbers: [row.id.slice(0, 6).toUpperCase()],
+    description: `Listing: ${title.slice(0, 50)}`, redirectUrl: `${baseUrl}/listings.html?manage=${token}` });
+  if (!created.ok) { await undo(); throw httpError(502, created.message); }
+  await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', payment.id);
+  return { ok: true, token, status: 'awaiting_payment', fee: amount, pay_url: created.pay_url };
+}
+// The lister's own page (reached by their private link): where the listing stands, how people have responded, and a way to take it down.
+async function listingByToken(token) {
+  if (!/^[0-9a-f]{32}$/.test(String(token || ''))) throw httpError(404, 'We could not find that listing.');
+  const { data: l } = await supabase.from('listings').select('*').eq('token', token).maybeSingle();
+  if (!l) throw httpError(404, 'We could not find that listing.');
+  return l;
+}
+async function publicListingManage({ token }) {
+  let l = await listingByToken(token);
+  let pay = null;
+  if (l.payment_id) {
+    ({ data: pay } = await supabase.from('payments').select('*').eq('id', l.payment_id).maybeSingle());
+    if (pay && l.status === 'awaiting_payment') { try { await syncCheckout(pay); } catch { /* SumUp unreachable: show what we know */ } l = await listingByToken(token); }
+  }
+  const { data: org } = await supabase.from('organizations').select('name, display_name, slug, contact_email, timezone').eq('id', l.org_id).maybeSingle();
+  const tz = org && gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London', nowMs = Date.now();
+  const status = l.status === 'live' && !listingLive(l, nowMs) ? 'expired' : l.status;
+  const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: tz }) : '');
+  return { title: l.title, status, category: l.category, kind: l.kind, price: l.price_text || '', days: l.days, fee: Number(l.fee), review_note: l.review_note || '', views: l.views, contacts: l.contacts,
+    starts: day(l.starts_at), ends: day(l.ends_at), days_left: status === 'live' ? listingDaysLeft(l, nowMs) : null, thumbs: listingImg(l, 't'), img_base: listingImageBase(),
+    pay_url: status === 'awaiting_payment' && pay ? pay.link_url : null, can_withdraw: LISTING_ACTIVE.includes(status),
+    org_name: org ? (org.display_name || org.name) : '', org_slug: org ? org.slug : null, org_contact_email: org ? org.contact_email : null };
+}
+async function publicListingWithdraw({ token }) {
+  const l = await listingByToken(token);
+  if (!LISTING_ACTIVE.includes(l.status)) throw httpError(400, 'This listing has already ended.');
+  await supabase.from('listings').update({ status: 'withdrawn', review_note: l.review_note }).eq('id', l.id);
+  return { ok: true };
+}
+
+// ----- what happens to a listing when its fee is settled (called from syncCheckout; never allowed to break a payment check)
+async function listingPaid(payment) {
+  try {
+    const { data: l } = await supabase.from('listings').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (l && (l.status === 'awaiting_payment' || l.status === 'cancelled')) await supabase.from('listings').update({ status: 'pending_review', review_note: null }).eq('id', l.id);
+  } catch { /* the payment itself is already recorded; the office can see the listing */ }
+}
+async function listingFailed(payment) {
+  try {
+    const { data: l } = await supabase.from('listings').select('id, status').eq('payment_id', payment.id).maybeSingle();
+    if (l && l.status === 'awaiting_payment') await supabase.from('listings').update({ status: 'cancelled', review_note: 'Payment not completed' }).eq('id', l.id);
+  } catch { /* the sweep will try again */ }
+}
+
+// ----- the office side (Admin, SuperAdmin, Finance, Priest)
+async function listingsOrg(session) {
+  requireOrgRole(session, LISTING_ROLES);
+  const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone').eq('id', session.org_id).maybeSingle();
+  if (!org) throw httpError(404, 'Organisation not found');
+  if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
+  return org;
+}
+async function listingsGet(session) {
+  const org = await listingsOrg(session), settings = await listingSettings(org.id, { create: true });
+  try { await listingsSweep(org.id, new Date()); } catch { /* housekeeping only */ }
+  const { data: all } = await supabase.from('listings').select('*').eq('org_id', org.id).limit(1000);
+  const rows = all || [], nowMs = Date.now();
+  const payIds = rows.map(r => r.payment_id).filter(Boolean);
+  const { data: pays } = payIds.length ? await supabase.from('payments').select('id, status, amount, refund_amount').in('id', payIds) : { data: [] };
+  const payOf = new Map((pays || []).map(p => [p.id, p]));
+  const url = (p) => (p ? `${listingImageBase()}${p}` : null);
+  const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: org.timezone }) : '');
+  const shape = (l) => { const p = payOf.get(l.payment_id); return { id: l.id, title: l.title, description: l.description, category: l.category, kind: l.kind, price: l.price_text || '', name: l.display_name || '', email: l.email || '', days: l.days, fee: Number(l.fee),
+    paid: !!p && p.status === 'paid', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, payment_id: l.payment_id, status: l.status, featured: !!l.featured, views: l.views, contacts: l.contacts, reports: l.reports,
+    thumbs: listingImg(l, 't').map(url), images: listingImg(l, 'f').map(url), created: day(l.created_at), starts: day(l.starts_at), ends: day(l.ends_at), days_left: listingLive(l, nowMs) ? listingDaysLeft(l, nowMs) : null, review_note: l.review_note || '' }; };
+  const ids = rows.filter(r => r.reports > 0 && r.status === 'live').map(r => r.id);
+  const { data: reps } = ids.length ? await supabase.from('listing_reports').select('listing_id, reason').in('listing_id', ids) : { data: [] };
+  const reasons = new Map();
+  for (const r of reps || []) { if (!reasons.has(r.listing_id)) reasons.set(r.listing_id, []); reasons.get(r.listing_id).push(r.reason); }
+  const by = (st) => rows.filter(r => r.status === st);
+  return {
+    org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/listings/${org.slug}` : null },
+    settings: { enabled: !!settings.enabled, intro_text: settings.intro_text || '', price_base: Number(settings.price_base), price_per_extra_week: Number(settings.price_per_extra_week), price_per_image: Number(settings.price_per_image) },
+    quotes: listingQuoteTable(settings), disclaimer: LISTING_DISCLAIMER,
+    waiting: by('pending_review').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map(shape),
+    live: rows.filter(r => listingLive(r, nowMs)).sort((a, b) => listingScore(b, nowMs) - listingScore(a, nowMs)).map(l => ({ ...shape(l), reasons: reasons.get(l.id) || [] })),
+    ended: rows.filter(r => LISTING_ENDED.includes(r.status) || (r.status === 'live' && !listingLive(r, nowMs))).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 20).map(shape),
+    counts: { waiting: by('pending_review').length, live: rows.filter(r => listingLive(r, nowMs)).length, reported: rows.filter(r => listingLive(r, nowMs) && r.reports > 0).length },
+  };
+}
+async function listingsOne(session, id) {
+  const org = await listingsOrg(session);
+  const { data: l } = await supabase.from('listings').select('*').eq('id', id).eq('org_id', org.id).maybeSingle();
+  if (!l) throw httpError(404, 'Listing not found');
+  return { org, l };
+}
+async function listingsReview(session, { id, decision, note, refund_amount, refund_note }) {
+  const { l } = await listingsOne(session, id);
+  if (l.status !== 'pending_review') throw httpError(400, l.status === 'awaiting_payment' ? 'This listing has not been paid for yet.' : 'This listing has already been dealt with.');
+  const nowMs = Date.now();
+  if (decision === 'approve') {
+    await supabase.from('listings').update({ status: 'live', starts_at: new Date(nowMs).toISOString(), ends_at: new Date(nowMs + l.days * 864e5).toISOString(), reviewed_at: new Date(nowMs).toISOString(), review_note: null }).eq('id', l.id);
+    return { ok: true, status: 'live' };
+  }
+  if (decision !== 'reject') throw httpError(400, 'Choose approve or reject.');
+  const why = listingBody(note, 300, 'The reason', { min: 3 });
+  let refunded = null;
+  if (refund_amount !== undefined && refund_amount !== null && refund_amount !== '') {
+    if (!l.payment_id || !(Number(l.fee) > 0)) throw httpError(400, 'This listing had no fee, so there is nothing to refund.');
+    refunded = (await recordRefund(session, { payment_id: l.payment_id, amount: refund_amount, note: refund_note || `Listing "${l.title}" not accepted: ${why}` })).refund_amount;
+  }
+  await supabase.from('listings').update({ status: 'rejected', review_note: why, reviewed_at: new Date(nowMs).toISOString() }).eq('id', l.id);
+  return { ok: true, status: 'rejected', refunded };
+}
+async function listingsTakedown(session, { id, note }) {
+  const { l } = await listingsOne(session, id);
+  if (!listingLive(l, Date.now())) throw httpError(400, 'This listing is not live.');
+  await supabase.from('listings').update({ status: 'removed', review_note: listingBody(note, 300, 'The reason', { min: 3 }), reviewed_at: new Date().toISOString() }).eq('id', l.id);
+  return { ok: true };
+}
+async function listingsSetFeatured(session, { id, featured }) {
+  const { l } = await listingsOne(session, id);
+  await supabase.from('listings').update({ featured: !!featured }).eq('id', l.id);
+  return { ok: true };
+}
+async function listingsDismissReports(session, { id }) {
+  const { l } = await listingsOne(session, id);
+  await supabase.from('listing_reports').delete().eq('listing_id', l.id);
+  await supabase.from('listings').update({ reports: 0 }).eq('id', l.id);
+  return { ok: true };
+}
+async function listingsSetSettings(session, b) {
+  const org = await listingsOrg(session), patch = { updated_at: new Date().toISOString() };
+  const num = (v, max, what) => { const n = Math.round(Number(v) * 100) / 100; if (!Number.isFinite(n) || n < 0 || n > max) throw httpError(400, `${what} must be between £0 and £${max}.`); return n; };
+  if (b.intro_text !== undefined) patch.intro_text = gwText(b.intro_text, 300, 'The welcome line') || null;
+  if (b.price_base !== undefined) patch.price_base = num(b.price_base, 50, 'The starting price');
+  if (b.price_per_extra_week !== undefined) patch.price_per_extra_week = num(b.price_per_extra_week, 50, 'The price per extra week');
+  if (b.price_per_image !== undefined) patch.price_per_image = num(b.price_per_image, 20, 'The price per picture');
+  if (b.enabled !== undefined) {
+    if (b.enabled && !org.slug) throw httpError(400, 'Give the parish page an address first (Admin → Parish page).');
+    patch.enabled = !!b.enabled;
+  }
+  await listingSettings(org.id, { create: true });
+  const { error } = await supabase.from('listings_settings').update(patch).eq('org_id', org.id);
+  if (error) throw httpError(400, error.message);
+  return { ok: true };
+}
+
+Object.assign(actions, {
+  public_listings: (s, b) => publicListings(b),
+  public_listing_view: (s, b) => publicListingView(b),
+  public_listing_contact: (s, b) => publicListingContact(b),
+  public_listing_report: (s, b) => publicListingReport(b),
+  public_listing_create: (s, b) => publicListingCreate(b),
+  public_listing_manage: (s, b) => publicListingManage(b),
+  public_listing_withdraw: (s, b) => publicListingWithdraw(b),
+  listings_get: (s) => listingsGet(s),
+  listings_review: (s, b) => listingsReview(s, b),
+  listings_takedown: (s, b) => listingsTakedown(s, b),
+  listings_set_featured: (s, b) => listingsSetFeatured(s, b),
+  listings_dismiss_reports: (s, b) => listingsDismissReports(s, b),
+  listings_set_settings: (s, b) => listingsSetSettings(s, b),
+});
+READ_ONLY_PUBLIC.add('public_listings');
