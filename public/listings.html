@@ -122,6 +122,12 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
 .small { font-size:.9375rem; color:var(--muted); margin:0; }
 .acts { display:flex; flex-wrap:wrap; gap:10px; }
 .acts .btn { flex:1 1 11rem; }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.hc { display:inline-flex; align-items:center; gap:3px; font-size:.9375rem; font-weight:700; color:var(--bad); }
+.hc svg { fill:currentColor; }
+.btn.heartbtn svg { fill:none; }
+.btn.heartbtn[aria-pressed="true"] { color:var(--bad); border-color:var(--bad); }
+.btn.heartbtn[aria-pressed="true"] svg { fill:currentColor; }
 .reportbox { display:grid; gap:8px; padding:10px; border:2px solid var(--line); border-radius:12px; }
 
 /* forms */
@@ -189,7 +195,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function gbp(n) { return '£' + (Math.round(Number(n) * 100) / 100).toFixed(2).replace(/\.00$/, ''); }
   function ico(d, s) { return '<svg width="' + (s || 24) + '" height="' + (s || 24) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
-  var I = { back: '<path d="M15 6l-6 6 6 6"/>', plus: '<path d="M12 6v12M6 12h12"/>', search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>', close: '<path d="M6 6l12 12M18 6 6 18"/>', flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  var I = { heart: '<path d="M12 20.5s-7.5-4.6-9.2-9.3C1.6 7.8 3.8 4.5 7 4.5c2 0 3.5 1.1 5 3 1.5-1.9 3-3 5-3 3.2 0 5.4 3.3 4.2 6.7-1.7 4.7-9.2 9.3-9.2 9.3z"/>', back: '<path d="M15 6l-6 6 6 6"/>', plus: '<path d="M12 6v12M6 12h12"/>', search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>', close: '<path d="M6 6l12 12M18 6 6 18"/>', flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
     copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>', mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>', link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
     tag: '<path d="M3 12V4h8l10 10-8 8L3 12Z"/><circle cx="7.5" cy="8.5" r="1.2"/>', gift: '<rect x="3" y="9" width="18" height="12" rx="1"/><path d="M12 9v12M3 13h18M12 9c-3 0-5-1-5-3s3-3 5 0c2-3 5-3 5-0s-2 3-5 3Z"/>', tools: '<path d="M14.7 6.3a4 4 0 0 0-5 5L3 18l3 3 6.7-6.7a4 4 0 0 0 5-5l-2.5 2.5-2.4-.6-.6-2.4 2.5-2.5Z"/>', camera: '<path d="M4 8h3l2-2.5h6L17 8h3v11H4V8Z"/><circle cx="12" cy="13" r="3.5"/>' };
   var toastEl = $('toast'), tt;
@@ -235,7 +241,8 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
   // ---- browsing
   function kindIcon(k) { return k === 'free' ? I.gift : k === 'service' ? I.tools : I.tag; }
   function pic(l, size, eager) { var src = imgUrl(l.thumb); return '<span class="pic' + (size > 80 ? ' big' : '') + '">' + ico(kindIcon(l.kind), Math.round(size / 2.6)) + (src ? '<img src="' + esc(src) + '" alt="" width="' + size + '" height="' + size + '" decoding="async"' + (eager ? '' : ' loading="lazy"') + '>' : '') + '</span>'; }
-  function tags(l) { return (l.is_new ? '<span class="tag new">New</span>' : '') + (l.kind === 'free' ? '<span class="tag free">Free</span>' : (l.kind === 'service' ? '<span class="tag">Service</span>' : '')); }
+  function hc(l) { return l.hearts ? '<span class="hc" title="' + l.hearts + (l.hearts === 1 ? ' heart' : ' hearts') + '">' + ico(I.heart, 15) + l.hearts + '<span class="sr"> ' + (l.hearts === 1 ? 'heart' : 'hearts') + '</span></span>' : ''; }
+  function tags(l) { return hc(l) + (l.is_new ? '<span class="tag new">New</span>' : '') + (l.kind === 'free' ? '<span class="tag free">Free</span>' : (l.kind === 'service' ? '<span class="tag">Service</span>' : '')); }
   function row(l, eager) {
     return '<button type="button" class="item" data-open="' + esc(l.id) + '" aria-label="' + esc(l.title) + '">' + pic(l, 72, eager) + '<span><b class="tt">' + esc(l.title) + '</b>' + (l.snippet ? '<p>' + esc(l.snippet) + '</p>' : '') + '<span class="meta">' + (l.price ? '<span class="price">' + esc(l.price) + '</span>' : '') + tags(l) + '<span class="small">' + esc(l.category) + '</span></span></span></button>';
   }
@@ -278,6 +285,25 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
 
   // ---- one listing, opened
   var detail = null, lastFocus = null, reporting = false;
+  // Hearts: one tap to like a listing, tap again to take it back. Which ones this device has hearted is kept on the device; the count comes from the server.
+  function likedKey() { return 'lst_hearts_' + slug; }
+  function likedSet() { try { var o = {}; (JSON.parse(localStorage.getItem(likedKey()) || '[]') || []).forEach(function (id) { o[id] = true; }); return o; } catch (e) { return {}; } }
+  function saveLiked(o) { try { localStorage.setItem(likedKey(), JSON.stringify(Object.keys(o).filter(function (k) { return o[k]; }))); } catch (e) { /* private window: not remembered */ } }
+  function heartBtnHtml(d) {
+    var on = !!likedSet()[d.id], n = d.hearts || 0;
+    return '<button class="btn heartbtn" type="button" id="heartBtn" data-heart aria-pressed="' + (on ? 'true' : 'false') + '">' + ico(I.heart, 20) + (on ? 'Hearted' : 'Heart this') + (n ? ' · ' + n : '') + '</button>';
+  }
+  function toggleHeart() {
+    if (!detail) return;
+    var id = detail.id, set = likedSet(), on = !set[id], before = { on: !!set[id], n: detail.hearts || 0 }, card = (data.listings || []).filter(function (l) { return l.id === id; })[0];
+    function paint() { var b = $('heartBtn'); if (b) b.outerHTML = heartBtnHtml(detail); var nb = $('heartBtn'); if (nb) { try { nb.focus({ preventScroll: true }); } catch (x) { nb.focus(); } } }
+    heartsChanged = true; set[id] = on; saveLiked(set); detail.hearts = Math.max(0, (detail.hearts || 0) + (on ? 1 : -1)); if (card) card.hearts = detail.hearts; paint();
+    say(on ? '♥ Hearted. Thank you!' : 'Heart taken back');
+    fetch('/api/public_heart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, kind: 'listing', id: id, on: on }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (r) { if (r.ok && typeof r.d.hearts === 'number') { if (detail && detail.id === id) { detail.hearts = r.d.hearts; paint(); } if (card) card.hearts = r.d.hearts; } else throw new Error(r.d && r.d.error || W.failedHelp); })
+      .catch(function (e) { var s2 = likedSet(); s2[id] = before.on; saveLiked(s2); if (detail && detail.id === id) { detail.hearts = before.n; paint(); } if (card) card.hearts = before.n; say(e && e.message ? e.message : W.failedHelp); });
+  }
   function sheetHtml(d) {
     var imgs = (d.images || []).map(function (p, i) { return '<img src="' + esc(imgUrl(p)) + '" alt="' + esc(d.title + ', picture ' + (i + 1)) + '" decoding="async"' + (i ? ' loading="lazy"' : '') + '>'; }).join('');
     return '<div class="sheet" id="sheet" data-sheetbg><div class="sheet-card" id="sheetCard" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1">' +
@@ -286,6 +312,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
       '<div class="meta">' + (d.price ? '<span class="price" style="font-size:1.2rem">' + esc(d.price) + '</span>' : '') + '<span class="tag' + (d.kind === 'free' ? ' free' : '') + '">' + esc(W.kindLabel[d.kind]) + '</span><span class="small">' + esc(d.category) + '</span></div>' +
       '<p class="desc">' + esc(d.description) + '</p>' +
       '<p class="small">' + (d.name ? esc(W.byName(d.name)) + ' · ' : '') + esc(W.daysLeft(d.days_left)) + ' (to ' + esc(d.ends_label) + ')</p>' +
+      '<div class="acts">' + heartBtnHtml(d) + '</div>' +
       '<div class="acts"><button class="btn solid" type="button" data-copyemail>' + ico(I.copy, 20) + esc(W.copyEmail) + '</button><button class="btn" type="button" data-mailto>' + ico(I.mail, 20) + esc(W.writeEmail) + '</button></div>' +
       '<p class="small">Their email address is not shown on this page. Pressing a button gives it to you so you can write to them yourself. Please check anything with them directly before you agree to it: the church does not check listings, takes no part in any deal and is not responsible for the goods or services.</p>' +
       (reporting ? '<div class="reportbox"><label for="rpWhy" class="lbl">What is wrong with this listing?</label><textarea id="rpWhy" rows="3" maxlength="200" style="width:100%;border:2px solid var(--line);border-radius:12px;padding:10px;background:var(--surface);font:inherit"></textarea><div class="acts"><button class="btn danger" type="button" data-sendreport>Send report</button><button class="btn" type="button" data-cancelreport>Cancel</button></div></div>' :
@@ -300,7 +327,8 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
         detail = r.d; detail.id = id; $('sheetHost').innerHTML = sheetHtml(detail); document.body.style.overflow = 'hidden'; $('sheetCard').focus();
       }).catch(function () { say(W.failedHelp); });
   }
-  function closeSheet() { if ($('invite')) return; $('sheetHost').innerHTML = ''; document.body.style.overflow = ''; detail = null; reporting = false; if (lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) { /* gone */ } } }
+  var heartsChanged = false;
+  function closeSheet() { if ($('invite')) return; $('sheetHost').innerHTML = ''; if (heartsChanged) { heartsChanged = false; if ($('list')) drawList(); } document.body.style.overflow = ''; detail = null; reporting = false; if (lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) { /* gone */ } } }
   function contactCall() { return fetch('/api/public_listing_contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, id: detail.id }) }).then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || W.failed); return d; }); }); }
   // The address goes to the clipboard and is never drawn on the page. (Phones only allow a copy right after a press, so the copy is promised before the reply arrives.)
   function copyEmail() {
@@ -464,6 +492,7 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
     if (t.closest('[data-invite-add]')) { closeInvite(true); return; }
     if (t.closest('[data-invite-close]') || t.id === 'invite') { closeInvite(false); return; }
     if (t.closest('[data-close]') || t.id === 'sheet') { closeSheet(); return; }
+    if (t.closest('[data-heart]')) { toggleHeart(); return; }
     if (t.closest('[data-copyemail]')) { copyEmail(); return; }
     if (t.closest('[data-mailto]')) { writeEmail(); return; }
     if (t.closest('[data-report]')) { reporting = true; $('sheetHost').innerHTML = sheetHtml(detail); var rw = $('rpWhy'); if (rw) rw.focus(); return; }

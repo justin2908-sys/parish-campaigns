@@ -10,8 +10,8 @@ function createFakeDb(clock) {
   const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']],
     repository_weekends: [['org_id', 'weekend']], repository_items: [['org_id', 'sumup_variant_id']], listings: [['org_id', 'client_ref'], ['token']], listing_months: [['org_id', 'month']], listings_settings: [['org_id']], candle_months: [['org_id', 'month']], candle_settings: [['org_id']], weekly_digest: [['org_id']], candle_requests: [['org_id', 'ref_no'], ['org_id', 'client_ref']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
   const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
-    repository_items: () => ({ available: true, stock: null, sort: 0, featured: false }),
-    listings: () => ({ views: 0, contacts: 0, reports: 0, featured: false, images: [], description: '' }),
+    repository_items: () => ({ available: true, stock: null, sort: 0, featured: false, hearts: 0 }),
+    listings: () => ({ views: 0, contacts: 0, reports: 0, hearts: 0, featured: false, images: [], description: '' }),
     candle_settings: () => ({ enabled: false, altars: [{ id: 'mary', name: 'Altar of Our Lady', active: true }, { id: 'anthony', name: 'Altar of St Anthony of Padua', active: true }], intro_text: null, cutoff_weekday: 3, cutoff_time: '23:59', next_ref: 1 }),
     weekly_digest: () => ({ enabled: false, to_email: null, last_week_start: null, last_sent_at: null, last_status: null, last_note: null, last_attempt_at: null }),
     listings_settings: () => ({ enabled: false, intro_text: null, price_base: 3, price_per_extra_week: 1.5, price_per_image: 0.5 }),
@@ -240,6 +240,16 @@ function createFakeDb(clock) {
       const l = T('listings').find(x => x.id === a.p_listing);
       if (l) { const k = { view: 'views', contact: 'contacts', report: 'reports' }[a.p_kind]; l[k] = (l[k] || 0) + 1; }
       return { data: true, error: null };
+    }
+    if (name === 'heart_set') {   // one per visitor per thing, can be taken back; the stored count is recounted, as in the SQL function
+      const H = T('hearts');
+      const same = (h) => h.kind === a.p_kind && h.target_id === a.p_target;
+      if (a.p_on) { if (!H.some(h => same(h) && h.ip_hash === a.p_ip)) H.push({ kind: a.p_kind, target_id: a.p_target, ip_hash: a.p_ip, created_at: new Date(clock.now()).toISOString() }); }
+      else { const keep = H.filter(h => !(same(h) && h.ip_hash === a.p_ip)); H.length = 0; H.push(...keep); }
+      const n = H.filter(same).length;
+      const row = T(a.p_kind === 'listing' ? 'listings' : 'repository_items').find(x => x.id === a.p_target);
+      if (row) row.hearts = n;
+      return { data: n, error: null };
     }
     return { data: null, error: null };   // rate_reset, rate_prune
   };

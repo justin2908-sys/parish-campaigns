@@ -4065,7 +4065,7 @@ async function publicShop({ slug }) {
   const { org, settings, tz } = await shopOrgBySlug(slug);
   const now = new Date(), today = gwToday(tz, now);
   const [{ data: items }, units] = await Promise.all([
-    supabase.from('repository_items').select('id, name, description, category, price, stock, sort, featured, added_at, image_path').eq('org_id', org.id).eq('available', true),
+    supabase.from('repository_items').select('id, name, description, category, price, stock, sort, featured, added_at, image_path, hearts').eq('org_id', org.id).eq('available', true),
     shopPopularity(org.id, now),
   ]);
   const newSince = new Date(now.getTime() - 14 * 864e5).toISOString();
@@ -4073,7 +4073,7 @@ async function publicShop({ slug }) {
   const hasOlder = !!oldest && oldest < newSince;   // the very first import is not "new": only items that arrive in a later sync are
   const scored = (items || []).map(i => {
     const out = i.stock === 0, season = shopSeason(i.category, today), pop = units.get(i.id) || 0, isNew = hasOlder && !!i.added_at && i.added_at >= newSince;
-    return { i, out, season, pop, isNew, score: (out ? -100 : 0) + (i.featured ? 6 : 0) + (season ? season.boost : 0) + Math.log2(1 + pop) * 3 + (isNew ? 1 : 0) };
+    return { i, out, season, pop, isNew, score: (out ? -100 : 0) + (i.featured ? 6 : 0) + (season ? season.boost : 0) + Math.log2(1 + pop) * 3 + heartBoost(i.hearts) + (isNew ? 1 : 0) };
   });
   const catSeason = new Map();   // a category is "in season" if any rule matches it today
   for (const s of scored) if (s.season && !catSeason.has(s.i.category || '')) catSeason.set(s.i.category || '', s.season);
@@ -4089,6 +4089,7 @@ async function publicShop({ slug }) {
   const shelves = [
     { key: 'picks', title: 'Our picks', ids: top(byScore(live.filter(s => s.i.featured)), 10) },
     { key: 'season', title: seasonLabel ? `In season: ${seasonLabel.label}` : 'In season', ids: top(byScore(live.filter(s => s.season)), 10) },
+    { key: 'loved', title: 'Parish favourites', ids: top(byScore(live.filter(s => (s.i.hearts || 0) >= HEART_SHELF_MIN)).sort((a, b) => b.i.hearts - a.i.hearts), 8) },
     { key: 'popular', title: 'Popular right now', ids: top(byScore(live.filter(s => s.pop > 0)).sort((a, b) => b.pop - a.pop), 8) },
     { key: 'new', title: 'New in', ids: top(byScore(live.filter(s => s.isNew)), 8) },
   ].filter(sh => sh.ids.length >= 2 || (sh.key === 'picks' && sh.ids.length));
@@ -4100,7 +4101,7 @@ async function publicShop({ slug }) {
     categories: cats.map(c => ({ name: c, count: catCount.get(c), season: catSeason.has(c) })),
     shelves,
     items: scored.map(s => ({ id: s.i.id, name: s.i.name, description: s.i.description || '', category: s.i.category || '', price: Number(s.i.price), img: s.i.image_path || null,
-      sold_out: s.out, left: s.i.stock !== null && s.i.stock !== undefined && s.i.stock > 0 && s.i.stock <= 5 ? s.i.stock : null })),
+      sold_out: s.out, left: s.i.stock !== null && s.i.stock !== undefined && s.i.stock > 0 && s.i.stock <= 5 ? s.i.stock : null, hearts: s.i.hearts || 0 })),
     options: shopOptions(settings, tz, now).map(o => ({ key: o.key, label: o.label, weekend: o.weekend })),
   };
 }
@@ -4238,7 +4239,7 @@ async function shopOrgOfSession(session) {
   return org;
 }
 function shopItemShape(i) { return { id: i.id, name: i.name, description: i.description || '', category: i.category || '', sku: i.sku || '', barcode: i.barcode || '', price: Number(i.price), stock: i.stock === undefined ? null : i.stock, available: i.available !== false,
-  featured: !!i.featured, image: shopImageUrl(i.image_path), has_picture: !!i.image_src, from_sumup: !!i.sumup_variant_id }; }
+  featured: !!i.featured, image: shopImageUrl(i.image_path), has_picture: !!i.image_src, from_sumup: !!i.sumup_variant_id, hearts: i.hearts || 0 }; }
 async function shopGet(session) {
   const org = await shopOrgOfSession(session);
   const settings = await shopSettings(org.id, { create: true });
@@ -4283,6 +4284,7 @@ async function shopItemDelete(session, { id }) {
   const { data: old } = await supabase.from('repository_items').select('id').eq('id', id).eq('org_id', org.id).maybeSingle();
   if (!old) throw httpError(404, 'Item not found');
   await supabase.from('repository_items').delete().eq('id', old.id).eq('org_id', org.id);   // past orders keep the item's name and price
+  await supabase.from('hearts').delete().eq('kind', 'item').eq('target_id', old.id);
   return { ok: true };
 }
 async function shopItemSetAvailable(session, { id, available }) {
@@ -4744,8 +4746,11 @@ function listingDaysLeft(l, nowMs) { return Math.max(0, Math.ceil((new Date(l.en
 function listingScore(l, nowMs) {
   const age = Math.max(0, (nowMs - new Date(l.starts_at || l.created_at).getTime()) / 864e5);
   const rate = ((l.views || 0) + 3 * (l.contacts || 0)) / (age + 2);
-  return (l.featured ? 6 : 0) + (age < 3 ? 5 : age < 7 ? 3 : age < 14 ? 1 : 0) + Math.log2(1 + rate * 7) * 2;
+  return (l.featured ? 6 : 0) + (age < 3 ? 5 : age < 7 ? 3 : age < 14 ? 1 : 0) + Math.log2(1 + rate * 7) * 2 + heartBoost(l.hearts);
 }
+// Hearts are a small, capped nudge (never more than 4 points, against 6 for an office pick and 5 for being brand new), so a few friends cannot take over the page.
+function heartBoost(n) { return Math.min(4, Math.log2(1 + Math.max(0, Number(n) || 0)) * 1.5); }
+const HEART_SHELF_MIN = 3;   // a "loved" shelf appears once something has this many hearts
 // Housekeeping, at most every half hour: listings whose time is up are marked ended; a listing that ended (or was refused or withdrawn) more than two
 // weeks ago loses its email address, text and pictures. Visitors' counted-once markers older than 90 days go.
 async function listingsSweep(orgId, now) {
@@ -4760,19 +4765,21 @@ async function listingsSweep(orgId, now) {
     await supabase.from('listings').update({ email: null, display_name: null, description: '', images: [], purged_at: nowIso }).eq('id', l.id).eq('org_id', orgId);
   }
   await supabase.from('listing_events').delete().lt('day', new Date(now.getTime() - 90 * 864e5).toISOString().slice(0, 10));
+  await supabase.from('hearts').delete().lt('created_at', new Date(now.getTime() - 180 * 864e5).toISOString());   // who hearted what is not kept for ever (the running count stays)
 }
 async function publicListings({ slug }) {
   const { org, settings, tz } = await listingOrgBySlug(slug);
   const now = new Date(), nowMs = now.getTime();
   try { if ((await rateHit(`lsweep:${org.id}`, 1800)) === 1) await listingsSweep(org.id, now); } catch { /* housekeeping only */ }
-  const { data: rows } = await supabase.from('listings').select('id, title, description, category, kind, price_text, display_name, images, featured, views, contacts, starts_at, ends_at, status, created_at').eq('org_id', org.id).eq('status', 'live').limit(500);
+  const { data: rows } = await supabase.from('listings').select('id, title, description, category, kind, price_text, display_name, images, featured, views, contacts, hearts, starts_at, ends_at, status, created_at').eq('org_id', org.id).eq('status', 'live').limit(500);
   const live = (rows || []).filter(l => listingLive(l, nowMs)).map(l => ({ l, score: listingScore(l, nowMs), age: Math.max(0, (nowMs - new Date(l.starts_at || l.created_at).getTime()) / 864e5) }));
   live.sort((a, b) => b.score - a.score || String(b.l.starts_at).localeCompare(String(a.l.starts_at)));
   const card = (x) => ({ id: x.l.id, title: x.l.title, snippet: String(x.l.description || '').replace(/\s+/g, ' ').slice(0, 140), category: x.l.category, kind: x.l.kind, price: x.l.price_text || '', name: x.l.display_name || '',
-    thumb: listingImg(x.l, 't')[0] || null, pictures: listingImg(x.l, 't').length, is_new: x.age < 7, days_left: listingDaysLeft(x.l, nowMs), pick: !!x.l.featured });
+    thumb: listingImg(x.l, 't')[0] || null, pictures: listingImg(x.l, 't').length, is_new: x.age < 7, days_left: listingDaysLeft(x.l, nowMs), pick: !!x.l.featured, hearts: x.l.hearts || 0 });
   const top = (list, n) => list.slice(0, n).map(x => x.l.id);
   const shelves = [
     { key: 'picks', title: 'Picked by the office', ids: top(live.filter(x => x.l.featured), 6) },
+    { key: 'loved', title: 'Loved by the parish', ids: top(live.filter(x => (x.l.hearts || 0) >= HEART_SHELF_MIN).sort((a, b) => (b.l.hearts - a.l.hearts) || (b.score - a.score)), 8) },
     { key: 'new', title: 'Just added', ids: top(live.filter(x => x.age < 7).sort((a, b) => a.age - b.age), 8) },
     { key: 'viewed', title: 'Most viewed', ids: top(live.filter(x => x.l.views >= 3).sort((a, b) => (b.l.views / (b.age + 2)) - (a.l.views / (a.age + 2))), 8) },
     { key: 'contacted', title: 'Most asked about', ids: top(live.filter(x => x.l.contacts >= 1).sort((a, b) => (b.l.contacts / (b.age + 2)) - (a.l.contacts / (a.age + 2))), 8) },
@@ -4800,7 +4807,7 @@ const listingDay = (tz) => gwToday(tz, new Date());
 async function publicListingView({ slug, id }) {
   const { tz, l } = await listingForVisitor(slug, id);
   if (clientIp) { try { await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'view', p_day: listingDay(tz), p_ip: clientIp }); } catch { /* a missed count is harmless */ } }
-  return { id: l.id, title: l.title, description: l.description, category: l.category, kind: l.kind, price: l.price_text || '', name: l.display_name || '', images: listingImg(l, 'f'), thumbs: listingImg(l, 't'),
+  return { id: l.id, title: l.title, description: l.description, category: l.category, kind: l.kind, price: l.price_text || '', name: l.display_name || '', hearts: l.hearts || 0, images: listingImg(l, 'f'), thumbs: listingImg(l, 't'),
     days_left: listingDaysLeft(l, Date.now()), ends_label: new Date(l.ends_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: tz }), disclaimer: LISTING_DISCLAIMER };
 }
 // The email address is only ever sent here, on a press of the button, to one visitor at a time (40 an hour), and the press is counted (once a day per visitor).
@@ -4810,6 +4817,27 @@ async function publicListingContact({ slug, id }) {
   if (!l.email) throw httpError(404, 'That listing is no longer available.');
   if (clientIp) { try { await supabase.rpc('listing_event', { p_listing: l.id, p_kind: 'contact', p_day: listingDay(tz), p_ip: clientIp }); } catch { /* a missed count is harmless */ } }
   return { ok: true, email: l.email, subject: `Your listing: ${l.title}` };
+}
+// A heart on a listing or a Repository item: one per visitor per thing (the visitor is a scrambled address), and it can be taken back. Returns the new count.
+// Several people on one wifi share one heart: that is the price of needing no sign-in, and it keeps the count honest rather than easy to inflate.
+async function publicHeart({ slug, kind, id, on }) {
+  if (!['listing', 'item'].includes(kind)) throw httpError(400, 'Something went wrong. Please try again.');
+  if (!/^[0-9a-f-]{36}$/i.test(String(id || ''))) throw httpError(404, 'That is no longer available.');
+  if (!clientIp) throw httpError(400, 'We could not record your heart just now. Please try again.');
+  if ((await rateHit(`heart:${clientIp}`, 3600)) > 120) throw httpError(429, 'Too many hearts from your connection — please try again later.');
+  let targetId;
+  if (kind === 'listing') {
+    const { l } = await listingForVisitor(slug, id);
+    targetId = l.id;
+  } else {
+    const { org } = await shopOrgBySlug(slug);
+    const { data: it } = await supabase.from('repository_items').select('id').eq('id', id).eq('org_id', org.id).eq('available', true).maybeSingle();
+    if (!it) throw httpError(404, 'That is no longer available.');
+    targetId = it.id;
+  }
+  const { data, error } = await supabase.rpc('heart_set', { p_kind: kind, p_target: targetId, p_ip: clientIp, p_on: on !== false });
+  if (error) throw httpError(500, 'We could not record your heart just now. Please try again.');
+  return { ok: true, hearts: Number(data) || 0, on: on !== false };
 }
 async function publicListingReport({ slug, id, reason }) {
   if (clientIp && (await rateHit(`lreport:${clientIp}`, 3600)) > 10) throw httpError(429, 'Too many reports from your connection — please try again later.');
@@ -4960,7 +4988,7 @@ async function listingsGet(session) {
   const url = (p) => (p ? `${listingImageBase()}${p}` : null);
   const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: org.timezone }) : '');
   const shape = (l) => { const p = payOf.get(l.payment_id); return { id: l.id, title: l.title, description: l.description, category: l.category, kind: l.kind, price: l.price_text || '', name: l.display_name || '', email: l.email || '', days: l.days, fee: Number(l.fee),
-    paid: !!p && p.status === 'paid', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, payment_id: l.payment_id, status: l.status, featured: !!l.featured, views: l.views, contacts: l.contacts, reports: l.reports,
+    paid: !!p && p.status === 'paid', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, payment_id: l.payment_id, status: l.status, featured: !!l.featured, views: l.views, contacts: l.contacts, hearts: l.hearts || 0, reports: l.reports,
     thumbs: listingImg(l, 't').map(url), images: listingImg(l, 'f').map(url), created: day(l.created_at), starts: day(l.starts_at), ends: day(l.ends_at), days_left: listingLive(l, nowMs) ? listingDaysLeft(l, nowMs) : null, review_note: l.review_note || '' }; };
   const ids = rows.filter(r => r.reports > 0 && r.status === 'live').map(r => r.id);
   const { data: reps } = ids.length ? await supabase.from('listing_reports').select('listing_id, reason').in('listing_id', ids) : { data: [] };
@@ -5040,6 +5068,7 @@ Object.assign(actions, {
   public_listing_view: (s, b) => publicListingView(b),
   public_listing_contact: (s, b) => publicListingContact(b),
   public_listing_report: (s, b) => publicListingReport(b),
+  public_heart: (s, b) => publicHeart(b),
   public_listing_create: (s, b) => publicListingCreate(b),
   public_listing_manage: (s, b) => publicListingManage(b),
   public_listing_withdraw: (s, b) => publicListingWithdraw(b),

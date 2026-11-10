@@ -355,7 +355,7 @@ test('Ending, and what is shown first', async (t) => {
     const r = await list();
     assert.match(r.headers['Cache-Control'], /max-age=30/);
     assert.ok(r.raw.length < 20000, 'the window is ' + r.raw.length + ' bytes');
-    assert.deepEqual(Object.keys(r.body.listings[0]).sort(), ['category', 'days_left', 'id', 'is_new', 'kind', 'name', 'pick', 'pictures', 'price', 'snippet', 'thumb', 'title']);
+    assert.deepEqual(Object.keys(r.body.listings[0]).sort(), ['category', 'days_left', 'hearts', 'id', 'is_new', 'kind', 'name', 'pick', 'pictures', 'price', 'snippet', 'thumb', 'title']);
   });
 });
 

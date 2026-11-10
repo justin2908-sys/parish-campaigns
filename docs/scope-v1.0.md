@@ -1599,3 +1599,17 @@ Parishioners can ask for a candle to be lit for them at one of the church's cand
 **One header for every parish-page service:** Repository, Listings and Candles share a compact header: name, an Open/Closed switch, one line about it, Copy link and View the page, and an (i) button that unfolds the long explanation. Their screens (Orders/Items/Mass times, Waiting/Live/Ended/Settings, Requests/Settings/Thursday email) are a single-row segmented control. **Campaigns tab:** the campaigns list and "+ New Campaign" come first; Church details, SumUp connection and Add a series are folded away below.
 
 Tests: `test/gateway/ui-admin-nav.js` (new: every role, 390 and 360 px, one-row tabs, 44 px targets), plus the updated `ui-check.js` bell checks.
+
+## 66. Hearts on Listings and the Repository — 2026-11-12 (on dev; preview only)
+
+**Why:** a way for visitors to say what they like, which also gives the ordering a small, honest signal. Positive-only (a heart, not stars or reviews): nothing public can embarrass a parishioner, nothing needs moderating, and a handful of votes cannot mislead.
+
+**What visitors see:** every Repository item has a small heart beside its price; in Listings the heart is on the listing's detail sheet ("Heart this" / "Hearted · 3") and each card shows the count. One tap hearts, another tap takes it back, and a message says so. This phone remembers what it has hearted. No sign-in.
+
+**Counting:** one heart per visitor per thing, using the same scrambled visitor marker as view counts (never a readable address). People on one wifi share a heart; that is the price of needing no sign-in. A flood from one connection is stopped (120 an hour). The who-hearted-what records are cleared after 180 days; the count stays.
+
+**Ordering:** hearts are a capped nudge (at most 4 points). An office "Pick" is worth 6, being brand new 5, and for the Repository a real sale counts for more than hearts. A fee never buys position. A "Loved by the parish" shelf (Listings) and "Parish favourites" shelf (Repository) appear once something has 3 hearts and there are at least two such things.
+
+**Office:** the heart count shows on each Listings row and as a chip on each Repository item.
+
+**Server:** public `public_heart` (kind `listing` or `item`, `on` true/false); migration `20261112000000_hearts.sql` (additive: a `hearts` count on `listings` and `repository_items`, one table, one function, explicit grants, row security on). Tests: `test/gateway/hearts.test.js` (15) plus heart checks in `ui-shop.js` and `ui-listings.js`.
