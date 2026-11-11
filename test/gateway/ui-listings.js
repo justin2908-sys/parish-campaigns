@@ -26,7 +26,7 @@ const server = http.createServer((req, res) => {
     if (u.pathname === '/api/sell_screen') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ campaigns: [], organization: {}, campaign_id: null, stats: null })); req.resume(); return; }
     let body = ''; req.on('data', c => { body += c; });
     req.on('end', async () => {
-      const r = await api.handler({ httpMethod: 'POST', path: u.pathname, headers: { host: req.headers.host, 'x-nf-client-connection-ip': '10.1.1.' + (1 + Math.floor(Math.random() * 200)) }, body });
+      const r = await api.handler({ httpMethod: 'POST', path: u.pathname, headers: { host: req.headers.host, 'x-nf-client-connection-ip': u.pathname === '/api/public_heart' ? '10.9.9.9' : '10.1.1.' + (1 + Math.floor(Math.random() * 200)) }, body });
       res.writeHead(r.statusCode, r.headers); res.end(r.body);
     });
     return;
@@ -204,6 +204,22 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('a report says thank you, and is kept for the office', /office will look/.test(await toastText()) && T('listing_reports').length === 1);
   await click('[data-close]'); await sleep(200);
   check('closing the sheet returns to the list', await ev(`!document.getElementById('sheetCard')`));
+
+  // ---- hearts: one tap to like, tap again to take it back, remembered on this device, and shown on the card
+  await ev(`document.querySelector('[data-open="${chairs}"]').click(); 'ok'`); await waitFor(`document.getElementById('heartBtn')`);
+  const hb = await ev(`(() => { const b = document.getElementById('heartBtn'), r = b.getBoundingClientRect(); return { p: b.getAttribute('aria-pressed'), h: Math.round(r.height), t: b.textContent.trim() }; })()`);
+  check('the listing has a "Heart this" button, 44px or taller, not pressed', hb.p === 'false' && hb.h >= 44 && hb.t === 'Heart this', JSON.stringify(hb));
+  await click('#heartBtn');
+  check('pressing it says "Hearted · 1" and thanks them', await waitFor(`document.getElementById('heartBtn').textContent.trim() === 'Hearted · 1' && document.getElementById('heartBtn').getAttribute('aria-pressed') === 'true'`) && /Hearted/.test(await toastText()), JSON.stringify(await toastText()));
+  check('the server counted it once', T('listings').find(l => l.id === chairs).hearts === 1 && T('hearts').length === 1);
+  await click('[data-close]'); await sleep(200);
+  check('the card in the list now shows the heart count', await ev(`!!document.querySelector('.item[data-open="${chairs}"] .hc') && /1/.test(document.querySelector('.item[data-open="${chairs}"] .hc').textContent)`));
+  await ev(`document.querySelector('[data-open="${chairs}"]').click(); 'ok'`); await waitFor(`document.getElementById('heartBtn')`);
+  check('opened again, the heart is still filled (remembered on this phone)', await ev(`document.getElementById('heartBtn').getAttribute('aria-pressed') === 'true'`));
+  await click('#heartBtn');
+  check('pressing again takes it back, with a message', await waitFor(`document.getElementById('heartBtn').textContent.trim() === 'Heart this'`) && /taken back/.test(await toastText()), JSON.stringify(await toastText()));
+  check('and the server count is back to nothing', T('hearts').length === 0 && T('listings').find(l => l.id === chairs).hearts === 0);
+  await click('[data-close]'); await sleep(200);
 
   // ---- making a listing
   await open(base + '/listings/svp-osterley#new', "document.getElementById('fTitle')"); await sleep(300);

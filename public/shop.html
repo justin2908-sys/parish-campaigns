@@ -92,6 +92,11 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
 .item { grid-template-columns:72px minmax(0,1fr) auto; }
 .item .inf { min-width:0; }
 .item .qs, .tile .qs { display:flex; align-items:center; justify-content:flex-end; min-height:48px; }
+.heart { display:inline-flex; align-items:center; justify-content:center; gap:4px; min-width:44px; min-height:44px; margin:-10px -6px -10px 0; padding:0 8px; border:0; border-radius:999px; background:transparent; color:var(--muted); font-weight:700; font-size:.9375rem; }
+.heart svg { fill:none; transition:transform .15s; }
+.heart[aria-pressed="true"] { color:var(--bad); }
+.heart[aria-pressed="true"] svg { fill:currentColor; transform:scale(1.1); }
+.tile .heart { margin:-10px 0; }
 .plus.add { width:48px; height:48px; border-radius:50%; border:0; background:var(--brand); color:#fff; display:grid; place-items:center; padding:0; }
 .shelfh { margin:14px 0 6px; font-family:var(--font-display); font-weight:600; font-size:1.15rem; }
 .rail { display:flex; gap:10px; overflow-x:auto; scroll-snap-type:x proximity; padding:2px 2px 10px; margin:0 -2px; -webkit-overflow-scrolling:touch; }
@@ -179,6 +184,7 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
   function gbp(n) { return '£' + (Math.round(Number(n) * 100) / 100).toFixed(2); }
   function ico(d, s) { return '<svg width="' + (s || 24) + '" height="' + (s || 24) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
   var I = { back: '<path d="M15 6l-6 6 6 6"/>', minus: '<path d="M6 12h12"/>', plus: '<path d="M12 6v12M6 12h12"/>', copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>', link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+    heart: '<path d="M12 20.5s-7.5-4.6-9.2-9.3C1.6 7.8 3.8 4.5 7 4.5c2 0 3.5 1.1 5 3 1.5-1.9 3-3 5-3 3.2 0 5.4 3.3 4.2 6.7-1.7 4.7-9.2 9.3-9.2 9.3z"/>',
     bag: '<path d="M6 8h12l1.2 12H4.8L6 8Z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>', search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>', close: '<path d="M6 6l12 12M18 6 6 18"/>' };
   var toastEl = $('toast'), tt;
   function say(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(tt); tt = setTimeout(function () { toastEl.classList.remove('on'); }, 2600); }
@@ -268,6 +274,28 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
     return '<span class="pic' + (size > 80 ? ' big' : '') + '">' + ico(I.bag, Math.round(size / 2.6)) + (src ? '<img src="' + esc(src) + '" alt="" width="' + size + '" height="' + size + '" decoding="async"' + (eager ? '' : ' loading="lazy"') + '>' : '') + '</span>';
   }
   function tagOf(i) { return i.sold_out ? '<span class="tag out">' + esc(W.soldOut) + '</span>' : (i.left !== null ? '<span class="tag">' + esc(W.onlyLeft(i.left)) + '</span>' : ''); }
+  // Hearts: one tap to like an item, tap again to take it back. Which items this device has hearted is kept on the device; the count comes from the server.
+  var liked = {};
+  function likedKey() { return 'shop_hearts_' + slug; }
+  function loadLiked() { try { (JSON.parse(localStorage.getItem(likedKey()) || '[]') || []).forEach(function (id) { liked[id] = true; }); } catch (e) { /* private window: hearts are simply not remembered */ } }
+  function saveLiked() { try { localStorage.setItem(likedKey(), JSON.stringify(Object.keys(liked).filter(function (k) { return liked[k]; }))); } catch (e) { /* fine */ } }
+  function heartLabel(i) { return (liked[i.id] ? 'Hearted: ' : 'Heart: ') + i.name + (i.hearts ? ' (' + i.hearts + (i.hearts === 1 ? ' heart)' : ' hearts)') : ''); }
+  function heartBtn(i) { return '<button type="button" class="heart" data-heart="' + esc(i.id) + '" aria-pressed="' + (liked[i.id] ? 'true' : 'false') + '" aria-label="' + esc(heartLabel(i)) + '">' + ico(I.heart, 20) + (i.hearts ? '<span class="hn">' + i.hearts + '</span>' : '') + '</button>'; }
+  function paintHearts(id) {
+    var it = byId[id]; if (!it) return;
+    document.querySelectorAll('[data-heart="' + id + '"]').forEach(function (b) { b.outerHTML = heartBtn(it); });
+  }
+  function refocusHeart(id) { var b = document.querySelector('[data-heart="' + id + '"]'); if (b) { try { b.focus({ preventScroll: true }); } catch (x) { b.focus(); } } }
+  function toggleHeart(id) {
+    var it = byId[id]; if (!it) return;
+    var on = !liked[id], before = { liked: !!liked[id], hearts: it.hearts || 0 };
+    liked[id] = on; it.hearts = Math.max(0, (it.hearts || 0) + (on ? 1 : -1)); saveLiked(); paintHearts(id); refocusHeart(id);
+    say(on ? '♥ Hearted: ' + it.name : 'Heart taken back');
+    fetch('/api/public_heart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, kind: 'item', id: id, on: on }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (r) { if (r.ok && typeof r.d.hearts === 'number') { it.hearts = r.d.hearts; paintHearts(id); } else throw new Error(r.d && r.d.error || W.failedHelp); })
+      .catch(function (e) { liked[id] = before.liked; it.hearts = before.hearts; saveLiked(); paintHearts(id); say(e && e.message ? e.message : W.failedHelp); });
+  }
   function ctl(i) {   // nothing chosen: one round "+" ; something chosen: the stepper
     if (i.sold_out) return '';
     var n = qty[i.id] || 0, limit = i.left !== null ? Math.min(20, i.left) : 20, id = esc(i.id);
@@ -275,10 +303,10 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
     return '<div class="qty" role="group" aria-label="Quantity of ' + esc(i.name) + '"><button type="button" data-dec="' + id + '" aria-label="One fewer ' + esc(i.name) + '">' + ico(I.minus) + '</button><output aria-live="polite">' + n + '</output><button type="button" class="plus" data-inc="' + id + '" aria-label="One more ' + esc(i.name) + '"' + (n >= limit ? ' disabled' : '') + '>' + ico(I.plus) + '</button></div>';
   }
   function row(i, showCat, eager) {
-    return '<div class="item" data-item="' + esc(i.id) + '">' + pic(i, 72, eager) + '<div class="inf"><h3>' + esc(i.name) + '</h3>' + (i.description ? '<p>' + esc(i.description) + '</p>' : '') + (showCat && i.category ? '<p>' + esc(i.category) + '</p>' : '') + '<div class="meta"><span class="price">' + gbp(i.price) + '</span>' + tagOf(i) + '</div></div><div class="qs" data-slot>' + ctl(i) + '</div></div>';
+    return '<div class="item" data-item="' + esc(i.id) + '">' + pic(i, 72, eager) + '<div class="inf"><h3>' + esc(i.name) + '</h3>' + (i.description ? '<p>' + esc(i.description) + '</p>' : '') + (showCat && i.category ? '<p>' + esc(i.category) + '</p>' : '') + '<div class="meta"><span class="price">' + gbp(i.price) + '</span>' + tagOf(i) + heartBtn(i) + '</div></div><div class="qs" data-slot>' + ctl(i) + '</div></div>';
   }
   function tile(i, eager) {
-    return '<div class="tile" data-item="' + esc(i.id) + '">' + pic(i, 112, eager) + '<b class="tn">' + esc(i.name) + '</b><div class="meta"><span class="price">' + gbp(i.price) + '</span>' + tagOf(i) + '</div><div class="qs" data-slot>' + ctl(i) + '</div></div>';
+    return '<div class="tile" data-item="' + esc(i.id) + '">' + pic(i, 112, eager) + '<b class="tn">' + esc(i.name) + '</b><div class="meta"><span class="price">' + gbp(i.price) + '</span>' + tagOf(i) + heartBtn(i) + '</div><div class="qs" data-slot>' + ctl(i) + '</div></div>';
   }
   function shelvesHtml() {
     return (data.shelves || []).map(function (s, n) {
@@ -411,6 +439,7 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
 
   document.addEventListener('click', function (e) {
     var t = e.target, b;
+    if ((b = t.closest('[data-heart]'))) { toggleHeart(b.getAttribute('data-heart')); return; }
     if ((b = t.closest('[data-inc]'))) { var id = b.getAttribute('data-inc'), box = b.closest('[data-item]'); setQty(id, (qty[id] || 0) + 1); keepFocus(box, '[data-inc]'); return; }
     if ((b = t.closest('[data-dec]'))) { var id2 = b.getAttribute('data-dec'), box2 = b.closest('[data-item]'); setQty(id2, (qty[id2] || 0) - 1); keepFocus(box2, (qty[id2] ? '[data-dec]' : '[data-inc]')); return; }
     if ((b = t.closest('[data-cat]'))) { catSel = b.getAttribute('data-cat'); q = ''; var si = $('fSearch'); if (si) si.value = ''; drawList(); var top = $('chips'); if (top && top.scrollIntoView) top.scrollIntoView({ block: 'nearest' }); return; }
@@ -442,7 +471,7 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
     }
     if (!r) { status(W.failed, W.failedHelp, true, slug); return; }
     if (r.status === 404) { status(W.closed, W.closedHelp, false, slug); return; }
-    if (r.ok && r.d && r.d.items) { data = r.d; prep(); loadBasket(); document.title = W.title + ' · ' + data.org.name; render(); return; }
+    if (r.ok && r.d && r.d.items) { data = r.d; prep(); loadLiked(); loadBasket(); document.title = W.title + ' · ' + data.org.name; render(); return; }
     status(W.failed, W.failedHelp, true, slug);
   }
   function start() {

@@ -27,7 +27,7 @@ const server = http.createServer((req, res) => {
     if (u.pathname === '/api/sell_screen') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ campaigns: [], organization: {}, campaign_id: null, stats: null })); req.resume(); return; }
     let body = ''; req.on('data', c => { body += c; });
     req.on('end', async () => {
-      const r = await api.handler({ httpMethod: 'POST', path: u.pathname, headers: { host: req.headers.host, 'x-nf-client-connection-ip': '10.1.1.' + (1 + Math.floor(Math.random() * 200)) }, body });
+      const r = await api.handler({ httpMethod: 'POST', path: u.pathname, headers: { host: req.headers.host, 'x-nf-client-connection-ip': u.pathname === '/api/public_heart' ? '10.9.9.9' : '10.1.1.' + (1 + Math.floor(Math.random() * 200)) }, body });
       res.writeHead(r.statusCode, r.headers); res.end(r.body);
     });
     return;
@@ -129,6 +129,20 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
   check('the welcome line and the Wednesday-midnight cut-off are shown, with this and next weekend\'s Masses', /Collect your order/.test(first.intro) && /Wednesday midnight/.test(first.cut) && first.opts.length === 6 && /^Saturday \d+ \w+, 6 pm — Vigil Mass$/.test(first.opts[0]), JSON.stringify(first.opts.slice(0, 2)));
   check('nothing chosen yet: the pay button is off and says so', first.payDisabled && /Choose something/.test(first.payLabel));
   await shot('shop-390-light-empty');
+
+  // ---- hearts: one tap to like, tap again to take it back, remembered on this device
+  const h0 = await ev(`(() => { const b = document.querySelector('.item .heart'); const r = b && b.getBoundingClientRect(); return b && { pressed: b.getAttribute('aria-pressed'), w: r.width, h: r.height, label: b.getAttribute('aria-label'), count: !!b.querySelector('.hn') }; })()`);
+  check('every item has a heart button (44px or larger, named for screen readers), not pressed and with no count yet', h0 && h0.pressed === 'false' && h0.w >= 44 && h0.h >= 44 && /^Heart: /.test(h0.label) && !h0.count, JSON.stringify(h0));
+  const heartedName = await ev(`document.querySelector('.item h3').textContent`);
+  await ev(`document.querySelector('.item .heart').click(); 'ok'`);
+  check('pressing it fills the heart, shows 1, and says it was hearted', await waitFor(`document.querySelector('.item .heart[aria-pressed="true"] .hn') && document.querySelector('.item .heart .hn').textContent === '1'`) && /Hearted/.test(await toastText()), JSON.stringify(await toastText()));
+  check('the server counted it once', db.T('repository_items').filter(i => i.hearts === 1).length === 1 && db.T('hearts').length === 1);
+  await open(base + '/shop/svp-osterley', "document.querySelector('.item')");
+  check('after leaving and coming back the heart is still filled (remembered on this phone)', await ev(`document.querySelector('.item .heart').getAttribute('aria-pressed') === 'true'`));
+  await ev(`document.querySelector('.item .heart').click(); 'ok'`);
+  check('pressing again takes it back, with a message', await waitFor(`document.querySelector('.item .heart[aria-pressed="false"]') && !document.querySelector('.item .heart .hn')`) && /taken back/.test(await toastText()), JSON.stringify(await toastText()));
+  check('and the server count is back to nothing', db.T('hearts').length === 0 && db.T('repository_items').every(i => !i.hearts));
+  await shot('shop-390-hearts');
 
   // ---- choose, with the stepper
   const plus = (id) => ev(`document.querySelector('[data-inc="${id}"]').click(); 'ok'`);

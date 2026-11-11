@@ -47,3 +47,5 @@ storage bucket `payment-evidence` is deliberately not recreated.
 **2026-11-10, Listings:** migration `20261110000000_listings` added five tables (`listings_settings`, `listings`, `listing_events`, `listing_reports`, `listing_months`), one function (`listing_event`) and the public `listings` storage bucket. They are appended to the baseline file as **section 11**; sections 1 to 7 still describe the database without the Repository and Listings objects.
 
 **2026-11-11, Light a Candle and the Thursday email:** migration `20261111000000_candles_digest` added four tables (`candle_settings`, `candle_requests`, `candle_months`, `weekly_digest`) and one function (`candle_next_ref`). They are appended to the baseline file as **section 12**; sections 1 to 7 still describe the database without the Repository, Listings and Candles objects.
+
+**2026-11-12, Hearts:** migration `20261112000000_hearts` added a `hearts` count to `listings` and `repository_items`, one table (`hearts`) and one function (`heart_set`). Appended to the baseline file as **section 13**.
