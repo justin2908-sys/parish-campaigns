@@ -1227,7 +1227,7 @@ const ADMIN_TABS_BY_ROLE = {
   superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'users', 'bin', 'privacy'],
   admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'parishpage', 'repository', 'listings', 'candles'],
   finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles'],
-  priest: ['registrations', 'parishpage', 'repository', 'listings', 'candles'],
+  priest: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'users', 'bin', 'privacy'],   // everything a SuperAdmin sees
 };
 // Thirteen tabs in one wrapping block was too many to find anything in. They are now four sections (what people do all day, in the order they
 // do it), and each section has its own short row of tabs. A role only sees the tabs it is allowed; a section with one tab shows that tab's own
@@ -1240,6 +1240,7 @@ const ADMIN_GROUPS = [
 ];
 const ADMIN_SUB_LABELS = { parishpage: 'Page' };
 const adminLastTab = {};   // the tab last used in each section, so going back to a section returns to where you were
+function isSuperLike() { return !!state.user && (state.user.role === 'superadmin' || state.user.role === 'priest'); }
 function adminAllowedTabs() { return ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin; }
 function adminGroupOf(tab) { return ADMIN_GROUPS.find(g => g.tabs.includes(tab)); }
 function adminNavHtml() {
@@ -1257,14 +1258,14 @@ function setAdminGroup(id) {
 async function renderAdmin() {
   const tabs = adminAllowedTabs();
   if (!tabs.includes(adminTab)) adminTab = tabs[0];
-  const canSell = state.user.role === 'admin' || state.user.role === 'superadmin';
+  const canSell = state.user.role === 'admin' || state.user.role === 'superadmin';   // a Priest never sells, but can do everything else a SuperAdmin can
   document.getElementById('app').innerHTML = h`
     ${canSell ? `<button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>` : ''}
     <div id="retentionBanner"></div>
     <div id="adminNav"></div>
     <div id="adminContent"></div>
   `;
-  if (state.user.role === 'superadmin') renderRetentionBanner();
+  if (isSuperLike()) renderRetentionBanner();
   dispatchAdminTab();
 }
 // The highlighted tab always matches the page shown: the click moves the highlight and clears the old
@@ -1343,15 +1344,15 @@ async function renderCampaignsTab() {
   const { campaigns } = await call('list_campaigns', { include_inactive: true });
   campaigns.forEach(c => { campaignDetailsCache[c.id] = c.details_text || ''; });
   let org = null, orgError = '';
-  if (state.user.role === 'superadmin') {
+  if (isSuperLike()) {
     try { org = (await call('get_org_settings')).organization; }
     catch (e) { orgError = e.message; }
   }
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = h`
-    ${state.user.role==='superadmin' && !org ? `<div class="card"><div class="error">Could not load church settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
+    ${isSuperLike() && !org ? `<div class="card"><div class="error">Could not load church settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
     <div class="card">
-      <div class="fh-top" style="margin-bottom:8px"><h3 style="margin:0">Campaigns</h3>${state.user.role==='superadmin' ? `<button class="primary" style="margin-left:auto" onclick="openCampaignWizard()">+ New Campaign</button>` : ''}</div>
+      <div class="fh-top" style="margin-bottom:8px"><h3 style="margin:0">Campaigns</h3>${isSuperLike() ? `<button class="primary" style="margin-left:auto" onclick="openCampaignWizard()">+ New Campaign</button>` : ''}</div>
       <table>
         <tr><th>Name</th><th>Tiers</th><th>Blocks</th><th>Status</th><th></th></tr>
         ${campaigns.map(c => `<tr>
@@ -1360,7 +1361,7 @@ async function renderCampaignsTab() {
           <td>${esc(blockSummary(c))}</td>
           <td>${campaignStatusBadge(c)}${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
-            ${state.user.role==='superadmin' ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="${c.kind === 'registration' ? 'openRegForm' : 'openCampaignSettings'}('${c.id}')">⚙ Settings</button>
+            ${isSuperLike() ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="${c.kind === 'registration' ? 'openRegForm' : 'openCampaignSettings'}('${c.id}')">⚙ Settings</button>
             ${c.is_draft ? `<button class="small" onclick="doOpenCampaign('${c.id}')">Open</button>` : `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>`}
             <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
           </td>
@@ -1368,7 +1369,7 @@ async function renderCampaignsTab() {
       </table>
       <p class="muted">A campaign appears on the Sell screen only while it is open: not a draft, switched on, and between its opening and closing dates. "Public only" campaigns never appear there for a Seller.</p>
     </div>
-    ${state.user.role==='superadmin' && campaigns.length ? `
+    ${isSuperLike() && campaigns.length ? `
     <details class="card fold"><summary>Add a series to an existing campaign</summary>
       <p class="muted">A physical top-up, or a second online series. The new numbers can't overlap any number already in that campaign.</p>
       <label>Campaign</label>
@@ -1413,7 +1414,7 @@ async function renderCampaignsTab() {
       <button class="small" style="margin-top:8px" onclick="doSaveOrgLottery()">Save</button>
       <div id="orgLotteryResult"></div>
     </details>` : ''}
-    ${state.user.role==='superadmin' ? `<details class="card fold"><summary>SumUp connection</summary>
+    ${isSuperLike() ? `<details class="card fold"><summary>SumUp connection</summary>
       <p class="muted">Checks that Pay by Link will work: creates a £0.01 test link and cancels it straight away. No money moves.</p>
       <button class="small" onclick="doSumupCheck()">Test SumUp connection</button>
       <div id="sumupCheckResult"></div>
@@ -2296,12 +2297,12 @@ function wizResetContent() {
   wiz.copiedFrom = '';
 }
 async function openCampaignWizard(startKind) {
-  wiz = { kind: startKind || (state.user.role === 'superadmin' ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '' };
+  wiz = { kind: startKind || (isSuperLike() ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '' };
   wizResetContent();
   wizStep = 1;
   wizCampaigns = [];
   drawWizard();
-  try { wizCampaigns = (await call('list_campaigns', { include_inactive: true })).campaigns.filter(c => state.user.role === 'superadmin' || c.kind === 'registration'); if (wiz && wizStep === 1) drawWizard(); } catch { /* copying simply isn't offered */ }
+  try { wizCampaigns = (await call('list_campaigns', { include_inactive: true })).campaigns.filter(c => isSuperLike() || c.kind === 'registration'); if (wiz && wizStep === 1) drawWizard(); } catch { /* copying simply isn't offered */ }
   try { if (!wizOrg) wizOrg = (await call('get_org_settings')).organization; } catch { /* the lottery date check is simply skipped */ }
 }
 function closeCampaignWizard() { const el = document.getElementById('wizardPanel'); if (el) el.remove(); wiz = null; }
@@ -2413,7 +2414,7 @@ function wizStepHtml() {
     const tpls = WIZ_TEMPLATES[wiz.kind] || [];
     return `
     <label style="margin-top:0">How do people sign up?</label>
-    ${state.user.role === 'superadmin' ? `<button type="button" class="kindcard ${wiz.kind === 'raffle' ? 'on' : ''}" onclick="setWizKind('raffle')"><b>🎟️ Raffle</b><span>People choose numbers, confirm they are 18 or over, and pay. Sellers can sell it in person too.</span></button>
+    ${isSuperLike() ? `<button type="button" class="kindcard ${wiz.kind === 'raffle' ? 'on' : ''}" onclick="setWizKind('raffle')"><b>🎟️ Raffle</b><span>People choose numbers, confirm they are 18 or over, and pay. Sellers can sell it in person too.</span></button>
     <button type="button" class="kindcard ${wiz.kind === 'event' ? 'on' : ''}" onclick="setWizKind('event')"><b>🎫 Ticket event</b><span>People choose how many tickets, give their details and pay. A dinner, an outing, a pilgrimage.</span></button>` : ''}
     <button type="button" class="kindcard ${wiz.kind === 'registration' ? 'on' : ''}" onclick="setWizKind('registration')"><b>📝 Registration</b><span>People fill in a form you design — details first, then an optional payment. A sacrament application, a children's film night, a seniors' evening.</span></button>
     <label style="margin-top:16px">Start from</label>
@@ -3204,13 +3205,13 @@ async function renderUsersTab() {
     <table><tr><th>Name</th><th>Mobile</th><th>Role</th><th>Status</th><th></th></tr>
     ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
       <td><span class="badge ${u.active?'ok':'bad'}">${u.active?'Active':'Disabled'}</span></td>
-      <td><button class="small" onclick="toggleUserActive('${u.id}', ${!u.active})">${u.active?'Disable':'Enable'}</button>
-      <button class="small" onclick="doResetPassword('${u.id}')">Reset PW</button></td></tr>`).join('')}
+      <td>${u.role === 'superadmin' && state.user.role !== 'superadmin' ? '<span class="muted">Only a SuperAdmin can change this account</span>' : `<button class="small" onclick="toggleUserActive('${u.id}', ${!u.active})">${u.active?'Disable':'Enable'}</button>
+      <button class="small" onclick="doResetPassword('${u.id}')">Reset PW</button>`}</td></tr>`).join('')}
     </table></div>
     <div class="card"><h3 style="margin-top:0">Add User</h3>
     <label>Name</label><input id="uName">
     <label>Mobile</label><input id="uMobile" type="tel">
-    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="finance">Finance</option><option value="priest">Priest</option><option value="superadmin">SuperAdmin</option></select>
+    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="finance">Finance</option><option value="priest">Priest</option>${state.user.role === 'superadmin' ? '<option value="superadmin">SuperAdmin</option>' : ''}</select>
     <label>Password (8+ characters)</label><input id="uPassword" type="password">
     <button class="primary" onclick="doCreateUser()">Create User</button>
     <div id="userResult"></div>

@@ -1613,3 +1613,13 @@ Tests: `test/gateway/ui-admin-nav.js` (new: every role, 390 and 360 px, one-row 
 **Office:** the heart count shows on each Listings row and as a chip on each Repository item.
 
 **Server:** public `public_heart` (kind `listing` or `item`, `on` true/false); migration `20261112000000_hearts.sql` (additive: a `hearts` count on `listings` and `repository_items`, one table, one function, explicit grants, row security on). Tests: `test/gateway/hearts.test.js` (15) plus heart checks in `ui-shop.js` and `ui-listings.js`.
+
+## 67. The Priest can do everything a SuperAdmin can — 2026-11-12 (on dev; preview only)
+
+**Why:** Justin's instruction ("Priests should be able to create everything that the SuperAdmin can do"). Until now a Priest could only make registration forms and saw only Registrations and Parish page; ticketed events (raffles) were SuperAdmin-only.
+
+**What changed:** wherever the server allows a SuperAdmin, it now allows a Priest too (one rule in `requireRole`, so nothing is missed), and the Priest sees all four sections: Campaigns (+ New Campaign, Registrations, Overview, Sales), Money (Cash Recon, Needs Attention), Parish page, Manage (Users, Recycle Bin, Data & privacy). That includes ticketed events, refunds, church settings and managing people. A Priest still never sells (no Sell screen), and still has to accept the confidentiality statement before seeing private records, as before. A Priest stays inside their own parish.
+
+**The one safeguard:** only a SuperAdmin can create, disable or reset the password of a **SuperAdmin** account, so the church's owner login cannot be taken over or locked out through a Priest login. (Easy to lift if wanted.) The Users screen hides those buttons and the "SuperAdmin" role choice from a Priest.
+
+**Tests:** `test/gateway/priest.test.js` (new, 6), four older tests that expected the old limits updated (refunds, page address), and `ui-admin-nav.js` now checks the Priest sees what a SuperAdmin sees.

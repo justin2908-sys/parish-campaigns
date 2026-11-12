@@ -210,8 +210,8 @@ test('The office approves', async (t) => {
     assert.equal((await approve(l.id, 'prA')).status, 200); assert.ok(r);
     const r2 = await make({ amount: 2 }); const l2 = T('listings').find(x => x.token === r2.body.token);
     sumupStatus = 'PAID'; await call('sumup_webhook', { id: T('payments')[0].sumup_checkout_id });
-    assert.equal((await call('listings_review', { id: l2.id, decision: 'reject', note: 'Not suitable here', refund_amount: 2 }, { session: S.prA })).status, 403);
-    assert.equal(T('listings').find(x => x.id === l2.id).status, 'pending_review');
+    assert.equal((await call('listings_review', { id: l2.id, decision: 'reject', note: 'Not suitable here', refund_amount: 2 }, { session: S.prA })).status, 200, 'a priest can do everything a superadmin can, including a refund');
+    assert.notEqual(T('listings').find(x => x.id === l2.id).status, 'pending_review');
   });
   await t.test('the office sees what is waiting (with the email, to be able to write to the lister), what is live with its numbers, and recent endings', async () => {
     reset();

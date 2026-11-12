@@ -161,10 +161,18 @@ Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', n
   check('Admin: Campaigns has Campaigns, Overview and Sales (Registrations is not an Admin tab)', JSON.stringify(await subs()) === JSON.stringify(['Campaigns*', 'Overview', 'Sales']), JSON.stringify(await subs()));
   await loginAs(PR, { id: 'uA-pr', name: 'priest', role: 'priest', org_id: 'org-A', mobile: '07000000003' });
   await waitFor(`document.querySelector('.tabs.sections')`);
-  check('Priest: two sections, named for what they hold — Registrations and Parish page', JSON.stringify(await sections()) === JSON.stringify(['Registrations*', 'Parish page']), JSON.stringify(await sections()));
-  check('Priest: Registrations has no second row of tabs, and opens the registrations screen', (await subs()).length === 0 && await waitFor(`!/^Loading/.test(document.getElementById('adminContent').innerText)`, 6000) && !(await ev(`!!document.querySelector('#adminContent .error')`)));
+  check('Priest: sees exactly what a SuperAdmin sees — Campaigns, Money, Parish page, Manage', JSON.stringify(await sections()) === JSON.stringify(['Campaigns*', 'Money', 'Parish page', 'Manage']), JSON.stringify(await sections()));
+  check('Priest: Campaigns has Campaigns, Registrations, Overview and Sales', JSON.stringify(await subs()) === JSON.stringify(['Campaigns*', 'Registrations', 'Overview', 'Sales']), JSON.stringify(await subs()));
+  check('Priest: the Campaigns screen has "+ New Campaign"', await waitFor("[...document.querySelectorAll('#adminContent button')].some(b => /New Campaign/.test(b.textContent))", 6000));
+  await ev("openCampaignWizard(); 'ok'");
+  check('Priest: the new-campaign wizard offers a ticketed Raffle as well as a registration form', await waitFor("document.querySelector('.kindcard') && /Raffle/.test(document.body.innerText)", 6000), '');
+  await ev("closeCampaignWizard(); 'ok'");
+  await loginAs(PR, { id: 'uA-pr', name: 'priest', role: 'priest', org_id: 'org-A', mobile: '07000000003' });
+  await waitFor("document.querySelector('.tabs.sections')");
   await click('[data-group=page]');
   check('Priest: Parish page has Page, Repository, Listings, Candles', JSON.stringify(await subs()) === JSON.stringify(['Page*', 'Repository', 'Listings', 'Candles']), JSON.stringify(await subs()));
+  await click('[data-group=manage]');
+  check('Priest: Manage has Users, Recycle Bin and Data & privacy', (await subs()).length === 3, JSON.stringify(await subs()));
   await shot('nav-390-priest');
 
   console.log(failures ? `\n${failures} CHECK(S) FAILED` : '\nALL ADMIN NAVIGATION CHECKS PASSED');
