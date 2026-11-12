@@ -390,9 +390,9 @@ test('Who may do what', async (t) => {
       assert.equal((await call(action, {})).status, 401, 'no login ' + action);
     }
   });
-  await t.test('only the superadmin may change the page address, the name on it, or switch the page on and off', async () => {
+  await t.test('only the superadmin and the priest may change the page address, the name on it, or switch the page on and off', async () => {
     reset();
-    for (const who of ['adA', 'fiA', 'prA', 'seA']) {
+    for (const who of ['adA', 'fiA', 'seA']) {
       assert.equal((await call('gateway_set_address', { slug: 'new-address' }, { session: S[who] })).status, 403, who);
       assert.equal((await call('gateway_set_enabled', { enabled: false }, { session: S[who] })).status, 403, who);
     }

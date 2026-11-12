@@ -172,8 +172,7 @@ test('The office list', async (t) => {
     assert.equal(T('payments').find(p => p.id === T('candle_requests').find(r => r.id === id).payment_id).refund_amount, 4);
     assert.equal(T('candle_requests').find(r => r.id === id).status, 'cancelled'); assert.equal((await cancel(id, { reason: 'again' })).status, 400);
     assert.equal((await cancel(un, { reason: 'x', refund_amount: 1 })).status, 400, 'an unpaid request has nothing to refund');
-    assert.equal((await cancel(id2, { reason: 'x', refund_amount: 4 }, 'prA')).status, 403); assert.equal(T('candle_requests').find(r => r.id === id2).status, 'paid');
-    assert.equal((await cancel(id2, { reason: 'Moved away' }, 'prA')).status, 200);
+    assert.equal((await cancel(id2, { reason: 'Moved away', refund_amount: 4 }, 'prA')).status, 200, 'a priest can do everything a superadmin can, including a refund'); assert.equal(T('candle_requests').find(r => r.id === id2).status, 'cancelled');
   });
   await t.test('only the office, and only their own parish', async () => {
     reset(); paidRequest({});

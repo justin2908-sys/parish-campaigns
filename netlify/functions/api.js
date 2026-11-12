@@ -46,9 +46,12 @@ function verifySession(token) {
     return payload;
   } catch { return null; }
 }
+// A Priest can do everything a SuperAdmin can (decided 2026-11-12): wherever SuperAdmin is allowed, so is Priest. The one thing a Priest cannot
+// do is touch a SuperAdmin's account (see requireNotSuperAdminTarget), so the church's owner login cannot be taken over or locked out.
+const isSuperLike = (role) => role === 'superadmin' || role === 'priest';
 function requireRole(session, roles) {
   if (!session) throw httpError(401, 'Not logged in');
-  if (!roles.includes(session.role)) throw httpError(403, 'Not permitted for this action');
+  if (!roles.includes(session.role) && !(session.role === 'priest' && roles.includes('superadmin'))) throw httpError(403, 'Not permitted for this action');
 }
 // Org-scoped roles must always act within their own org — this guards every handler
 // that takes a campaign/user id against reaching across into another church's data.
@@ -263,6 +266,7 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
   } else {
     requireOrgRole(session, ['superadmin']);
     if (!['seller', 'admin', 'superadmin', 'finance', 'priest'].includes(role)) throw httpError(400, 'Invalid role');
+    if (role === 'superadmin' && session.role !== 'superadmin') throw httpError(403, 'Only a SuperAdmin can create another SuperAdmin.');
     targetOrgId = session.org_id;
   }
   assertPasswordStrength(password);
@@ -299,6 +303,7 @@ async function setDisabledCampaigns(session, { user_id, disabled_campaign_ids })
 async function setUserActive(session, { user_id, active }) {
   requireOrgRole(session, ['superadmin']);
   await requireUserInOwnOrg(session, user_id);
+  await requireNotSuperAdminTarget(session, user_id);
   const { error } = await supabase.from('users').update({ active }).eq('id', user_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
@@ -307,6 +312,7 @@ async function setUserActive(session, { user_id, active }) {
 async function resetPassword(session, { user_id, new_password }) {
   requireOrgRole(session, ['superadmin']);
   await requireUserInOwnOrg(session, user_id);
+  await requireNotSuperAdminTarget(session, user_id);
   assertPasswordStrength(new_password);
   const hash = await bcrypt.hash(new_password, 10);
   const { error } = await supabase.from('users').update({ password_hash: hash }).eq('id', user_id);
@@ -314,6 +320,12 @@ async function resetPassword(session, { user_id, new_password }) {
   return { ok: true };
 }
 
+// A Priest may manage every account except a SuperAdmin's: no disabling it, no resetting its password, no creating another one.
+async function requireNotSuperAdminTarget(session, user_id) {
+  if (session.role === 'superadmin') return;
+  const { data } = await supabase.from('users').select('role').eq('id', user_id).maybeSingle();
+  if (data && data.role === 'superadmin') throw httpError(403, 'Only a SuperAdmin can change a SuperAdmin’s account.');
+}
 async function requireUserInOwnOrg(session, user_id) {
   const { data } = await supabase.from('users').select('org_id').eq('id', user_id).maybeSingle();
   if (!data || data.org_id !== session.org_id) throw httpError(404, 'User not found');
@@ -2588,7 +2600,7 @@ async function requireCampaignManager(session, campaign_id) {
   requireOrgRole(session, ['superadmin', 'finance', 'priest']);
   const { data: c } = await supabase.from('campaigns').select('org_id, kind, created_by').eq('id', campaign_id).maybeSingle();
   if (!c || c.org_id !== session.org_id) throw httpError(404, 'Campaign not found');
-  if (session.role !== 'superadmin' && !(c.kind === 'registration' && c.created_by === session.uid)) throw httpError(403, 'Not permitted for this action');
+  if (!isSuperLike(session.role) && !(c.kind === 'registration' && c.created_by === session.uid)) throw httpError(403, 'Not permitted for this action');
   return c;
 }
 
@@ -2892,7 +2904,7 @@ async function registrationForms(session) {
       places_used: mine.filter(r => REG_ACTIVE_STATUSES.includes(r.status)).reduce((n, r) => n + (r.party_size || 1), 0),   // places they hold between them
       awaiting_payment: by('awaiting_payment'), submitted: by('submitted'), accepted: by('accepted'), declined: by('declined'), cancelled: by('cancelled'),
       approval: !!def.approval, payment: def.payment || null, field_count: (def.fields || []).length, form_def: def, details_text: c.details_text,
-      created_by: c.created_by, created_by_name: nameOf[c.created_by] || '', can_manage: session.role === 'superadmin' || c.created_by === session.uid,
+      created_by: c.created_by, created_by_name: nameOf[c.created_by] || '', can_manage: isSuperLike(session.role) || c.created_by === session.uid,
     };
   });
   return { forms };
@@ -3597,7 +3609,7 @@ async function gatewayGet(session) {
   const current = anns.find(a => gwAnnouncementState(a, now) === 'live') || anns.find(a => gwAnnouncementState(a, now) === 'scheduled') || anns[0] || null;
   const link = (n) => { const l = (linksRes.data || []).find(x => x.position === n); return { position: n, label: l ? l.label : '', sub: l ? l.sub : '', url: l ? l.url : '' }; };
   return {
-    can_manage: session.role === 'superadmin',
+    can_manage: isSuperLike(session.role),
     org: { name: org.name, slug: org.slug || '', enabled: !!org.gateway_enabled, timezone: tz, display_name: org.display_name || '', phone: org.gateway_phone || '', hours: org.gateway_hours || '', whatsapp: org.gateway_whatsapp || '', daily: org.gateway_daily !== false, page_path: org.slug ? `/go/${org.slug}` : null },
     links: [link(1), link(2), link(3)],
     announcement: current ? { message: current.message, link_url: current.link_url || '', urgent: !!current.urgent, starts_at: gwIsoToLocal(current.starts_at, tz), ends_at: gwIsoToLocal(current.ends_at, tz), state: gwAnnouncementState(current, now) } : null,
