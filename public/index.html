@@ -2292,7 +2292,7 @@ async function doRegPlaces() {
 function wizIsRaffle() { return wiz.kind === 'raffle'; }
 // The campaign-specific content, back to a blank slate for the chosen kind (the name is kept).
 function wizResetContent() {
-  wiz.type = 'physical'; wiz.audience = 'sellers'; wiz.detailsText = ''; wiz.waitingList = false; wiz.reg = newRegState(); wiz.places = '';
+  wiz.type = 'physical'; wiz.audience = 'sellers'; wiz.detailsText = ''; wiz.tagline = ''; wiz.waitingList = false; wiz.reg = newRegState(); wiz.places = '';
   wiz.defaultQty = wizIsRaffle() ? 5 : 0;
   wiz.physPay = ['cash', 'machine']; wiz.onlPay = ['cash', 'machine', 'link'];
   draftTiers = [{ name: '', price: '' }, { name: '', price: '' }];
@@ -2330,14 +2330,14 @@ function wizCopyCampaign(id) {
   if (c.kind === 'registration') {   // a registration form: copy the whole form, with the dates left to choose afresh
     const d = c.form_def || {};
     wiz.kind = 'registration'; wiz.template = 'blank'; wizResetContent();
-    wiz.name = c.name + ' (copy)'; wiz.detailsText = c.details_text || '';
+    wiz.name = c.name + ' (copy)'; wiz.detailsText = c.details_text || ''; wiz.tagline = c.tagline || '';
     wiz.places = c.places == null ? '' : String(c.places); wiz.waitingList = !!c.waiting_list && c.places != null;
     wiz.reg = regFromDef(d, false);
     wiz.opens_on = ''; wiz.closes_on = ''; wiz.keep_until = ''; wiz.copiedFrom = c.name;
     drawWizard(); return;
   }
   wiz.kind = c.kind === 'raffle' ? 'raffle' : 'event'; wiz.template = 'blank';
-  wiz.name = c.name + ' (copy)'; wiz.detailsText = c.details_text || '';
+  wiz.name = c.name + ' (copy)'; wiz.detailsText = c.details_text || ''; wiz.tagline = c.tagline || '';
   const hasP = c.blocks.some(b => b.type === 'physical'), hasD = c.blocks.some(b => b.type === 'digital');
   wiz.type = hasP && hasD ? 'both' : hasD ? 'digital' : 'physical';
   wiz.audience = !hasD ? 'sellers' : c.public_only ? 'public' : c.public_page_enabled ? 'both' : 'sellers';
@@ -2427,6 +2427,7 @@ function wizStepHtml() {
   }
   if (wizStep === 2) return `
     <label style="margin-top:0">Campaign name</label><input id="wName" value="${esc(wiz.name)}" placeholder="${wiz.kind === 'registration' ? 'e.g. First Holy Communion 2027' : wizIsRaffle() ? 'e.g. Christmas Raffle 2026' : 'e.g. Parish Dinner 2026'}" oninput="wiz.name=this.value">
+    ${wiz.kind === 'registration' ? '' : `<label style="margin-top:14px">Tagline <span class="muted">(optional — one short line shown under the name on the public page, e.g. “Buffet Dinner &amp; Family Entertainment”)</span></label><input id="wTagline" value="${esc(wiz.tagline || '')}" maxlength="50" placeholder="e.g. Buffet Dinner &amp; Family Entertainment" oninput="wiz.tagline=this.value; document.getElementById('wTaglineN').textContent=this.value.length"><div class="muted" style="font-size:13px;margin-top:3px"><span id="wTaglineN">${(wiz.tagline || '').length}</span> of 50 characters</div>`}
     <label style="margin-top:14px">What should people know? <span class="muted">(optional — ${wizIsRaffle() ? 'prizes, draw date, tagline' : 'what it is, when, where'}; ${wiz.kind === 'registration' ? 'shown under ℹ️ Details on the form' : 'shown on the public page and in every ticket message'})</span></label>
     <textarea id="wDetails" rows="5" style="width:100%;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit" oninput="wiz.detailsText=this.value" placeholder="${wizIsRaffle() ? 'e.g. 1st Prize — £1,200 · 2nd Prize — £500\nDraw Date: 20 December 2026' : 'e.g. Bring a chair — games and BBQ from 12pm.'}">${esc(wiz.detailsText)}</textarea>`;
   if (wizStep === 3) return `
@@ -2521,7 +2522,7 @@ async function doCreateCampaignWizard(asDraft) {
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
     const r = await call('create_campaign', {
-      name: wiz.name.trim(), tiers, blocks, details_text: wiz.detailsText,
+      name: wiz.name.trim(), tagline: (wiz.tagline || '').trim(), tiers, blocks, details_text: wiz.detailsText,
       kind: wiz.kind,
       opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
       is_draft: !!asDraft,
@@ -2635,6 +2636,13 @@ function drawCampaignSettings() {
         <p class="muted" style="margin:8px 0 0">To add another series, use "Add a series to an existing campaign" further down the Campaigns tab.</p>
       </div>
       <div class="card">
+        <b>Tagline</b> <span class="muted">— optional; one short line under the name on the public page</span>
+        <input id="csetTagline" value="${esc(c.tagline || '')}" maxlength="50" placeholder="e.g. Buffet Dinner &amp; Family Entertainment" style="margin-top:8px" oninput="document.getElementById('csetTaglineN').textContent=this.value.length">
+        <div class="muted" style="font-size:13px;margin-top:3px"><span id="csetTaglineN">${(c.tagline || '').length}</span> of 50 characters</div>
+        <button class="primary" style="margin-top:8px" onclick="doSaveCsetTagline()">Save tagline</button>
+        <div id="cmsg-tagline">${cset.msgs.tagline || ''}</div>
+      </div>
+      <div class="card">
         <b>Details</b> <span class="muted">— ${c.age_restricted ? 'prizes, draw date, tagline' : 'what it is, timing, anything worth telling buyers'}; included in every ticket message</span>
         <textarea id="csetDetails" rows="4" style="width:100%;margin-top:8px;padding:11px 12px;font-size:15px;border:1px solid var(--line);border-radius:9px;font-family:inherit">${esc(c.details_text || '')}</textarea>
         <button class="primary" style="margin-top:8px" onclick="doSaveCsetDetails()">Save details</button>
@@ -2705,6 +2713,14 @@ async function doSaveCsetDetails() {
   try {
     await call('set_campaign_details', { campaign_id: cset.id, details_text: document.getElementById('csetDetails').value });
     cset.msgs.details = '<div class="info">Saved.</div>'; toast('✓ Details saved');
+  } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  openCampaignSettings(cset.id);
+}
+async function doSaveCsetTagline() {
+  const msgEl = document.getElementById('cmsg-tagline');
+  try {
+    await call('set_campaign_details', { campaign_id: cset.id, tagline: document.getElementById('csetTagline').value });
+    cset.msgs.tagline = '<div class="info">Saved.</div>'; toast('✓ Tagline saved');
   } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   openCampaignSettings(cset.id);
 }

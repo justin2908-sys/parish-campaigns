@@ -1627,3 +1627,13 @@ Tests: `test/gateway/ui-admin-nav.js` (new: every role, 390 and 360 px, one-row 
 ## 68. Ticket events no longer talk about lucky numbers — 2026-11-14 (on dev; preview only)
 
 The "ticket numbers" step of the new-campaign wizard told every online ticket buyer they could pick a "lucky number". That is a raffle idea. For a **Ticket event** it now says the numbers only set how many tickets can be sold, and that each buyer is simply given the next ticket available (which is what the public page already did). Raffles keep the lucky-number wording. Check added to `ui-admin-nav.js`.
+
+## 69. An optional tagline under a campaign's name — 2026-11-14 (on dev; preview only)
+
+**Why:** an event such as the Christmas Dinner benefits from a short line under its name on the public page, e.g. "Buffet Dinner & Family Entertainment".
+
+**What:** an optional **Tagline** (not required, 50 characters at most, one line, no line breaks) for raffles and ticket events. The office sets it in the new-campaign wizard (name step, with a live character count) and can add, change or clear it later in the campaign's settings ("Tagline" card, saved on its own so it never disturbs the Details). On the public page it sits under the headline in a smaller font (14px against 24px), on one line; the closed and fully-booked pages show it too. Registration forms don't have one.
+
+**Server:** `campaigns.tagline` (migration `20261114000000_campaign_tagline.sql`, additive, already applied); `create_campaign` and `set_campaign_details` take `tagline` (blank clears it; leaving it out leaves it alone); `public_campaign_info` returns it. `set_campaign_details` no longer wipes the details when only a tagline is sent.
+
+**Tests:** `test/gateway/tagline.test.js` (6) and the browser run `test/gateway/ui-tagline.js` (public page at 390, 360 and 320 px; the wizard field).

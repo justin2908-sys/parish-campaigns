@@ -380,10 +380,17 @@ async function setOrgAddress(session, { address }) {
 // "draw_date": every campaign type needs different things on its ticket (a raffle has
 // prizes and a draw date, a dinner has neither) — a SuperAdmin writes whatever's relevant
 // once, and it's reused verbatim in every ticket message for that campaign.
-async function setCampaignDetails(session, { campaign_id, details_text }) {
+// The optional one-line tagline under the name on the public page (50 characters at most, one line, no line breaks).
+const TAGLINE_MAX = 50;
+function cleanTagline(v) { return gwText(v, TAGLINE_MAX, 'The tagline') || null; }
+async function setCampaignDetails(session, { campaign_id, details_text, tagline }) {
   requireOrgRole(session, ['superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
-  const { error } = await supabase.from('campaigns').update({ details_text: (details_text || '').trim() || null }).eq('id', campaign_id);
+  const patch = {};
+  if (details_text !== undefined) patch.details_text = (details_text || '').trim() || null;   // whatever is not sent is left as it is
+  if (tagline !== undefined) patch.tagline = cleanTagline(tagline);
+  if (!Object.keys(patch).length) return { ok: true };
+  const { error } = await supabase.from('campaigns').update(patch).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
@@ -394,7 +401,7 @@ async function setCampaignDetails(session, { campaign_id, details_text }) {
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft, waiting_list }) {
+async function createCampaign(session, { name, tagline, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft, waiting_list }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
@@ -449,7 +456,7 @@ async function createCampaign(session, { name, tiers, blocks, details_text, publ
 
   const { data: campaign, error: campErr } = await supabase.from('campaigns')
     .insert({
-      org_id: session.org_id, name: name.trim(), created_by: session.uid, details_text: (details_text || '').trim() || null,
+      org_id: session.org_id, name: name.trim(), tagline: cleanTagline(tagline), created_by: session.uid, details_text: (details_text || '').trim() || null,
       // public_only: a self-service campaign (e.g. an online-only registration) that never shows on a
       // Seller's Sell screen — Admins/SuperAdmins are unaffected and can still sell it in person if needed.
       public_only: !!public_only,
@@ -1395,7 +1402,7 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
   const [{ data: campaign }, { data: tiers }, { data: blocks }, placesLeft, queued] = await Promise.all([
-    supabase.from('campaigns').select('id, name, details_text, org_id, age_restricted, default_ticket_qty, waiting_list, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
+    supabase.from('campaigns').select('id, name, tagline, details_text, org_id, age_restricted, default_ticket_qty, waiting_list, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
     onlinePlacesLeft(campaign_id), waitingCount(campaign_id),
@@ -1410,7 +1417,7 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online tickets available.');
   const org = campaign.organizations;
   return {
-    campaign: { id: campaign.id, name: campaign.name, details_text: campaign.details_text, age_restricted: campaign.age_restricted !== false, default_qty: campaign.default_ticket_qty || 0 },
+    campaign: { id: campaign.id, name: campaign.name, tagline: campaign.tagline || '', details_text: campaign.details_text, age_restricted: campaign.age_restricted !== false, default_qty: campaign.default_ticket_qty || 0 },
     org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null, contact_email: org ? org.contact_email : null, privacy_url: org ? org.privacy_url : null,
       // Only a raffle (a lottery) carries the council registration.
       lottery: org && campaign.age_restricted !== false && org.lottery_reg_number ? { number: org.lottery_reg_number, authority: org.lottery_authority || null } : null },
