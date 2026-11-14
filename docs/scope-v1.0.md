@@ -1623,3 +1623,7 @@ Tests: `test/gateway/ui-admin-nav.js` (new: every role, 390 and 360 px, one-row 
 **The one safeguard:** only a SuperAdmin can create, disable or reset the password of a **SuperAdmin** account, so the church's owner login cannot be taken over or locked out through a Priest login. (Easy to lift if wanted.) The Users screen hides those buttons and the "SuperAdmin" role choice from a Priest.
 
 **Tests:** `test/gateway/priest.test.js` (new, 6), four older tests that expected the old limits updated (refunds, page address), and `ui-admin-nav.js` now checks the Priest sees what a SuperAdmin sees.
+
+## 68. Ticket events no longer talk about lucky numbers — 2026-11-14 (on dev; preview only)
+
+The "ticket numbers" step of the new-campaign wizard told every online ticket buyer they could pick a "lucky number". That is a raffle idea. For a **Ticket event** it now says the numbers only set how many tickets can be sold, and that each buyer is simply given the next ticket available (which is what the public page already did). Raffles keep the lucky-number wording. Check added to `ui-admin-nav.js`.

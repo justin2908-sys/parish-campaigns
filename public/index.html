@@ -1460,6 +1460,7 @@ function tierRowHtml(t,i) {
 // a physical ticket must show exactly the number printed on it (non-negotiable #8).
 function blockRowHtml(b,i,locked) {
   const isDigital = b.type==='digital';
+  const raffle = typeof wizIsRaffle === 'function' && wizIsRaffle();   // choosing a "lucky number" is a raffle idea; an ordinary ticket event just hands out the next ticket
   return `<div class="block-row" style="flex-wrap:wrap">
     <div style="flex:0 0 auto"><label>${i===0?'Type':''}</label>
       ${locked ? `<div style="padding:11px 0;font-weight:600;color:var(--slate)">${isDigital?'💻 Online':'🎫 Physical'}</div>` : `<div class="toggle" style="width:150px">
@@ -1473,7 +1474,9 @@ function blockRowHtml(b,i,locked) {
     ${isDigital ? `<div style="flex:1 1 90px"><label>${i===0?'Prefix':''}</label><input value="${esc(b.number_prefix||'')}" placeholder="e.g. O" maxlength="6" oninput="draftBlocks[${i}].number_prefix=this.value"></div>` : ''}
     <button class="icon-x" onclick="removeBlockRow(${i})" ${draftBlocks.length<=1?'style="visibility:hidden"':''}>✕</button>
   </div>
-  ${isDigital ? `<div class="hint" style="margin:-2px 0 8px">Buyers can pick a specific number in this range ("lucky number") or get any available one — both live-checked, same as physical.</div>` : ''}`;
+  ${isDigital && draftBlocks.findIndex(x => x.type === 'digital') === i ? (raffle
+    ? `<div class="hint" style="margin:-2px 0 8px">Buyers can pick a specific number in this range ("lucky number") or get any available one — both live-checked, same as physical.</div>`
+    : `<div class="hint" style="margin:-2px 0 8px">The numbers set how many tickets can be sold (for example 1 to 150 is 150 tickets). Buyers don’t choose a number: each one is simply given the next ticket available.</div>`) : ''}`;
 }
 function setBlockType(i,type) { draftBlocks[i].type = type; drawWizard(); }
 function addTierRow() { draftTiers.push({name:'',price:''}); drawWizard(); }
