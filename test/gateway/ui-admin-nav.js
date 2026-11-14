@@ -166,6 +166,8 @@ Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', n
   check('Priest: the Campaigns screen has "+ New Campaign"', await waitFor("[...document.querySelectorAll('#adminContent button')].some(b => /New Campaign/.test(b.textContent))", 6000));
   await ev("openCampaignWizard(); 'ok'");
   check('Priest: the new-campaign wizard offers a ticketed Raffle as well as a registration form', await waitFor("document.querySelector('.kindcard') && /Raffle/.test(document.body.innerText)", 6000), '');
+  const hints = await ev("(() => { const out = {}; for (const k of ['raffle', 'event']) { wiz.kind = k; draftBlocks = [{ type: 'digital', label: 'Online', range_start: 1, range_end: 50, number_prefix: 'O' }]; out[k] = blockRowHtml(draftBlocks[0], 0, true); } return out; })()");
+  check('the ticket-numbers step mentions a "lucky number" only for a raffle; a simple ticket event is told tickets are given out in order', /lucky number/.test(hints.raffle) && !/lucky/i.test(hints.event) && /next ticket available/.test(hints.event) && /how many tickets can be sold/.test(hints.event), '');
   await ev("closeCampaignWizard(); 'ok'");
   await loginAs(PR, { id: 'uA-pr', name: 'priest', role: 'priest', org_id: 'org-A', mobile: '07000000003' });
   await waitFor("document.querySelector('.tabs.sections')");

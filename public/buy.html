@@ -35,6 +35,7 @@ window.__infoP = (function () {
   .top .titles { min-width:0; }
   .top .church { font-family:var(--font-caps); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--brass-bright); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .top h1 { margin:0; font-size:24px; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-shadow:0 2px 10px rgba(0,0,0,.25); }
+  .top .tagline { margin:3px 0 0; font-size:14px; line-height:1.25; font-weight:500; color:#F3F1E7; opacity:.92; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .detailsBtn { flex:none; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.32); color:#F3F1E7; border-radius:20px; padding:6px 12px; font-size:14px; font-weight:600; }
   .thanks { margin:5px 0 0; font-size:12.5px; line-height:1.3; }
   .body { flex:1 1 auto; width:100%; max-width:480px; margin:0 auto; padding:8px 12px 6px; display:flex; flex-direction:column; gap:6px; }
@@ -242,6 +243,7 @@ function legalSheetsHtml() {
 function statusPageHtml(innerTop, privacyText) {
   return `<div class="fatal"><div class="card">
     <h1 style="font-size:24px;margin:0 0 4px">${esc(info.campaign.name)}</h1>
+    ${info.campaign.tagline ? `<p class="note" style="margin:0 0 4px">${esc(info.campaign.tagline)}</p>` : ''}
     <p class="note">${esc(info.org.name)}</p>
     ${innerTop}
     <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
@@ -298,6 +300,7 @@ function closedPageHtml() {
   const when = info.state === 'not_open' ? `Opens on ${dayText(info.opens_on)}.` : `Closed on ${dayText(info.closes_on)}.`;
   return `<div class="fatal"><div class="card">
     <h1 style="font-size:24px;margin:0 0 4px">${esc(info.campaign.name)}</h1>
+    ${info.campaign.tagline ? `<p class="note" style="margin:0 0 4px">${esc(info.campaign.tagline)}</p>` : ''}
     <p class="note">${esc(info.org.name)}</p>
     <p class="note" style="font-size:18px;margin-top:14px"><b>${esc(when)}</b></p>
     ${info.state === 'closed' ? '<p class="note">Thank you to everyone who took part.</p>' : ''}
@@ -349,6 +352,7 @@ function buildShell() {
           <h1>${esc(info.campaign.name)}</h1>
           ${info.campaign.details_text ? `<button class="detailsBtn" id="detailsBtn" type="button">${isRaffle() ? '🎁 Prizes' : 'ℹ️ Details'}</button>` : ''}
         </div>
+        ${info.campaign.tagline ? `<p class="tagline">${esc(info.campaign.tagline)}</p>` : ''}
         <p class="thanks">💛 ${esc(thank)}</p>
       </header>
       <div class="body">
