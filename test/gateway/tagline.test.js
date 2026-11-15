@@ -37,10 +37,10 @@ test('Campaign tagline', async (t) => {
   await t.test('it must stay short and on one line: 50 characters, line breaks and stray spaces tidied', async () => {
     reset();
     const fifty = 'x'.repeat(50);
-    assert.equal((await make({ tagline: fifty })).status, 200);
-    const long = await make({ tagline: fifty + 'y' }); assert.equal(long.status, 400); assert.match(long.body.error, /50 characters/);
+    assert.equal((await make({ name: 'Dinner A', tagline: fifty })).status, 200);
+    const long = await make({ name: 'Dinner B', tagline: fifty + 'y' }); assert.equal(long.status, 400); assert.match(long.body.error, /50 characters/);
     assert.equal(T('campaigns').filter(c => c.tagline === fifty + 'y').length, 0);
-    const r = await make({ tagline: '  Buffet\n  and   dancing ' }); assert.equal(r.status, 200);
+    const r = await make({ name: 'Dinner C', tagline: '  Buffet\n  and   dancing ' }); assert.equal(r.status, 200);
     assert.equal(T('campaigns').find(c => c.id === r.body.campaign.id).tagline, 'Buffet and dancing');
   });
   await t.test('it can be added, changed and cleared later, and saving it does not disturb the details (nor the reverse)', async () => {

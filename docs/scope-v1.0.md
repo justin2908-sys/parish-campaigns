@@ -1637,3 +1637,14 @@ The "ticket numbers" step of the new-campaign wizard told every online ticket bu
 **Server:** `campaigns.tagline` (migration `20261114000000_campaign_tagline.sql`, additive, already applied); `create_campaign` and `set_campaign_details` take `tagline` (blank clears it; leaving it out leaves it alone); `public_campaign_info` returns it. `set_campaign_details` no longer wipes the details when only a tagline is sent.
 
 **Tests:** `test/gateway/tagline.test.js` (6) and the browser run `test/gateway/ui-tagline.js` (public page at 390, 360 and 320 px; the wizard field).
+
+## 70. A campaign can no longer be made twice — 2026-11-15 (on dev; preview only)
+
+**What happened:** on 15 November two identical "Sunday Cafe Fundraiser" events appeared, created 0.37 seconds apart by the same person: a double tap on the wizard's Create button. Nothing stopped the second tap, and the server made a second campaign with its own 100 tickets.
+
+**Three layers of protection now:**
+1. **The button:** while a campaign is being created the Create buttons are switched off and say "Creating…", so a second tap does nothing.
+2. **The server:** each wizard sitting carries a reference (`campaigns.client_ref`, unique per parish; migration `20261115000000_campaign_client_ref.sql`). If the same reference arrives again, even at the same instant, the server hands back the campaign it already made, so a double tap, a retry on a weak signal, or pressing both "Save as draft" and "Open it now" cannot make two.
+3. **The name:** a church cannot have two live campaigns with the same name (ignoring capitals and extra spaces) in the same family (a raffle or ticket event; a registration form is its own family). The reason is given in plain words. A campaign in the Recycle Bin does not count.
+
+**Tests:** `test/gateway/campaign-duplicates.test.js` (11, including two requests at the same instant) and two browser checks in `ui-tagline.js` (two quick taps make one; a reused name is refused and the button returns).

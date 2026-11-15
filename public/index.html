@@ -2300,7 +2300,7 @@ function wizResetContent() {
   wiz.copiedFrom = '';
 }
 async function openCampaignWizard(startKind) {
-  wiz = { kind: startKind || (isSuperLike() ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '' };
+  wiz = { kind: startKind || (isSuperLike() ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '', ref: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10) };   // ref: one per sitting, so pressing Create twice makes one campaign
   wizResetContent();
   wizStep = 1;
   wizCampaigns = [];
@@ -2500,12 +2500,18 @@ function drawWizard() {
     </div>
   </div>`;
 }
+let wizCreating = false;
 async function doCreateCampaignWizard(asDraft) {
+  if (wizCreating) return;   // a second tap while the first is still saving does nothing
+  wizCreating = true;
   const resEl = document.getElementById('wizCreateResult');
+  const btns = [...document.querySelectorAll('#wizardPanel button[onclick^="doCreateCampaignWizard"]')], labels = btns.map(b => b.textContent);
+  btns.forEach(b => { b.disabled = true; b.textContent = 'Creating…'; });
+  if (resEl) resEl.innerHTML = '';
   try {
     if (wiz.kind === 'registration') {
       const r = await call('create_campaign', {
-        kind: 'registration', name: wiz.name.trim(), details_text: wiz.detailsText,
+        kind: 'registration', name: wiz.name.trim(), client_ref: wiz.ref, details_text: wiz.detailsText,
         opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
         is_draft: !!asDraft, places: wiz.places, waiting_list: regWaitingApplicable() && !!wiz.waitingList, form_def: regBuildFormDef(),
       }, 60000);
@@ -2522,7 +2528,7 @@ async function doCreateCampaignWizard(asDraft) {
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
     const r = await call('create_campaign', {
-      name: wiz.name.trim(), tagline: (wiz.tagline || '').trim(), tiers, blocks, details_text: wiz.detailsText,
+      name: wiz.name.trim(), client_ref: wiz.ref, tagline: (wiz.tagline || '').trim(), tiers, blocks, details_text: wiz.detailsText,
       kind: wiz.kind,
       opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
       is_draft: !!asDraft,
@@ -2538,7 +2544,8 @@ async function doCreateCampaignWizard(asDraft) {
     toast(asDraft ? '✓ Saved as a draft — preview it, then open it when ready' : '✓ Campaign created and open');
     await renderCampaignsTab();
     if (asDraft && r.campaign) openCampaignSettings(r.campaign.id);   // straight to Preview / Open
-  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+  } catch (e) { if (resEl) resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; btns.forEach((b, i) => { b.disabled = false; b.textContent = labels[i]; }); }
+  finally { wizCreating = false; }
 }
 // ---- Campaign settings: everything about ONE campaign on one screen ----
 // Replaces a crowd of small buttons in the campaigns table. Each section saves on its own.
