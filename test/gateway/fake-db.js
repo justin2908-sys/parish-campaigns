@@ -7,7 +7,7 @@ function createFakeDb(clock) {
   const tables = {};
   const T = (n) => (tables[n] = tables[n] || []);
   const joins = { ticket_blocks: 'block_id' };   // tickets.block_id -> ticket_blocks, for "ticket_blocks!inner(type)"
-  const unique = { organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']],
+  const unique = { campaigns: [['org_id', 'client_ref']], organizations: [['slug']], gateway_links: [['org_id', 'position']], gateway_order: [['org_id', 'section']],
     repository_weekends: [['org_id', 'weekend']], repository_items: [['org_id', 'sumup_variant_id']], listings: [['org_id', 'client_ref'], ['token']], listing_months: [['org_id', 'month']], listings_settings: [['org_id']], candle_months: [['org_id', 'month']], candle_settings: [['org_id']], weekly_digest: [['org_id']], candle_requests: [['org_id', 'ref_no'], ['org_id', 'client_ref']], repository_orders: [['org_id', 'ref_no'], ['org_id', 'client_ref']] };
   const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
     repository_items: () => ({ available: true, stock: null, sort: 0, featured: false, hearts: 0 }),

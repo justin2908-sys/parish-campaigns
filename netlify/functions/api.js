@@ -381,6 +381,20 @@ async function setOrgAddress(session, { address }) {
 // prizes and a draw date, a dinner has neither) — a SuperAdmin writes whatever's relevant
 // once, and it's reused verbatim in every ticket message for that campaign.
 // The optional one-line tagline under the name on the public page (50 characters at most, one line, no line breaks).
+// Making the same campaign twice must not happen: a double tap or a retry on a weak signal carries the same reference, so the second request gets the first
+// campaign back instead of making another (the unique index on (org_id, client_ref) settles a true race); and a campaign cannot take the name of one the
+// church already has (a ticketed event and a registration form are different families, so they may share a name).
+async function campaignByClientRef(orgId, clientRef) {
+  if (!clientRef) return null;
+  const { data } = await supabase.from('campaigns').select('*').eq('org_id', orgId).eq('client_ref', clientRef).maybeSingle();
+  return data || null;
+}
+const campaignNameKey = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+async function requireFreshCampaignName(orgId, name, family) {
+  const { data } = await supabase.from('campaigns').select('id, name, kind').eq('org_id', orgId).eq('binned', false);
+  const clash = (data || []).find(c => campaignNameKey(c.name) === campaignNameKey(name) && ((c.kind === 'registration') === (family === 'registration')));
+  if (clash) throw httpError(400, `You already have ${family === 'registration' ? 'a form' : 'a campaign'} called “${clash.name}”. Choose a different name, or open that one. (If it was a mistake, move the extra one to the Recycle Bin.)`);
+}
 const TAGLINE_MAX = 50;
 function cleanTagline(v) { return gwText(v, TAGLINE_MAX, 'The tagline') || null; }
 async function setCampaignDetails(session, { campaign_id, details_text, tagline }) {
@@ -401,9 +415,12 @@ async function setCampaignDetails(session, { campaign_id, details_text, tagline 
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, tagline, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft, waiting_list }) {
+async function createCampaign(session, { name, client_ref, tagline, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft, waiting_list }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
+  const ref = cleanClientRef(client_ref);
+  const again = await campaignByClientRef(session.org_id, ref);
+  if (again) return { ok: true, campaign: again, replay: true };   // the same press, sent twice
   if (!tiers || !tiers.length) throw httpError(400, 'Add at least one price tier');
   if (!blocks || !blocks.length) throw httpError(400, 'Add at least one ticket block');
   // What kind of campaign: how people sign up. A raffle (choose numbers) is the 18+ kind. A registration
@@ -454,9 +471,10 @@ async function createCampaign(session, { name, tagline, tiers, blocks, details_t
     if (cur.e > widest.e) widest = cur;
   }
 
+  await requireFreshCampaignName(session.org_id, name, 'ticketed');
   const { data: campaign, error: campErr } = await supabase.from('campaigns')
     .insert({
-      org_id: session.org_id, name: name.trim(), tagline: cleanTagline(tagline), created_by: session.uid, details_text: (details_text || '').trim() || null,
+      org_id: session.org_id, name: name.trim(), client_ref: ref, tagline: cleanTagline(tagline), created_by: session.uid, details_text: (details_text || '').trim() || null,
       // public_only: a self-service campaign (e.g. an online-only registration) that never shows on a
       // Seller's Sell screen — Admins/SuperAdmins are unaffected and can still sell it in person if needed.
       public_only: !!public_only,
@@ -473,6 +491,7 @@ async function createCampaign(session, { name, tagline, tiers, blocks, details_t
       default_ticket_qty: default_ticket_qty === undefined ? 0 : cleanDefaultQty(default_ticket_qty),
     })
     .select().single();
+  if (campErr && campErr.code === '23505' && ref) { const raced = await campaignByClientRef(session.org_id, ref); if (raced) return { ok: true, campaign: raced, replay: true }; }
   if (campErr) throw httpError(400, campErr.message);
 
   const { data: tierRows, error: tierErr } = await supabase.from('tiers')
@@ -992,6 +1011,24 @@ async function binCampaign(session, { campaign_id }) {
   const { error } = await supabase.from('campaigns').update({ binned: true }).eq('id', campaign_id);
   if (error) throw httpError(400, error.message);
   return { ok: true };
+}
+// Delete a DRAFT for good (a campaign or form that was started and never opened). Only while it is a draft, and only if nothing has ever happened on it:
+// no sale, no payment, no registration, no waiting-list entry. Anything that was opened is moved to the Recycle Bin instead, never deleted.
+async function deleteDraftCampaign(session, { campaign_id }) {
+  await requireCampaignManager(session, campaign_id);   // SuperAdmin or Priest; Finance only for a registration form they made themselves
+  const { data: c } = await supabase.from('campaigns').select('id, name, is_draft, form_def').eq('id', campaign_id).maybeSingle();
+  if (!c || shopIsHiddenCampaign(c)) throw httpError(404, 'Campaign not found');
+  if (!c.is_draft) throw httpError(400, 'Only a draft can be deleted. A campaign that has been opened can be moved to the Recycle Bin instead.');
+  const n = async (table, extra) => { let q = supabase.from(table).select('id', { count: 'exact', head: true }).eq('campaign_id', c.id); if (extra) q = extra(q); const { count } = await q; return count || 0; };
+  const [payments, regs, waiting, sold, recon] = await Promise.all([n('payments'), n('registrations'), n('waiting_list'), n('tickets', q => q.neq('status', 'unsold')), n('cash_recon')]);
+  if (payments || regs || waiting || sold || recon) throw httpError(400, 'This draft already has activity on it, so it cannot be deleted. Move it to the Recycle Bin instead.');
+  for (const table of ['user_campaigns', 'tickets', 'ticket_blocks', 'tiers']) {
+    const { error } = await supabase.from(table).delete().eq('campaign_id', c.id);
+    if (error) throw httpError(400, 'Could not delete the draft: ' + error.message);
+  }
+  const { error } = await supabase.from('campaigns').delete().eq('id', c.id).eq('org_id', session.org_id).eq('is_draft', true);
+  if (error) throw httpError(400, 'Could not delete the draft: ' + error.message);
+  return { ok: true, name: c.name };
 }
 async function restoreCampaign(session, { campaign_id }) {
   requireOrgRole(session, ['superadmin']);
@@ -2579,10 +2616,13 @@ async function registrationPlacesLeft(c) {   // null = no limit
 
 // A registration form is created like any campaign, by the SuperAdmin — or by Finance or the Priest, who can then
 // manage their own forms.
-async function createRegistrationCampaign(session, { name, details_text, opens_on, closes_on, keep_until, is_draft, places, waiting_list, form_def }) {
+async function createRegistrationCampaign(session, { name, client_ref, details_text, opens_on, closes_on, keep_until, is_draft, places, waiting_list, form_def }) {
   requireOrgRole(session, ['superadmin', 'finance', 'priest']);
   const cleanedName = String(name == null ? '' : name).trim();
   if (!cleanedName) throw httpError(400, 'Give the form a name');
+  const ref = cleanClientRef(client_ref);
+  const again = await campaignByClientRef(session.org_id, ref);
+  if (again) return { ok: true, campaign: again, replay: true };   // the same press, sent twice
   const dates = {
     opens_on: cleanDate(opens_on, 'The opening date'),
     closes_on: cleanDate(closes_on, 'The closing date'),
@@ -2593,11 +2633,13 @@ async function createRegistrationCampaign(session, { name, details_text, opens_o
   const limit = cleanPlaces(places);
   const wantsList = !!waiting_list;
   if (wantsList && limit == null) throw httpError(400, 'A waiting list needs a limit on places.');
+  await requireFreshCampaignName(session.org_id, cleanedName, 'registration');
   const { data: campaign, error } = await supabase.from('campaigns').insert({
-    org_id: session.org_id, name: cleanedName, created_by: session.uid, details_text: (details_text || '').trim() || null,
+    org_id: session.org_id, name: cleanedName, client_ref: ref, created_by: session.uid, details_text: (details_text || '').trim() || null,
     kind: 'registration', age_restricted: false, public_only: false, public_page_enabled: true,
     ...dates, is_draft: !!is_draft, active: !is_draft, waiting_list: wantsList, places: limit, form_def: def,
   }).select().single();
+  if (error && error.code === '23505' && ref) { const raced = await campaignByClientRef(session.org_id, ref); if (raced) return { ok: true, campaign: raced, replay: true }; }
   if (error) throw httpError(400, error.message);
   return { ok: true, campaign };
 }
@@ -3285,6 +3327,7 @@ const actions = {
   campaign_block_usage: (s, b) => campaignBlockUsage(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),
+  delete_draft_campaign: (s, b) => deleteDraftCampaign(s, b),
   list_binned_campaigns: (s) => listBinnedCampaigns(s),
   export_campaign_report: (s, b) => exportCampaignReport(s, b),
 

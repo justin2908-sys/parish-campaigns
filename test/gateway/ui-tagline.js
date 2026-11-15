@@ -109,8 +109,27 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   await ev(`(() => { const i = document.getElementById('wTagline'); i.value = 'Turkey and all the trimmings'; i.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()`);
   check('it counts the characters as you type', (await ev(`document.getElementById('wTaglineN').textContent`)) === '28');
   await shot('wizard-390-tagline');
-  await ev(`setWizKind('registration'); drawWizard && drawWizard(); 'ok'`).catch(() => {});
   await ev(`closeCampaignWizard(); 'ok'`);
+
+  // ---- a double tap on Create makes ONE campaign; a name already in use is refused in plain words
+  const fill = `(() => { wiz.name = 'Double Tap Dinner'; wiz.tagline = ''; wiz.keep_until = '2026-12-30'; wiz.audience = 'public'; wiz.type = 'digital'; draftTiers = [{ name: 'Adult', price: '10' }]; draftBlocks = [{ type: 'digital', label: 'Online', range_start: 1, range_end: 20, number_prefix: 'O' }]; return 'ok'; })()`;
+  await ev("openCampaignWizard('event'); 'ok'"); await waitFor("document.querySelector('.kindcard')");
+  await ev(fill); await ev("goToWizStep(6); 'ok'");
+  await waitFor("document.querySelector('#wizardPanel button[onclick^=\"doCreateCampaignWizard\"]')");
+  await ev("(() => { const b = document.querySelector('#wizardPanel button[onclick=\"doCreateCampaignWizard(true)\"]'); b.click(); b.click(); return 'ok'; })()");   // two quick taps on Save as draft
+  await waitFor("!document.getElementById('wizardPanel')", 10000);
+  await sleep(500);
+  const made = db.T('campaigns').filter(c => c.name === 'Double Tap Dinner');
+  check('two quick taps on "Save as draft" make exactly one campaign (and one set of tickets)', made.length === 1 && db.T('tickets').filter(t => t.campaign_id === made[0].id).length === 20, JSON.stringify({ campaigns: made.length }));
+  await ev("openCampaignWizard('event'); 'ok'"); await waitFor("document.querySelector('.kindcard')");
+  await ev(fill); await ev("goToWizStep(6); 'ok'");
+  await waitFor("document.querySelector('#wizardPanel button[onclick=\"doCreateCampaignWizard(true)\"]')");
+  await click('#wizardPanel button', 'Save as draft');
+  const said = await waitFor("/already have a campaign called/.test((document.getElementById('wizCreateResult') || {}).textContent || '')", 8000);
+  const btnBack = await ev("(() => { const b = document.querySelector('#wizardPanel button[onclick=\"doCreateCampaignWizard(true)\"]'); return b && !b.disabled && b.textContent.trim() === 'Save as draft'; })()");
+  check('using a name the church already has is refused in plain words, the button comes back, and nothing extra is made', said && btnBack && db.T('campaigns').filter(c => c.name === 'Double Tap Dinner').length === 1, '');
+  await shot('wizard-390-duplicate-name');
+  await ev("closeCampaignWizard(); 'ok'");
 
   console.log(failures ? `\n${failures} CHECK(S) FAILED` : '\nALL TAGLINE BROWSER CHECKS PASSED');
   console.log('screenshots in ' + OUT);

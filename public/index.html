@@ -50,6 +50,10 @@
   .badge.tier2 { background:var(--warn-dim); color:var(--warn); }
   .badge.tier3 { background:var(--tier-c-dim); color:var(--tier-c); }
   .tabs { display:flex; gap:6px; margin-bottom:16px; flex-wrap:wrap; }
+  .listfilter { display:flex; flex-wrap:wrap; gap:4px; padding:4px; margin:0 0 12px; background:var(--line); border-radius:13px; }
+  .listfilter button { flex:1 1 auto; min-height:44px; padding:0 12px; border:0; border-radius:10px; background:transparent; color:var(--ink); font-size:15px; font-weight:600; white-space:nowrap; }
+  .listfilter button span { font-weight:500; opacity:.75; }
+  .listfilter button[aria-pressed="true"] { background:var(--surface); color:var(--pine); box-shadow:0 1px 3px rgba(0,0,0,.2); }
   .tabs button { flex:1; padding:11px 8px; border:1px solid var(--stone); background:var(--surface); border-radius:11px; font-size:14.5px; font-weight:600; color:var(--pine); }
   .tabs button.active { background:var(--pine); color:#F3F1E7; border-color:var(--pine); }
   /* the admin's two levels: four sections (big, with a picture), then a quiet row of tabs inside the section */
@@ -1316,9 +1320,38 @@ function campaignStatusBadge(c) {
   const [cls, text] = { draft: ['warn', 'Draft'], inactive: ['bad', 'Inactive'], not_open: ['warn', 'Opens ' + (c.opens_on ? fmtDay(c.opens_on) : '')], closed: ['bad', 'Closed ' + (c.closes_on ? fmtDay(c.closes_on) : '')], open: ['ok', 'Active'] }[s];
   return `<span class="badge ${cls}">${esc(text)}</span>`;
 }
+// The lists of campaigns and of registration forms show only what is ACTIVE by default. A row of chips along the top brings up the rest
+// (upcoming, draft, ended or inactive) with a count on each; a chip with nothing behind it is not shown. "All" shows everything.
+const LIST_FILTERS = [['active', 'Active'], ['upcoming', 'Upcoming'], ['draft', 'Draft'], ['ended', 'Ended or inactive'], ['all', 'All']];
+function listGroupOf(state) { return state === 'open' ? 'active' : state === 'not_open' ? 'upcoming' : state === 'draft' ? 'draft' : 'ended'; }
+function listCounts(items, stateOf) { const n = { all: items.length }; items.forEach(i => { const g = listGroupOf(stateOf(i)); n[g] = (n[g] || 0) + 1; }); return n; }
+function listCurrent(items, stateOf, cur) { const n = listCounts(items, stateOf); return cur === 'active' || cur === 'all' || n[cur] ? cur : 'active'; }   // a chip that has emptied falls back to Active
+function listFiltered(items, stateOf, cur) { return cur === 'all' ? items : items.filter(i => listGroupOf(stateOf(i)) === cur); }
+function listFilterHtml(items, stateOf, cur, setFn) {
+  const n = listCounts(items, stateOf);
+  return `<div class="listfilter" role="group" aria-label="Show campaigns that are">${LIST_FILTERS.filter(([k]) => k === 'active' || k === 'all' || n[k]).map(([k, label]) => `<button type="button" aria-pressed="${cur === k}" onclick="${setFn}('${k}')">${label} <span>${n[k] || 0}</span></button>`).join('')}</div>`;
+}
+function listEmptyText(cur, total, what) {
+  if (!total) return `No ${what} yet.`;
+  return cur === 'active' ? `Nothing is active right now. Choose another chip above to see the rest.` : `Nothing here.`;
+}
+let campFilter = 'active', regListFilter = 'active';
+function setCampFilter(k) { campFilter = k; renderCampaignsTab(); }
+function setRegListFilter(k) { regListFilter = k; drawRegistrationsHome(); }
+// Delete a draft for good (only a draft with nothing on it; anything that was opened goes to the Recycle Bin instead).
+async function doDeleteDraft(id, fromSettings) {
+  const name = (document.querySelector(`[data-draftname="${id}"]`) || {}).textContent || (cset && cset.id === id && cset.campaign ? cset.campaign.name : '') || (regPanel && regPanel.id === id ? regPanel.form.name : '') || 'this draft';
+  if (!confirm(`Delete the draft "${name}" for good? It has never been opened and has nothing on it, so nothing is lost. This cannot be undone.`)) return;
+  try {
+    await call('delete_draft_campaign', { campaign_id: id });
+    toast(`✓ Draft "${name}" deleted`);
+    if (fromSettings) { if (cset && cset.id === id) { const el = document.getElementById('settingsPanel'); if (el) el.remove(); cset = null; } if (regPanel && regPanel.id === id) { const el = document.getElementById('regFormPanel'); if (el) el.remove(); regPanel = null; } }
+    if (adminTab === 'registrations') await renderRegistrationsTab(); else await renderCampaignsTab();
+  } catch (e) { alert(e.message); }
+}
 async function doOpenCampaign(id) {
   if (!confirm('Open this campaign now? It becomes visible to Sellers (if it is for them) and its public page starts working.')) return;
-  try { await call('open_campaign', { campaign_id: id }); toast('✓ Campaign opened — it is now live'); if (cset && cset.id === id) openCampaignSettings(id); else renderCampaignsTab(); } catch (e) { alert(e.message); }
+  try { await call('open_campaign', { campaign_id: id }); campFilter = regListFilter = 'active'; toast('✓ Campaign opened — it is now live'); if (cset && cset.id === id) openCampaignSettings(id); else renderCampaignsTab(); } catch (e) { alert(e.message); }
 }
 async function doSaveOrgLottery() {
   const resEl = document.getElementById('orgLotteryResult');
@@ -1349,21 +1382,25 @@ async function renderCampaignsTab() {
     catch (e) { orgError = e.message; }
   }
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
+  campFilter = listCurrent(campaigns, campaignState, campFilter);
+  const shownCamps = listFiltered(campaigns, campaignState, campFilter);
   el.innerHTML = h`
     ${isSuperLike() && !org ? `<div class="card"><div class="error">Could not load church settings${orgError ? ': ' + esc(orgError) : ''}.</div></div>` : ''}
     <div class="card">
       <div class="fh-top" style="margin-bottom:8px"><h3 style="margin:0">Campaigns</h3>${isSuperLike() ? `<button class="primary" style="margin-left:auto" onclick="openCampaignWizard()">+ New Campaign</button>` : ''}</div>
+      ${listFilterHtml(campaigns, campaignState, campFilter, 'setCampFilter')}
       <table>
         <tr><th>Name</th><th>Tiers</th><th>Blocks</th><th>Status</th><th></th></tr>
-        ${campaigns.map(c => `<tr>
-          <td>${esc(c.name)}</td>
+        ${shownCamps.length ? '' : `<tr><td colspan="5" class="muted">${listEmptyText(campFilter, campaigns.length, 'campaigns')}</td></tr>`}
+        ${shownCamps.map(c => `<tr>
+          <td data-draftname="${c.id}">${esc(c.name)}</td>
           <td>${esc(tierSummary(c))}</td>
           <td>${esc(blockSummary(c))}</td>
           <td>${campaignStatusBadge(c)}${c.public_only ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">Public only</span>` : ''}${!c.public_page_enabled ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No public page</span>` : ''}${!c.age_restricted ? ` <span class="badge" style="background:var(--brass-dim);color:var(--slate)">No 18+ check</span>` : ''}</td>
           <td class="tiny-actions">
             ${isSuperLike() ? `<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="${c.kind === 'registration' ? 'openRegForm' : 'openCampaignSettings'}('${c.id}')">⚙ Settings</button>
             ${c.is_draft ? `<button class="small" onclick="doOpenCampaign('${c.id}')">Open</button>` : `<button class="small" onclick="toggleCampaignActive('${c.id}', ${!c.active})">${c.active?'Deactivate':'Activate'}</button>`}
-            <button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>` : ''}
+            ${c.is_draft ? `<button class="small" style="border-color:var(--bad);color:var(--bad)" onclick="doDeleteDraft('${c.id}')">Delete</button>` : `<button class="small" onclick="downloadCampaignReport('${c.id}')">Report</button>`}` : ''}
           </td>
         </tr>`).join('')}
       </table>
@@ -2048,18 +2085,23 @@ async function renderRegistrationsTab() {
 }
 function drawRegistrationsHome(el) {
   el = el || document.getElementById('adminContent'); if (!el) return;
-  const forms = regForms || [];
+  const allForms = regForms || [];
+  const formState = (f) => (f.is_draft ? 'draft' : !f.active ? 'inactive' : f.state);
+  regListFilter = listCurrent(allForms, formState, regListFilter);
+  const forms = listFiltered(allForms, formState, regListFilter);
   el.innerHTML = `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 style="margin:0">Registrations</h3><button class="primary" style="width:auto;padding:9px 14px" onclick="openCampaignWizard('registration')">＋ New form</button></div>
     <p class="muted" style="margin:8px 0 0">Forms where people give their details instead of buying tickets. Only SuperAdmin, Finance and Priest can read the answers.</p></div>
+    ${allForms.length ? `<div class="card" style="padding-bottom:6px">${listFilterHtml(allForms, formState, regListFilter, 'setRegListFilter')}</div>` : ''}
     ${forms.length ? forms.map(f => `<div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><b>${esc(f.name)}</b>${regFormBadge(f)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><b data-draftname="${f.id}">${esc(f.name)}</b>${regFormBadge(f)}</div>
       <div class="muted" style="margin:6px 0">${f.form_def && f.form_def.party ? `${f.total} registered · ${f.places_used}${f.places ? ` of ${f.places}` : ''} places taken` : `${f.total} registered${f.places ? ` of ${f.places} places` : ''}`}${f.approval ? ` · ${f.submitted} to check · ${f.accepted} accepted · ${f.declined} declined` : ''}${f.awaiting_payment ? ` · ${f.awaiting_payment} awaiting payment` : ''}${f.waiting_count ? ` · ${f.waiting_count} waiting` : ''}</div>
       <div class="muted" style="margin:0 0 8px;font-size:13px">Made by ${esc(f.created_by_name || '—')}</div>
       <div class="tiny-actions">
         <button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="openRegResponses('${f.id}')">Responses</button>
         ${f.can_manage ? `<button class="small" onclick="openRegForm('${f.id}')">⚙ Form settings</button>` : ''}
         <button class="small" onclick="doCopyRegLink('${f.id}')">Copy link</button>
-      </div></div>`).join('') : '<div class="card"><p class="muted" style="margin:0">No registration forms yet. Press “New form” to make one.</p></div>'}`;
+        ${f.is_draft && f.can_manage ? `<button class="small" style="border-color:var(--bad);color:var(--bad)" onclick="doDeleteDraft('${f.id}')">Delete</button>` : ''}
+      </div></div>`).join('') : `<div class="card"><p class="muted" style="margin:0">${allForms.length ? listEmptyText(regListFilter, allForms.length, 'forms') : 'No registration forms yet. Press “New form” to make one.'}</p></div>`}`;
 }
 async function doCopyRegLink(id) {
   const url = `${location.origin}/register.html?campaign_id=${id}`;
@@ -2240,6 +2282,7 @@ function drawRegForm() {
     <div class="card"><b>More</b>
       <div class="tiny-actions" style="margin-top:8px">
         <button class="small" onclick="doDownloadRegistrations('${f.id}')">⬇ Download all answers (CSV)</button>
+        ${f.is_draft ? `<button class="small" style="border-color:var(--bad);color:var(--bad)" onclick="doDeleteDraft('${f.id}', true)">Delete this draft</button>` : ''}
         <button class="small" onclick="doRegBin()">Move to Recycle Bin</button>
       </div>
       <p class="muted" style="margin:8px 0 0">Closing a form just pauses it — the link keeps working and says it isn't taking registrations. The Recycle Bin removes it from the lists and the link stops working; the SuperAdmin can restore it. Either way, people's details are removed automatically 90 days after “keep until”.</p></div>
@@ -2259,7 +2302,7 @@ async function doRegBin() {
 async function regPanelRefresh() { await openRegForm(regPanel.id); }
 async function doRegOpen() {
   if (!confirm('Open this form now? It becomes visible to the public and people can start registering.')) return;
-  try { await call('open_campaign', { campaign_id: regPanel.id }); toast('✓ Form opened — it is now live'); await regPanelRefresh(); } catch (e) { alert(e.message); }
+  try { await call('open_campaign', { campaign_id: regPanel.id }); campFilter = regListFilter = 'active'; toast('✓ Form opened — it is now live'); await regPanelRefresh(); } catch (e) { alert(e.message); }
 }
 async function doRegActive(active) {
   try { await call('set_campaign_active', { campaign_id: regPanel.id, active }); toast(active ? '✓ Form re-opened' : '✓ Form closed — nobody can register until you re-open it'); await regPanelRefresh(); } catch (e) { alert(e.message); }
@@ -2300,7 +2343,7 @@ function wizResetContent() {
   wiz.copiedFrom = '';
 }
 async function openCampaignWizard(startKind) {
-  wiz = { kind: startKind || (isSuperLike() ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '' };
+  wiz = { kind: startKind || (isSuperLike() ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '', ref: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10) };   // ref: one per sitting, so pressing Create twice makes one campaign
   wizResetContent();
   wizStep = 1;
   wizCampaigns = [];
@@ -2500,16 +2543,23 @@ function drawWizard() {
     </div>
   </div>`;
 }
+let wizCreating = false;
 async function doCreateCampaignWizard(asDraft) {
+  if (wizCreating) return;   // a second tap while the first is still saving does nothing
+  wizCreating = true;
   const resEl = document.getElementById('wizCreateResult');
+  const btns = [...document.querySelectorAll('#wizardPanel button[onclick^="doCreateCampaignWizard"]')], labels = btns.map(b => b.textContent);
+  btns.forEach(b => { b.disabled = true; b.textContent = 'Creating…'; });
+  if (resEl) resEl.innerHTML = '';
   try {
     if (wiz.kind === 'registration') {
       const r = await call('create_campaign', {
-        kind: 'registration', name: wiz.name.trim(), details_text: wiz.detailsText,
+        kind: 'registration', name: wiz.name.trim(), client_ref: wiz.ref, details_text: wiz.detailsText,
         opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
         is_draft: !!asDraft, places: wiz.places, waiting_list: regWaitingApplicable() && !!wiz.waitingList, form_def: regBuildFormDef(),
       }, 60000);
       closeCampaignWizard();
+      campFilter = regListFilter = asDraft ? 'draft' : 'active';   // so the new one is the first thing seen in the list
       toast(asDraft ? '✓ Saved as a draft — preview it, then open it when ready' : '✓ Form created and open');
       if (adminTab === 'registrations') await renderRegistrationsTab(); else await renderCampaignsTab();
       if (r.campaign) openRegForm(r.campaign.id);   // straight to Preview / Open
@@ -2522,7 +2572,7 @@ async function doCreateCampaignWizard(asDraft) {
       number_prefix: b.type==='digital' ? (b.number_prefix||'').trim() : '',
     }));
     const r = await call('create_campaign', {
-      name: wiz.name.trim(), tagline: (wiz.tagline || '').trim(), tiers, blocks, details_text: wiz.detailsText,
+      name: wiz.name.trim(), client_ref: wiz.ref, tagline: (wiz.tagline || '').trim(), tiers, blocks, details_text: wiz.detailsText,
       kind: wiz.kind,
       opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
       is_draft: !!asDraft,
@@ -2535,10 +2585,12 @@ async function doCreateCampaignWizard(asDraft) {
       waiting_list: wizWaitingApplicable() && !!wiz.waitingList,
     }, 60000);
     closeCampaignWizard();
+    campFilter = regListFilter = asDraft ? 'draft' : 'active';   // so the new one is the first thing seen in the list
     toast(asDraft ? '✓ Saved as a draft — preview it, then open it when ready' : '✓ Campaign created and open');
     await renderCampaignsTab();
     if (asDraft && r.campaign) openCampaignSettings(r.campaign.id);   // straight to Preview / Open
-  } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+  } catch (e) { if (resEl) resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; btns.forEach((b, i) => { b.disabled = false; b.textContent = labels[i]; }); }
+  finally { wizCreating = false; }
 }
 // ---- Campaign settings: everything about ONE campaign on one screen ----
 // Replaces a crowd of small buttons in the campaigns table. Each section saves on its own.
@@ -2652,6 +2704,7 @@ function drawCampaignSettings() {
         <b>More</b>
         <div class="tiny-actions" style="margin-top:8px">
           <button class="small" onclick="downloadCampaignReport('${c.id}')">Download report</button>
+          ${c.is_draft ? `<button class="small" style="border-color:var(--bad);color:var(--bad)" onclick="doDeleteDraft('${c.id}', true)">Delete this draft</button>` : ''}
           <button class="small" onclick="doBinFromSettings()">Move to Recycle Bin</button>
         </div>
       </div>`;
@@ -2801,7 +2854,7 @@ async function doAddSeries() {
     document.getElementById('addSeriesResult').innerHTML = `<div class="info">Added "${esc(block.label)}" (${esc(block.number_prefix||'')}${block.range_start}–${esc(block.number_prefix||'')}${block.range_end}) to ${esc(campaignName)}.</div>`;
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
-async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); toast(active ? '✓ Campaign activated' : '✓ Campaign deactivated'); renderCampaignsTab(); } catch (e) { alert(e.message); } }
+async function toggleCampaignActive(id, active) { try { await call('set_campaign_active', { campaign_id: id, active }); toast(active ? '✓ Campaign activated' : '✓ Campaign deactivated — it is now under “Ended or inactive”'); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function toggleCampaignVisibility(id, public_only) { try { await call('set_campaign_visibility', { campaign_id: id, public_only }); toast(public_only ? '✓ Now hidden from Sellers' : '✓ Now shown to Sellers'); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function toggleCampaignPublicPage(id, public_page_enabled) { try { await call('set_campaign_visibility', { campaign_id: id, public_page_enabled }); toast(public_page_enabled ? '✓ Public page turned on' : '✓ Public page turned off'); renderCampaignsTab(); } catch (e) { alert(e.message); } }
 async function downloadCampaignReport(id) {
@@ -3620,14 +3673,24 @@ async function gwAnnClear() {
 
 // ---- what is on the page: two ordered groups
 const GW_GRIP = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 8h14M5 12h14M5 16h14"/></svg>';
+// Only what is on, or about to be on, the page is listed here. Ended, paused and draft campaigns never show to the public, so they are tucked away
+// behind one button (and still counted) instead of crowding the list.
+const gwVisible = (it) => gw.showOld || it.state === 'open' || it.state === 'not_open';
+function gwHiddenCount() { return ['involved', 'registration'].reduce((n, sec) => n + gw.d.sections[sec].items.filter(it => !(it.state === 'open' || it.state === 'not_open')).length, 0); }
+function gwFullOrder(sec, visibleIds) {   // the hidden ones keep their places; the visible ones take the new order
+  const all = gw.d.sections[sec].items.map(x => x.id), vis = new Set(visibleIds); let k = 0;
+  return all.map(id => (vis.has(id) ? visibleIds[k++] : id));
+}
+function gwToggleOld() { gw.showOld = !gw.showOld; document.getElementById('gwItems') ? (document.getElementById('gwItems').outerHTML = gwItemsHtml()) : gwPaint && gwPaint(); }
 function gwItemsHtml() {
-  const w = gwWords(), s = gw.d.sections;
-  return `<div class="card"><h3 style="margin-top:0">What’s on the page</h3>
-    <p class="gw-lede">Campaigns and registrations come from Parish Campaigns, and only ones with a working public page can be put on. You can also add something that isn’t there. Each group is ordered by closing date unless you change it. Drag the handle, or use Up and Down.</p>
+  const w = gwWords(), s = gw.d.sections, hidden = gwHiddenCount();
+  return `<div class="card" id="gwItems"><h3 style="margin-top:0">What’s on the page</h3>
+    <p class="gw-lede">Campaigns and registrations come from Parish Campaigns, and only ones with a working public page can be put on. Only what is open now or opening soon is shown here: the public page never shows anything that has ended, is paused or is still a draft. You can also add something that isn’t there. Each group is ordered by closing date unless you change it. Drag the handle, or use Up and Down.</p>
+    ${hidden || gw.showOld ? `<button class="small" type="button" onclick="gwToggleOld()" aria-pressed="${!!gw.showOld}">${gw.showOld ? 'Hide ended, paused and draft' : `Show ended, paused and draft (${hidden})`}</button>` : ''}
     <button class="primary" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwOpenForm()">Add something</button>
     <div id="gwForm">${gw.form ? gwFormHtml() : ''}</div>
     ${['involved', 'registration'].map(sec => `<div class="gw-group"><div class="gw-group-head"><h4>${esc(w.sections[sec])}</h4><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="gw-mode ${s[sec].mode === 'custom' ? 'custom' : ''}">${s[sec].mode === 'custom' ? 'Custom order' : 'Automatic order: closing soonest'}</span>${s[sec].mode === 'custom' ? `<button class="gw-mini" type="button" onclick="gwBackToAuto('${sec}')">Back to automatic</button>` : ''}</span></div>
-      <div class="gw-arows" data-sec="${sec}">${s[sec].items.length ? s[sec].items.map((it, i) => gwRowHtml(it, i, s[sec].items.length)).join('') : '<div class="gw-msg">Nothing here yet.</div>'}</div></div>`).join('')}</div>`;
+      <div class="gw-arows" data-sec="${sec}">${(() => { const vis = s[sec].items.filter(gwVisible); return vis.length ? vis.map((it, i) => gwRowHtml(it, i, vis.length)).join('') : `<div class="gw-msg">${s[sec].items.length ? 'Nothing is open right now.' : 'Nothing here yet.'}</div>`; })()}</div></div>`).join('')}</div>`;
 }
 function gwRowHtml(it, idx, total) {
   const mine = it.source === 'manual', live = it.listed && it.state === 'open';
@@ -3653,13 +3716,13 @@ async function gwToggleListed(id, source, box) {
   } catch (e) { box.checked = !want; toast(e.message, 'error'); }
 }
 async function gwMove(id, sec, dir) {
-  const ids = gw.d.sections[sec].items.map(x => x.id), i = ids.indexOf(id), j = i + dir;
+  const ids = gw.d.sections[sec].items.filter(gwVisible).map(x => x.id), i = ids.indexOf(id), j = i + dir;
   if (j < 0 || j >= ids.length) return;
   [ids[i], ids[j]] = [ids[j], ids[i]];
   await gwSaveOrder(sec, ids);
 }
-async function gwSaveOrder(sec, ids) {
-  try { await call('gateway_set_order', { section: sec, ids }); toast('✓ Order saved'); await gwReload(); } catch (e) { toast(e.message, 'error'); await gwReload(); }
+async function gwSaveOrder(sec, ids) {   // ids = the ones on screen, in their new order; the ones tucked away keep their places
+  try { await call('gateway_set_order', { section: sec, ids: gwFullOrder(sec, ids) }); toast('✓ Order saved'); await gwReload(); } catch (e) { toast(e.message, 'error'); await gwReload(); }
 }
 async function gwBackToAuto(sec) {
   try { await call('gateway_set_order', { section: sec, ids: null }); toast('✓ Back to automatic order'); await gwReload(); } catch (e) { toast(e.message, 'error'); }
