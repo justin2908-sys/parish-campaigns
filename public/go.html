@@ -72,12 +72,17 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .notices.urgent .sub { color:var(--fg); white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-weight:600; }
 .notices.urgent .go { color:var(--warn); }
 
-/* the permanent shortcuts are pictures, not words: WhatsApp, email */
+/* the permanent shortcuts are pictures, not words: the bell, candle, listings, shop, email */
 .iconrow { display:grid; grid-template-columns:repeat(var(--n, 4), minmax(0, 60px)); justify-content:center; gap:clamp(8px, 2.6vw, 18px); margin-top:14px; }
 .ic { width:100%; aspect-ratio:1; min-width:44px; border-radius:50%; border:0; background:var(--brand); color:#fff; display:grid; place-items:center; position:relative; }
 .ic:active { filter:brightness(.88); }
 .ic svg { width:52%; height:52%; }
 @media (max-width:340px) { .iconrow { grid-template-columns:repeat(3, minmax(0, 60px)); } }
+/* the WhatsApp channel is a plain line of words, not a picture: "Follow us on WhatsApp" */
+.follow { display:flex; align-items:center; justify-content:center; gap:8px; min-height:44px; margin:8px 0 0; padding:6px 10px; font-size:1.0625rem; font-weight:600; color:var(--brand-text); text-decoration:underline; text-underline-offset:3px; text-wrap:balance; text-align:center; }
+.follow svg { flex:none; width:22px; height:22px; }
+.follow:active { filter:brightness(.85); }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 
 /* the bell: today's readings and the saint of the day, in a small panel */
 .dl { display:grid; grid-template-columns:44px minmax(0,1fr) auto; align-items:center; gap:12px; min-height:68px; padding:10px 14px; background:var(--surface); border:2px solid var(--brand-text); border-radius:16px; }
@@ -182,7 +187,7 @@ main { padding-bottom:32px; }
       loading: 'Loading…', copied: 'Copied ', copiedLink: 'Link copied', seeAll: 'See all', showFewer: 'Show fewer',
       full: 'Full', waiting: 'Join waiting list', isNew: 'New',
       // the shortcut buttons show pictures only; these words are for screen readers and for the tooltip
-      waJoin: 'Join our WhatsApp channel', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services', candleAria: 'Light a candle',
+      waFollow: 'Follow us on WhatsApp', newTab: '(opens in a new tab)', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services', candleAria: 'Light a candle',
       today: 'Today', readings: 'Today’s Mass readings', about: 'About today’s saint or feast', readingsTitle: 'Mass readings for today',
       bellAria: 'Notifications: today’s readings and today in the Church', dayReadings: 'Readings for the day', dayReadingsSub: 'The Mass readings', dayChurch: 'Today in the Church', dayClose: 'Close',
       todaySource: 'Readings: Universalis (England & Wales). Day: General Roman Calendar.',
@@ -267,9 +272,10 @@ main { padding-bottom:32px; }
     if (candles && /^\/candles\/[a-z0-9-]+$/.test(String(candles.path || ''))) parts.push('<a class="ic" href="' + esc(candles.path) + '" aria-label="' + esc(W.candleAria) + '" title="' + esc(W.candleAria) + '">' + icon('candle') + '</a>');
     if (listings && /^\/listings\/[a-z0-9-]+$/.test(String(listings.path || ''))) parts.push('<a class="ic" href="' + esc(listings.path) + '" aria-label="' + esc(W.listAria) + '" title="' + esc(W.listAria) + '">' + icon('tag') + '</a>');
     if (shop && /^\/shop\/[a-z0-9-]+$/.test(String(shop.path || ''))) parts.push('<a class="ic" href="' + esc(shop.path) + '" aria-label="' + esc(W.shopAria) + '" title="' + esc(W.shopAria) + '">' + icon('bag') + '</a>');
-    if (/^https:\/\/(www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+\/?$/i.test(u)) parts.push('<a class="ic" href="' + esc(u) + '" target="_blank" rel="noopener" aria-label="' + esc(W.waJoin) + '" title="' + esc(W.waJoin) + '">' + icon('whatsapp') + '</a>');
+    var follow = /^https:\/\/(www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+\/?$/i.test(u)
+      ? '<a class="follow" href="' + esc(u) + '" target="_blank" rel="noopener">' + icon('whatsapp', 22) + '<span>' + esc(W.waFollow) + '</span><span class="sr"> ' + esc(W.newTab) + '</span></a>' : '';
     if (o.contact_email) parts.push('<button class="ic" type="button" data-copy="' + esc(o.contact_email) + '" aria-label="' + esc(W.emailAria + ': ' + o.contact_email) + '" title="' + esc(W.emailAria) + '">' + icon('mail') + '</button>');
-    return parts.length ? '<nav class="iconrow" style="--n:' + parts.length + '" aria-label="Shortcuts">' + parts.join('') + '</nav>' : '';
+    return (parts.length ? '<nav class="iconrow" style="--n:' + parts.length + '" aria-label="Shortcuts">' + parts.join('') + '</nav>' : '') + follow;
   }
   // The bell: today's readings and "Today in the Church" (the day's feast), in a small panel instead of a card taking up the page. It only
   // shows for the day it was made for, so a page saved on a phone overnight never offers yesterday's feast.

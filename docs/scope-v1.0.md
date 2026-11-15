@@ -1658,3 +1658,9 @@ The "ticket numbers" step of the new-campaign wizard told every online ticket bu
 **The Parish page editor.** The public parish page already showed only campaigns that are open on today's date (not a draft, not paused, not ended), and this was checked against the live site. What cluttered was the office's "What's on the page" editor, which listed everything. It now lists only what is open or opening soon; one button, "Show ended, paused and draft (N)", brings the rest back. Re-ordering still works with some hidden (the hidden ones keep their places).
 
 **Tests:** `test/gateway/draft-delete.test.js` (7) and the browser run `test/gateway/ui-lists.js` (17: chips and counts, each filter, no sideways scroll at 390 px, delete with a confirm and a cancel, the Registrations list, the Parish page editor, and the public page).
+
+## 72. "Follow us on WhatsApp" as words, not a picture — 2026-11-15 (on dev; preview only)
+
+The WhatsApp picture in the parish page's icon row was not clear to visitors. It is replaced by a plain, underlined line under the icon row, **"Follow us on WhatsApp"** (with the small WhatsApp mark beside it), which opens the channel in a new tab. It is 44 px tall, wraps on very narrow screens, and tells screen readers it opens a new tab. It still only appears when a WhatsApp channel address is set (Admin, Parish page), and only a real WhatsApp channel address is ever linked. The icon row is now: notifications bell, candle, listings, repository, email.
+
+Tests: `ui-check.js` updated (the line, its place under the icons, underlined, 44 px, new tab; absent when no channel is set). Also fixed: the `ui-candles.js` Thursday-email check depended on the day of the week it was run (from Thursday to Sunday the first bookable week is the one after the week "Send it now" mails); it now passes on any day.
