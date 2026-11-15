@@ -1012,6 +1012,24 @@ async function binCampaign(session, { campaign_id }) {
   if (error) throw httpError(400, error.message);
   return { ok: true };
 }
+// Delete a DRAFT for good (a campaign or form that was started and never opened). Only while it is a draft, and only if nothing has ever happened on it:
+// no sale, no payment, no registration, no waiting-list entry. Anything that was opened is moved to the Recycle Bin instead, never deleted.
+async function deleteDraftCampaign(session, { campaign_id }) {
+  await requireCampaignManager(session, campaign_id);   // SuperAdmin or Priest; Finance only for a registration form they made themselves
+  const { data: c } = await supabase.from('campaigns').select('id, name, is_draft, form_def').eq('id', campaign_id).maybeSingle();
+  if (!c || shopIsHiddenCampaign(c)) throw httpError(404, 'Campaign not found');
+  if (!c.is_draft) throw httpError(400, 'Only a draft can be deleted. A campaign that has been opened can be moved to the Recycle Bin instead.');
+  const n = async (table, extra) => { let q = supabase.from(table).select('id', { count: 'exact', head: true }).eq('campaign_id', c.id); if (extra) q = extra(q); const { count } = await q; return count || 0; };
+  const [payments, regs, waiting, sold, recon] = await Promise.all([n('payments'), n('registrations'), n('waiting_list'), n('tickets', q => q.neq('status', 'unsold')), n('cash_recon')]);
+  if (payments || regs || waiting || sold || recon) throw httpError(400, 'This draft already has activity on it, so it cannot be deleted. Move it to the Recycle Bin instead.');
+  for (const table of ['user_campaigns', 'tickets', 'ticket_blocks', 'tiers']) {
+    const { error } = await supabase.from(table).delete().eq('campaign_id', c.id);
+    if (error) throw httpError(400, 'Could not delete the draft: ' + error.message);
+  }
+  const { error } = await supabase.from('campaigns').delete().eq('id', c.id).eq('org_id', session.org_id).eq('is_draft', true);
+  if (error) throw httpError(400, 'Could not delete the draft: ' + error.message);
+  return { ok: true, name: c.name };
+}
 async function restoreCampaign(session, { campaign_id }) {
   requireOrgRole(session, ['superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
@@ -3309,6 +3327,7 @@ const actions = {
   campaign_block_usage: (s, b) => campaignBlockUsage(s, b),
   bin_campaign: (s, b) => binCampaign(s, b),
   restore_campaign: (s, b) => restoreCampaign(s, b),
+  delete_draft_campaign: (s, b) => deleteDraftCampaign(s, b),
   list_binned_campaigns: (s) => listBinnedCampaigns(s),
   export_campaign_report: (s, b) => exportCampaignReport(s, b),
 
