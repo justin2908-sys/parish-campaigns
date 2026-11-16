@@ -258,7 +258,7 @@ function render() {
   document.getElementById('app').className = '';
   if (!state.session) { renderLogin(); return; }
   if (state.user.needsConsent) { document.getElementById('headerRight').innerHTML = ''; renderConsentGate(); return; }
-  const staffOnly = state.user.role === 'finance' || state.user.role === 'priest';   // these two never sell
+  const staffOnly = state.user.role === 'finance' || state.user.role === 'priest' || (state.user.role === 'volunteer' && !state.user.also_sells);   // these never sell (a Volunteer only if "also sells" is ticked)
   if (staffOnly) viewMode = 'admin';
   const toAdmin = state.user.role !== 'seller' && state.user.role !== 'platform_owner' && !staffOnly && viewMode === 'sell'
     ? `<button onclick="viewMode='admin'; render();">← Admin</button>` : '';
@@ -1232,7 +1232,9 @@ const ADMIN_TABS_BY_ROLE = {
   admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles'],
   finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles'],
   priest: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'users', 'bin', 'privacy'],   // everything a SuperAdmin sees
+  volunteer: ['campaigns', 'parishpage', 'repository', 'listings', 'candles'],   // looks at campaigns; helps with the page, orders, listings and candles; no money, no records
 };
+const isVolunteer = () => !!state.user && state.user.role === 'volunteer';
 // Thirteen tabs in one wrapping block was too many to find anything in. They are now four sections (what people do all day, in the order they
 // do it), and each section has its own short row of tabs. A role only sees the tabs it is allowed; a section with one tab shows that tab's own
 // name and has no second row.
@@ -1262,7 +1264,7 @@ function setAdminGroup(id) {
 async function renderAdmin() {
   const tabs = adminAllowedTabs();
   if (!tabs.includes(adminTab)) adminTab = tabs[0];
-  const canSell = state.user.role === 'admin' || state.user.role === 'superadmin';   // a Priest never sells, but can do everything else a SuperAdmin can
+  const canSell = state.user.role === 'admin' || state.user.role === 'superadmin' || (state.user.role === 'volunteer' && !!state.user.also_sells);   // a Priest never sells, but can do everything else a SuperAdmin can
   document.getElementById('app').innerHTML = h`
     ${canSell ? `<button class="sellbtn" onclick="viewMode='sell'; render();"><span>🎟️</span> Sell tickets <span class="go">→</span></button>` : ''}
     <div id="retentionBanner"></div>
@@ -3167,7 +3169,7 @@ async function doResend(paymentId) {
 // ---- Registrations (SuperAdmin, Finance, Priest) ----
 // The registration forms arrive in a later phase. This tab is already behind the real access rules: the server
 // refuses Admins and Sellers, and everyone else first accepts the confidentiality statement below.
-const ROLE_LABELS = { platform_owner: 'Platform Owner', superadmin: 'SuperAdmin', admin: 'Admin', finance: 'Finance', priest: 'Priest', seller: 'Seller' };
+const ROLE_LABELS = { platform_owner: 'Platform Owner', superadmin: 'SuperAdmin', admin: 'Admin', finance: 'Finance', priest: 'Priest', seller: 'Seller', volunteer: 'Volunteer' };
 const CONFIDENTIALITY_POINTS = [
   'The details in registrations can include children and families, and religious information. They are private.',
   'I will use them only for the purpose they were collected for, and I will not share or discuss them outside the parish team.',
@@ -3275,7 +3277,7 @@ async function renderUsersTab() {
   const el = adminEl(seq); if (!el) return; // a newer tab was opened meanwhile
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Users</h3>
     <table><tr><th>Name</th><th>Mobile</th><th>Role</th><th>Status</th><th></th></tr>
-    ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
+    ${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.mobile)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}${u.role === 'volunteer' ? `<label style="display:flex;gap:6px;align-items:center;font-weight:500;font-size:13px;margin:4px 0 0"><input type="checkbox" style="width:auto;margin:0" ${u.also_sells ? 'checked' : ''} onchange="toggleAlsoSells('${u.id}', this)"> Also sells tickets</label>` : ''}</td>
       <td><span class="badge ${u.active?'ok':'bad'}">${u.active?'Active':'Disabled'}</span></td>
       <td>${u.role === 'superadmin' && state.user.role !== 'superadmin' ? '<span class="muted">Only a SuperAdmin can change this account</span>' : `<button class="small" onclick="toggleUserActive('${u.id}', ${!u.active})">${u.active?'Disable':'Enable'}</button>
       <button class="small" onclick="doResetPassword('${u.id}')">Reset PW</button>`}</td></tr>`).join('')}
@@ -3283,11 +3285,14 @@ async function renderUsersTab() {
     <div class="card"><h3 style="margin-top:0">Add User</h3>
     <label>Name</label><input id="uName">
     <label>Mobile</label><input id="uMobile" type="tel">
-    <label>Role</label><select id="uRole"><option value="seller">Seller</option><option value="admin">Admin</option><option value="finance">Finance</option><option value="priest">Priest</option>${state.user.role === 'superadmin' ? '<option value="superadmin">SuperAdmin</option>' : ''}</select>
+    <label>Role</label><select id="uRole" onchange="showRoleHelp()"><option value="seller">Seller</option><option value="admin">Admin</option><option value="finance">Finance</option><option value="priest">Priest</option><option value="volunteer">Volunteer</option>${state.user.role === 'superadmin' ? '<option value="superadmin">SuperAdmin</option>' : ''}</select>
+    <div id="uRoleHelp" class="muted" style="font-size:13.5px;margin-top:4px"></div>
+    <label id="uSellsRow" style="display:none;gap:8px;align-items:center;font-weight:500;margin-top:8px"><input type="checkbox" id="uSells" style="width:auto;margin:0"> Also sells tickets (gives them the Seller screen as well)</label>
     <label>Password (8+ characters)</label><input id="uPassword" type="password">
     <button class="primary" onclick="doCreateUser()">Create User</button>
     <div id="userResult"></div>
     </div>`;
+  showRoleHelp();
 }
 async function doCreateUser() {
   const resEl = document.getElementById('userResult');
@@ -3297,10 +3302,30 @@ async function doCreateUser() {
       mobile: document.getElementById('uMobile').value.trim(),
       role: document.getElementById('uRole').value,
       password: document.getElementById('uPassword').value,
+      also_sells: document.getElementById('uRole').value === 'volunteer' && document.getElementById('uSells').checked,
     });
     toast('✓ User created');
     renderUsersTab();
   } catch (e) { resEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+const ROLE_HELP = {
+  volunteer: 'Helps with the parish page, Repository orders, Listings approval and Light a Candle. Can look at campaigns but not change them. Sees no money and cannot cancel, refund or delete anything.',
+  seller: 'Sells tickets from their own phone. Sees only the Sell screen.',
+  admin: 'Sells tickets and looks after payments, cash and the parish page. Cannot create campaigns or manage users.',
+  finance: 'Payments, cash and registration forms. Does not sell tickets or download campaign reports.',
+  priest: 'Everything a SuperAdmin can do, except changing a SuperAdmin account.',
+  superadmin: 'Everything, including users and settings.',
+};
+function showRoleHelp() {
+  const r = document.getElementById('uRole'); if (!r) return;
+  const help = document.getElementById('uRoleHelp'), row = document.getElementById('uSellsRow');
+  if (help) help.textContent = ROLE_HELP[r.value] || '';
+  if (row) row.style.display = r.value === 'volunteer' ? 'flex' : 'none';
+}
+async function toggleAlsoSells(id, box) {
+  const want = box.checked;
+  try { await call('set_user_also_sells', { user_id: id, also_sells: want }); toast(want ? '✓ They can now sell tickets too' : '✓ They no longer sell tickets'); }
+  catch (e) { box.checked = !want; toast(e.message, 'error'); }
 }
 async function toggleUserActive(id, active) { try { await call('set_user_active', { user_id: id, active }); toast(active ? '✓ User enabled' : '✓ User disabled'); renderUsersTab(); } catch (e) { alert(e.message); } }
 async function doResetPassword(id) {
@@ -3414,10 +3439,10 @@ function featureHead(c) {
     ? `<button class="small" onclick="${c.copy}">Copy link</button><button class="small" onclick="${c.see}">${c.seeLabel || 'View the page'}</button>`
     : '';
   const noAddr = c.pagePath ? '' : '<div class="hint">The parish page has no address yet, so this cannot be opened. The SuperAdmin gives it one under Parish page &rarr; Page.</div>';
-  return `<div class="card fh"><div class="fh-top gw-switchrow"><h3>${c.title}</h3>${c.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}<label class="gw-switch" style="margin-left:auto"><input type="checkbox" ${c.enabled ? 'checked' : ''} aria-label="${esc(c.switchAria)}" onchange="${c.onSwitch}"><span></span></label></div>
+  return `<div class="card fh"><div class="fh-top gw-switchrow"><h3>${c.title}</h3>${c.enabled ? '<span class="gw-status live">Open</span>' : '<span class="gw-status">Closed</span>'}${isVolunteer() ? '' : `<label class="gw-switch" style="margin-left:auto"><input type="checkbox" ${c.enabled ? 'checked' : ''} aria-label="${esc(c.switchAria)}" onchange="${c.onSwitch}"><span></span></label>`}</div>
     <p class="fh-blurb">${c.blurb}</p>${noAddr}<div class="fh-tools">${tools}<button type="button" class="small fh-howbtn" aria-label="How it works" title="How it works" aria-expanded="false" onclick="const p = this.parentNode.nextElementSibling; p.hidden = !p.hidden; this.setAttribute('aria-expanded', String(!p.hidden))"><span class="fh-i">i</span></button></div>
     <p class="fh-how" hidden>${c.how}</p>${c.extra || ''}</div>
-    <div class="seg" role="group" aria-label="${esc(c.title)} screens">${c.views.map(v => `<button type="button" aria-pressed="${c.active === v.id}" onclick="${c.viewVar}='${v.id}'; ${c.paint}()">${v.label}</button>`).join('')}</div>`;
+    ${(() => { const vs = isVolunteer() ? c.views.filter(v => !v.office) : c.views; return vs.length < 2 ? '' : `<div class="seg" role="group" aria-label="${esc(c.title)} screens">${vs.map(v => `<button type="button" aria-pressed="${c.active === v.id}" onclick="${c.viewVar}='${v.id}'; ${c.paint}()">${v.label}</button>`).join('')}</div>`; })()}`;
 }
 function gwStyle() {
   if (document.getElementById('gwStyle')) return;
@@ -3909,8 +3934,8 @@ function repoHeadHtml() {
   return featureHead({ title: 'Repository', enabled: s.enabled, switchAria: 'Open for online orders', onSwitch: 'repoSetEnabled(this)', pagePath: o.page_path, copy: 'repoCopyLink()', see: 'repoSeeShop()', seeLabel: 'View the shop',
     blurb: 'Parishioners order items online and collect them after Mass.',
     how: 'Parishioners choose items, pick the Mass where they will collect, and pay by card. You see the orders here; the repository volunteer makes each one up and hands it out after Mass. Switch off to stop new orders at once; orders already made stay on the list.' + (o.slug ? ' A shopping-bag shortcut appears on the parish page while it is open.' : ''),
-    extra: `<div class="${sl.warn ? 'hint' : 'muted'}">${esc(sl.text)}${sl.warn ? ` <button class="small" style="min-height:44px;margin-top:6px" onclick="repo.view='items'; repoPaint()">Update the stock from SumUp</button>` : ''}</div>`,
-    views: [{ id: 'orders', label: 'Orders' }, { id: 'items', label: 'Items (' + d.items.length + ')' }, { id: 'settings', label: 'Mass times &amp; cut-off' }], active: repo.view, viewVar: 'repo.view', paint: 'repoPaint' });
+    extra: isVolunteer() ? '' : `<div class="${sl.warn ? 'hint' : 'muted'}">${esc(sl.text)}${sl.warn ? ` <button class="small" style="min-height:44px;margin-top:6px" onclick="repo.view='items'; repoPaint()">Update the stock from SumUp</button>` : ''}</div>`,
+    views: [{ id: 'orders', label: 'Orders' }, { id: 'items', label: 'Items (' + d.items.length + ')', office: true }, { id: 'settings', label: 'Mass times &amp; cut-off', office: true }], active: repo.view, viewVar: 'repo.view', paint: 'repoPaint' });
 }
 function repoCopyLink() { const url = location.origin + repo.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
 function repoSeeShop() { if (!repo.d.settings.enabled) toast('The shop is closed, so visitors would see “not taking orders”.', 'error'); window.open(repo.d.org.page_path, '_blank', 'noopener'); }
@@ -3929,7 +3954,7 @@ function repoOrderHtml(o) {
   if (o.status === 'paid') acts.push(`<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoMark('${o.id}','prepared')">✓ Prepared</button>`);
   if (o.status === 'prepared') acts.push(`<button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoMark('${o.id}','collected')">✓ Collected</button>`, `<button class="small" onclick="repoMark('${o.id}','paid')">Not prepared after all</button>`);
   if (o.status === 'collected') acts.push(`<button class="small" onclick="repoMark('${o.id}','prepared')">Not collected after all</button>`);
-  if (o.status !== 'cancelled') acts.push(`<button class="small" onclick="repo.cancelId='${o.id}'; repoPaint()">Cancel this order…</button>`);
+  if (o.status !== 'cancelled' && !isVolunteer()) acts.push(`<button class="small" onclick="repo.cancelId='${o.id}'; repoPaint()">Cancel this order…</button>`);
   const cancel = repo.cancelId === o.id ? `<div class="rp-cancel"><b>Cancel ${esc(o.ref)}?</b>
       <div><label for="rpWhy">Why? (kept on the record)</label><input id="rpWhy" maxlength="150" placeholder="e.g. item damaged, asked to cancel" autocomplete="off"></div>
       ${paid ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="rpRefund" style="width:auto;margin:0" checked> Note that I have refunded this in SumUp</label>
@@ -3950,7 +3975,7 @@ function repoOrdersHtml() {
   return `<div class="card"><h3 style="margin-top:0">Orders${od.weekend_label ? ' for the weekend of ' + esc(od.weekend_label) : ''}</h3>
     <p class="gw-lede">Orders made by Wednesday midnight are for that weekend (the cut-off can be changed under Mass times &amp; cut-off). Each order is made up under its reference with the person's name, and handed out at the church door after the Mass they chose.</p>
     ${weeks}
-    ${od.orders.length ? `<div class="rp-sum"><span>${od.totals.orders} order${od.totals.orders === 1 ? '' : 's'}</span><span>${od.totals.to_prepare} still to prepare</span><span>${repoMoney(od.totals.taken)} paid</span></div>
+    ${od.orders.length ? `<div class="rp-sum"><span>${od.totals.orders} order${od.totals.orders === 1 ? '' : 's'}</span><span>${od.totals.to_prepare} still to prepare</span>${od.totals.taken === null ? '' : `<span>${repoMoney(od.totals.taken)} paid</span>`}</div>
       <div class="gw-btns" style="margin:0 0 6px"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="repoPrint()">🖨 Print the list for the volunteer</button><button class="small" onclick="repoLoadOrders('${od.weekend || ''}'); toast('✓ List refreshed')">Refresh</button></div>
       ${slots.map(([label, list]) => `<h4 class="rp-slot">${esc(label)}</h4>${list.map(repoOrderHtml).join('')}`).join('')}`
       : `<p class="muted" style="margin:6px 0 0">No orders yet${od.weekend_label ? ' for this weekend' : ''}. They appear here as soon as someone orders and pays.</p>`}</div>`;
@@ -4234,7 +4259,7 @@ function lstHeadHtml() {
     blurb: 'A noticeboard for parishioners: things for sale, free, and services.',
     how: 'People contact the lister by email only (the address is never shown on the page). You approve every listing before it appears. The church takes no part in any deal and the page says so. Switch off to hide the page and stop new listings; a shortcut appears on the parish page while it is open.',
     extra: c.waiting ? `<div class="hint"><b>${c.waiting} listing${c.waiting === 1 ? ' is' : 's are'} waiting for you to approve.</b></div>` : '',
-    views: [{ id: 'waiting', label: 'Waiting' + (c.waiting ? ' (' + c.waiting + ')' : '') }, { id: 'live', label: 'Live (' + c.live + ')' + (c.reported ? ' ⚑' + c.reported : '') }, { id: 'ended', label: 'Ended' }, { id: 'settings', label: 'Settings' }], active: lst.view, viewVar: 'lst.view', paint: 'lstPaint' });
+    views: [{ id: 'waiting', label: 'Waiting' + (c.waiting ? ' (' + c.waiting + ')' : '') }, { id: 'live', label: 'Live (' + c.live + ')' + (c.reported ? ' ⚑' + c.reported : '') }, { id: 'ended', label: 'Ended' }, { id: 'settings', label: 'Settings', office: true }], active: lst.view, viewVar: 'lst.view', paint: 'lstPaint' });
 }
 function lstCopyLink() { const url = location.origin + lst.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
 function lstSeePage() { if (!lst.d.settings.enabled) toast('Listings is closed, so visitors would see “not open”.', 'error'); window.open(lst.d.org.page_path, '_blank', 'noopener'); }
@@ -4259,7 +4284,7 @@ function lstWaitingHtml() {
       <div class="muted">${l.fee > 0 ? `Fee ${lstMoney(l.fee)} ${l.paid ? 'paid' : '(not shown as paid)'}` : 'No fee (£0)'} · ${esc(l.email)}</div>
       <div class="rp-act"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="lstApprove('${l.id}')">✓ Approve</button><button class="small" onclick="lst.rejectId='${l.id}'; lstPaint()">Not suitable…</button><button class="small" onclick="lstCopyEmail('${l.id}')">Copy their email</button></div>
       ${lst.rejectId === l.id ? `<div class="rp-cancel"><b>Not accepting “${esc(l.title)}”</b><div><label for="lstWhy">Why? (the lister will see this)</label><input id="lstWhy" maxlength="300" placeholder="e.g. We can't list this on the parish noticeboard" autocomplete="off"></div>
-        ${l.fee > 0 && l.paid ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lstRefund" style="width:auto;margin:0" checked> Note that I have refunded ${lstMoney(l.fee)} in SumUp</label><div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it, so the books agree.</div>` : ''}
+        ${l.fee > 0 && l.paid && !isVolunteer() ? `<label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="lstRefund" style="width:auto;margin:0" checked> Note that I have refunded ${lstMoney(l.fee)} in SumUp</label><div class="muted" style="font-size:13.5px">Refunding is done in SumUp itself; this only records it, so the books agree.</div>` : ''}
         <div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="lstReject('${l.id}', ${l.fee > 0 && l.paid ? l.fee : 0})">Yes, don't accept it</button><button class="small" onclick="lst.rejectId=null; lstPaint()">Keep it waiting</button></div></div>` : ''}</div>`).join('')}</div>`;
 }
 async function lstApprove(id) {
@@ -4281,8 +4306,8 @@ function lstLiveHtml() {
   return `<div class="card"><h3 style="margin-top:0">Live now</h3><p class="gw-lede">In the order visitors see them (newest and most looked-at first; a fee never buys a place). “★ Pick” puts one near the top.</p>${L.map(l => `
     <div class="rp-order ${l.reports ? '' : ''}" style="margin-bottom:12px"><div class="rp-top"><b class="rp-name">${esc(l.title)}</b>${l.featured ? '<span class="gw-status live">★ Pick</span>' : ''}${l.reports ? `<span class="gw-status" style="background:var(--bad-dim);color:var(--bad)">⚑ ${l.reports} report${l.reports === 1 ? '' : 's'}</span>` : ''}</div>
       <div class="muted">${esc(lstKind[l.kind])} · ${esc(l.category)}${l.price ? ' · ' + esc(l.price) : ''} · ends ${esc(l.ends)} (${l.days_left} day${l.days_left === 1 ? '' : 's'} left) · ${l.views} looked · ${l.contacts} asked for the email${l.hearts ? ` · ♥ ${l.hearts}` : ''}</div>
-      ${l.reasons && l.reasons.length ? `<div class="hint" style="margin:4px 0"><b>Reported:</b> ${l.reasons.map(r => '“' + esc(r) + '”').join(' · ')}<div class="rp-act" style="margin-top:6px"><button class="small" onclick="lstDismiss('${l.id}')">Dismiss the reports</button></div></div>` : ''}
-      <div class="rp-act"><button class="small" aria-pressed="${l.featured}" onclick="lstPick('${l.id}', ${!l.featured})">${l.featured ? '★ Picked' : '☆ Pick'}</button><button class="small" onclick="lst.takeId='${l.id}'; lstPaint()">Take down…</button><button class="small" onclick="lstCopyEmail('${l.id}')">Copy their email</button></div>
+      ${l.reasons && l.reasons.length ? `<div class="hint" style="margin:4px 0"><b>Reported:</b> ${l.reasons.map(r => '“' + esc(r) + '”').join(' · ')}${isVolunteer() ? '' : `<div class="rp-act" style="margin-top:6px"><button class="small" onclick="lstDismiss('${l.id}')">Dismiss the reports</button></div>`}</div>` : ''}
+      <div class="rp-act">${isVolunteer() ? '' : `<button class="small" aria-pressed="${l.featured}" onclick="lstPick('${l.id}', ${!l.featured})">${l.featured ? '★ Picked' : '☆ Pick'}</button><button class="small" onclick="lst.takeId='${l.id}'; lstPaint()">Take down…</button>`}<button class="small" onclick="lstCopyEmail('${l.id}')">Copy their email</button></div>
       ${lst.takeId === l.id ? `<div class="rp-cancel"><b>Take down “${esc(l.title)}”?</b><div><label for="lstTake">Why? (the lister will see this)</label><input id="lstTake" maxlength="300" placeholder="e.g. This is not suitable for the parish noticeboard" autocomplete="off"></div><div class="rp-act"><button class="small" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="lstTakedown('${l.id}')">Yes, take it down</button><button class="small" onclick="lst.takeId=null; lstPaint()">Keep it</button></div></div>` : ''}</div>`).join('')}</div>`;
 }
 async function lstPick(id, on) { try { await call('listings_set_featured', { id, featured: on }); toast(on ? '✓ Picked: it shows near the top' : '✓ No longer a pick'); await lstReload(); } catch (e) { toast(e.message, 'error'); } }
@@ -4350,7 +4375,7 @@ function cndHeadHtml() {
   return featureHead({ title: 'Light a Candle', enabled: s.enabled, switchAria: 'Open for candle requests', onSwitch: 'cndSetEnabled(this)', pagePath: o.page_path, copy: 'cndCopyLink()', see: 'cndSeePage()', seeLabel: 'View the page',
     blurb: 'Parishioners ask for candles to be lit, and give an offering by card.',
     how: 'They choose a candle stand, a day (the coming week, Monday to Sunday) and a number of candles. A volunteer lights them and you tick each one as it is lit. Any “who is it for” note is seen here only and is never put in an email. Switch off to hide the page and stop new requests; a candle shortcut appears on the parish page while it is open.',
-    views: [{ id: 'requests', label: 'Requests' }, { id: 'settings', label: 'Settings' }, { id: 'email', label: 'Thursday email' }], active: cnd.view, viewVar: 'cnd.view', paint: 'cndPaint' });
+    views: [{ id: 'requests', label: 'Requests' }, { id: 'settings', label: 'Settings', office: true }, { id: 'email', label: 'Thursday email', office: true }], active: cnd.view, viewVar: 'cnd.view', paint: 'cndPaint' });
 }
 function cndCopyLink() { const url = location.origin + cnd.d.org.page_path; try { navigator.clipboard.writeText(url).then(() => toast('✓ Link copied'), () => toast('Link: ' + url)); } catch { toast('Link: ' + url); } }
 function cndSeePage() { if (!cnd.d.settings.enabled) toast('Light a Candle is closed, so visitors would see “not open”.', 'error'); window.open(cnd.d.org.page_path, '_blank', 'noopener'); }
@@ -4380,13 +4405,13 @@ function cndRequestsHtml() {
   const row = (r) => `<div class="rp-order" style="margin:0 0 8px"><div class="rp-top"><b class="rp-name">${r.candles} × ${esc(r.name || '(details cleared)')}</b><span class="gw-status ${r.status === 'lit' ? 'live' : ''}">${r.status === 'lit' ? '✓ Lit' : 'To light'}</span></div>
       <div class="muted">${esc(r.ref)} · offering ${cndMoney(r.total)}${r.contact ? ' · ' + esc(r.contact) : ''}${r.refunded ? ' · refunded ' + cndMoney(r.refunded) : ''}</div>
       ${r.intention ? `<div class="rp-lines">For: ${esc(r.intention)} <span class="muted">(private to the office)</span></div>` : ''}
-      <div class="rp-act"><button class="small ${r.status === 'lit' ? '' : 'primary-ish'}" ${r.status === 'lit' ? '' : 'style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)"'} aria-pressed="${r.status === 'lit'}" onclick="cndMark('${r.id}', ${r.status !== 'lit'})">${r.status === 'lit' ? 'Undo: not lit yet' : '✓ Lit'}</button><button class="small" onclick="cnd.cancelId='${r.id}'; cndPaint()">Cancel…</button></div>
+      <div class="rp-act"><button class="small ${r.status === 'lit' ? '' : 'primary-ish'}" ${r.status === 'lit' ? '' : 'style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)"'} aria-pressed="${r.status === 'lit'}" onclick="cndMark('${r.id}', ${r.status !== 'lit'})">${r.status === 'lit' ? 'Undo: not lit yet' : '✓ Lit'}</button>${isVolunteer() ? '' : `<button class="small" onclick="cnd.cancelId='${r.id}'; cndPaint()">Cancel…</button>`}</div>
       ${cnd.cancelId === r.id ? cndCancelHtml(r) : ''}</div>`;
   const body = days.size ? [...days.keys()].sort().map(day => `<div class="card"><h3 style="margin-top:0">${esc(w.requests.find(r => r.date === day).date_label)}</h3>${[...days.get(day).entries()].map(([altar, list]) => `<h4 style="margin:10px 0 6px;font-size:16px">${esc(altar)} <span class="muted">· ${list.reduce((s, x) => s + x.candles, 0)} candle${list.reduce((s, x) => s + x.candles, 0) === 1 ? '' : 's'}</span></h4>${list.map(row).join('')}`).join('')}</div>`).join('')
     : '<div class="card"><p class="muted" style="margin:0">No paid candle requests for this week yet.</p></div>';
   const rest = other.length ? `<div class="card"><h4 style="margin:0 0 6px">Not on the list</h4><p class="gw-lede">Cancelled, or still waiting for the card payment (these are never taken off the list or charged until they are paid).</p>${other.map(r => `<div class="rp-order" style="margin:0 0 6px"><div class="rp-top"><b class="rp-name">${esc(r.ref)} · ${r.candles} × ${esc(r.name || '')}</b><span class="gw-status">${r.status === 'cancelled' ? 'Cancelled' : 'Waiting for payment'}</span></div><div class="muted">${esc(r.date_label)} · ${esc(r.altar)}${r.cancel_reason ? ' · ' + esc(r.cancel_reason) : ''}</div></div>`).join('')}</div>` : '';
   return cndWeekChips() + `<div class="card"><h3 style="margin-top:0">${esc(w.label)}</h3>
-    <div class="muted">${t.requests} request${t.requests === 1 ? '' : 's'} · ${t.candles} candle${t.candles === 1 ? '' : 's'} · ${t.to_light} still to light · offerings ${cndMoney(t.offered)}</div>
+    <div class="muted">${t.requests} request${t.requests === 1 ? '' : 's'} · ${t.candles} candle${t.candles === 1 ? '' : 's'} · ${t.to_light} still to light${isVolunteer() ? '' : ` · offerings ${cndMoney(t.offered)}`}</div>
     <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="cndPrint()">🖨 Print the list for the volunteer</button><button class="small" onclick="cndRefresh()">Refresh</button></div></div>` + body + rest;
 }
 async function cndRefresh() { try { cnd.week = await call('candles_week', { monday: cnd.monday }); cndPaint(); toast('✓ List refreshed'); } catch (e) { toast(e.message, 'error'); } }

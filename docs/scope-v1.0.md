@@ -1672,3 +1672,21 @@ On the public buy page the quick-pick buttons were the campaign's starting quant
 ## 74. Up to 50 tickets in one online purchase — 2026-11-16 (on dev; preview only)
 
 The limit on tickets in one public online purchase was 20: a safety guard (the code said "not a business rule") against one automated request grabbing a whole series of numbers. Justin asked why it was there, and it overlaps with the other safeguards (at most 200 unpaid tickets held per connection, 60 purchases an hour, 5 open payments per phone number or email), so it is now **50**. Buy page: the stepper, the typed box and the bundle buttons go up to 50; the server refuses 51 with "You can buy at most 50 tickets in one purchase". The three quick-pick bundles double (5 gives 5, 10, 20; 10 gives 10, 20, 40) and, only if doubling would pass 50, spread evenly up to 50 (15 gives 15, 33, 50). The Repository's separate limit (20 of one item) is unchanged. Tests: `test/gateway/purchase-limit.test.js` (3, including the 200-unpaid safeguard) and the bundle checks in `ui-tagline.js`.
+
+## 75. Registrations for Admin; no report downloads for Finance; the Volunteer — 2026-11-16 (on dev; preview only)
+
+**Admin and Registrations.** Registration forms and their responses were for SuperAdmin, Finance and Priest only ("never Admin"). Justin opened them to Admin: an Admin now sees the Registrations tab, can create forms, and reads responses after accepting the confidentiality statement, exactly as Finance does (and manages only the forms they made themselves).
+
+**Finance and report downloads.** Downloading a campaign's sales report is now SuperAdmin and Priest only. Finance no longer can (the buttons were already hidden from Finance in the screens; the server now refuses it as well).
+
+**The Volunteer** (a new kind of user). Helps with the parish page, Repository orders, Listings approval and Light a Candle. Decided with Justin:
+- **Can:** see the ongoing campaigns (look only: no drafts, no registration forms, nothing switched off); edit the parish page content; see Repository orders and mark them prepared or collected; see Listings and approve or decline waiting ones; see the week's candle requests and tick each as lit.
+- **Cannot:** create, change, bin or delete campaigns or forms; any money screen (Overview, Sales, Cash, Needs attention), refunds, voiding, payment settings; Repository items, import, settings or cancelling an order; Listings settings, take-down, picks or refunds; candle settings, cancelling or the Thursday email; the parish page address and on/off switch; Users, Recycle Bin, Privacy, Registrations. In the Repository orders list they are not shown refunds, SumUp codes or the week's total taken. The on/off switches and settings screens are not shown to them.
+- **Also sells tickets:** a tickbox on a Volunteer (when the SuperAdmin or Priest adds them, or later in the Users list) gives them the Seller selling screen as well, with the same rules as a Seller (only their own sales; the 18+ and own-phone terms must be accepted first). It takes effect on their very next tap. One login, one role; no new money rights.
+- Only a SuperAdmin or Priest can add a Volunteer or tick the box.
+
+Not built: "assigning a candle to someone". Light a Candle only has "lit / not lit yet" per request; a named person per request would be a small addition if wanted.
+
+Migration `20261116000000_volunteer_role` (applied live): the allowed-roles list gains `volunteer`; `users.also_sells boolean not null default false`. Additive only.
+
+Tests: `volunteer.test.js` (19: what they can do, what is refused with 403, listing refund cannot ride along, the tickbox and its effect at once, consent for a seller-volunteer), `report-export.test.js`, `registrations.test.js` updated (Admin allowed, Seller refused), `ui-admin-nav.js` updated (Admin has Registrations) and extended with Volunteer checks (sections, no switches or settings, add-user form, tickbox). Server tests 379 pass.

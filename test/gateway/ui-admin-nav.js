@@ -101,6 +101,8 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => rec(t), write: async (items) => { const b = await items[0].getType('text/plain'); rec(await b.text()); } } }); return 'ok'; })()`;
 
 
+const VO = addUser('uA-vo', 'volunteer', 'org-A', Date.now() + 6 * 36e5);
+Object.assign(T('users').find(u => u.id === 'uA-vo'), { mobile: '07000000004', name: 'volunteer' });
 const PR = addUser('uA-pr', 'priest', 'org-A', Date.now() + 6 * 36e5);
 Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', name: 'priest' });
 (async () => {
@@ -158,7 +160,7 @@ Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', n
   await loginAs(AD, { id: 'uA-ad', name: 'admin', role: 'admin', org_id: 'org-A', mobile: '07000000002' });
   await waitFor(`document.querySelector('.tabs.sections')`);
   check('Admin: three sections (no Manage)', JSON.stringify(await sections()) === JSON.stringify(['Campaigns*', 'Money', 'Parish page']), JSON.stringify(await sections()));
-  check('Admin: Campaigns has Campaigns, Overview and Sales (Registrations is not an Admin tab)', JSON.stringify(await subs()) === JSON.stringify(['Campaigns*', 'Overview', 'Sales']), JSON.stringify(await subs()));
+  check('Admin: Campaigns has Campaigns, Registrations, Overview and Sales (Registrations was opened to Admin on 2026-11-16)', JSON.stringify(await subs()) === JSON.stringify(['Campaigns*', 'Registrations', 'Overview', 'Sales']), JSON.stringify(await subs()));
   await loginAs(PR, { id: 'uA-pr', name: 'priest', role: 'priest', org_id: 'org-A', mobile: '07000000003' });
   await waitFor(`document.querySelector('.tabs.sections')`);
   check('Priest: sees exactly what a SuperAdmin sees — Campaigns, Money, Parish page, Manage', JSON.stringify(await sections()) === JSON.stringify(['Campaigns*', 'Money', 'Parish page', 'Manage']), JSON.stringify(await sections()));
@@ -176,6 +178,42 @@ Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', n
   await click('[data-group=manage]');
   check('Priest: Manage has Users, Recycle Bin and Data & privacy', (await subs()).length === 3, JSON.stringify(await subs()));
   await shot('nav-390-priest');
+
+  // ---- the Volunteer: looks at campaigns, helps with the parish page, orders, listings and candles; no money, nothing to change or delete
+  await view(390, 844);
+  await loginAs(VO, { id: 'uA-vo', name: 'volunteer', role: 'volunteer', org_id: 'org-A', mobile: '07000000004', also_sells: false });
+  await waitFor("document.querySelector('.tabs.sections')");
+  check('Volunteer: two sections — Campaigns and Parish page (no Money, no Manage), and no Sell button', JSON.stringify(await sections()) === JSON.stringify(['Campaigns*', 'Parish page']) && !(await ev("!!document.querySelector('.sellbtn')")), JSON.stringify(await sections()));
+  await waitFor("!/^Loading/.test(document.getElementById('adminContent').innerText)", 6000);
+  check('Volunteer: the Campaigns screen has no "+ New Campaign", no Settings, Delete or Report buttons', !(await ev("[...document.querySelectorAll('#adminContent button')].some(b => /New Campaign|Settings|Delete|Report/.test(b.textContent))")));
+  await click('[data-group=page]');
+  check('Volunteer: Parish page has Page, Repository, Listings, Candles', JSON.stringify(await subs()) === JSON.stringify(['Page*', 'Repository', 'Listings', 'Candles']), JSON.stringify(await subs()));
+  for (const [tab, title] of [['repository', 'Repository'], ['listings', 'Listings'], ['candles', 'Light a Candle']]) {
+    await ev(`setAdminTab('${tab}'); 'ok'`); await waitFor(`document.querySelector('#adminContent .fh')`, 6000);
+    const o = await ev(`(() => { const f = document.querySelector('#adminContent .fh'); return { title: f && f.querySelector('h3').textContent, sw: !!(f && f.querySelector('.gw-switch')), views: [...document.querySelectorAll('#adminContent .seg button')].map(b => b.textContent.trim()) }; })()`);
+    check(`Volunteer: ${title} has no open/closed switch and no settings screens (views: ${o.views.join(', ') || 'none'})`, o.title === title && !o.sw && !o.views.some(v => /Items|Mass times|Settings|Thursday/.test(v)), JSON.stringify(o));
+    await shot(`nav-390-volunteer-${tab}`);
+  }
+  // a Volunteer who also sells gets the Sell button, like an Admin
+  await loginAs(VO, { id: 'uA-vo', name: 'volunteer', role: 'volunteer', org_id: 'org-A', mobile: '07000000004', also_sells: true });
+  await waitFor("document.querySelector('.tabs.sections') || document.querySelector('#app button')");
+  check('Volunteer who also sells: still the same two sections, with a Sell tickets button', JSON.stringify(await sections()) === JSON.stringify(['Campaigns*', 'Parish page']) && await ev("!!document.querySelector('.sellbtn')"), JSON.stringify(await sections()));
+  // adding a user: Volunteer is offered, with a plain-words explanation and the "also sells" tickbox
+  await loginAs(SA, { id: 'uA-sa', name: 'superadmin', role: 'superadmin', org_id: 'org-A', mobile: '07000000001' });
+  await waitFor("document.querySelector('.tabs.sections')");
+  await click('[data-group=manage]'); await waitFor("document.getElementById('uRole')", 6000);
+  const sel = async (v) => { await ev(`(() => { const r = document.getElementById('uRole'); r.value = '${v}'; r.dispatchEvent(new Event('change')); return 'ok'; })()`); return ev(`({ help: document.getElementById('uRoleHelp').textContent, tick: getComputedStyle(document.getElementById('uSellsRow')).display !== 'none' })`); };
+  const vh = await sel('volunteer'), sh = await sel('seller');
+  check('Add user: choosing Volunteer explains it and shows "Also sells tickets"; choosing Seller does not', /Repository orders/.test(vh.help) && vh.tick && !sh.tick && /Sell screen/.test(sh.help), JSON.stringify([vh, sh]));
+  await sel('volunteer');
+  await setVal('#uName', 'Vera Volunteer'); await setVal('#uMobile', '07700900555'); await setVal('#uPassword', 'Correct-Horse-9!');
+  await ev("document.getElementById('uSells').click(); 'ok'");
+  await click('#adminContent button', 'Create User'); await sleep(900); await waitFor("[...document.querySelectorAll('#adminContent td')].some(t => /Vera Volunteer/.test(t.textContent))", 6000);
+  check('Add user: the new Volunteer appears in the list with "Also sells tickets" ticked', await ev("(() => { const tr = [...document.querySelectorAll('#adminContent tr')].find(r => /Vera Volunteer/.test(r.textContent)); const cb = tr && tr.querySelector('input[type=checkbox]'); return !!(cb && cb.checked && /Volunteer/.test(tr.textContent)); })()"));
+  await ev("(() => { const tr = [...document.querySelectorAll('#adminContent tr')].find(r => /Vera Volunteer/.test(r.textContent)); tr.querySelector('input[type=checkbox]').click(); return 'ok'; })()");
+  await sleep(700);
+  check('Unticking "Also sells tickets" saves, and the page confirms it', (await ev("document.getElementById('toast') ? document.getElementById('toast').innerText : document.body.innerText")).includes('no longer sell') && T('users').find(u => u.name === 'Vera Volunteer').also_sells === false);
+  await shot('nav-390-users-volunteer');
 
   console.log(failures ? `\n${failures} CHECK(S) FAILED` : '\nALL ADMIN NAVIGATION CHECKS PASSED');
   console.log('screenshots in ' + OUT);

@@ -49,3 +49,5 @@ storage bucket `payment-evidence` is deliberately not recreated.
 **2026-11-11, Light a Candle and the Thursday email:** migration `20261111000000_candles_digest` added four tables (`candle_settings`, `candle_requests`, `candle_months`, `weekly_digest`) and one function (`candle_next_ref`). They are appended to the baseline file as **section 12**; sections 1 to 7 still describe the database without the Repository, Listings and Candles objects.
 
 **2026-11-12, Hearts:** migration `20261112000000_hearts` added a `hearts` count to `listings` and `repository_items`, one table (`hearts`) and one function (`heart_set`). Appended to the baseline file as **section 13**.
+
+**2026-11-16, Volunteer role:** migration `20261116000000_volunteer_role` adds `volunteer` to the allowed roles and a `also_sells` flag on `users`. Not yet in the baseline file (additive; apply the migration file after the baseline).
