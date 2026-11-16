@@ -1985,7 +1985,8 @@ async function recordRefund(session, { payment_id, amount, note }) {
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).maybeSingle();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (payment.status === 'void' || payment.status === 'failed') throw httpError(400, "This sale was voided or never paid, so there's nothing to refund.");
-  if (payment.method === 'link' && payment.status !== 'paid') throw httpError(400, "This payment link hasn't been paid, so there's nothing to refund.");
+  // Only money actually received can be refunded: a link not yet paid, or cash not yet handed over (pending), has received £0.
+  if (payment.status !== 'paid') throw httpError(400, payment.method === 'link' ? "This payment link hasn't been paid, so there's nothing to refund." : "This payment hasn't been received yet (cash still to reconcile), so there's nothing to refund. Void the sale instead if it was cancelled.");
   const total = Number(payment.amount);
   const value = amount === undefined || amount === null || amount === '' ? total : Math.round(Number(amount) * 100) / 100;
   if (!Number.isFinite(value) || value <= 0 || value > total) throw httpError(400, `The refund must be more than £0 and no more than £${total.toFixed(2)}.`);
