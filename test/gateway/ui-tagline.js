@@ -96,10 +96,10 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   check('no tagline: nothing extra is drawn on the public page', nm.none && !nm.hscroll, JSON.stringify(nm));
 
   // ---- the quick-pick bundles on a raffle: always three buttons while there is room (a start of 10 must not drop to two)
-  const raffleWith = async (name, qty) => { const r = await call('create_campaign', { name, kind: 'raffle', age_restricted: true, public_page_enabled: true, public_only: true, keep_until: plus(60), default_ticket_qty: qty, tiers: [{ name: 'Ticket', price: 2 }], blocks: [{ type: 'digital', label: 'Online', number_prefix: 'O', range_start: 1, range_end: 50 }] }, { session: SA }); if (r.status !== 200) throw new Error(r.raw); const id = r.body.campaign.id; T('tickets').filter(x => x.campaign_id === id).forEach(x => { x.status = 'unsold'; }); return id; };
+  const raffleWith = async (name, qty) => { const r = await call('create_campaign', { name, kind: 'raffle', age_restricted: true, public_page_enabled: true, public_only: true, keep_until: plus(60), default_ticket_qty: qty, tiers: [{ name: 'Ticket', price: 2 }], blocks: [{ type: 'digital', label: 'Online', number_prefix: 'O', range_start: 1, range_end: 120 }] }, { session: SA }); if (r.status !== 200) throw new Error(r.raw); const id = r.body.campaign.id; T('tickets').filter(x => x.campaign_id === id).forEach(x => { x.status = 'unsold'; }); return id; };
   const bundleLabels = async (id) => { await open(base + '/buy.html?campaign_id=' + id, "document.querySelector('.top h1')"); await waitFor("document.querySelector('#bundles .bundle')"); return ev("[...document.querySelectorAll('#bundles .bundle b')].map(b => Number(b.textContent))"); };
   await view(390, 844);
-  for (const [qty, want] of [[5, [5, 10, 20]], [10, [10, 15, 20]], [0, [1, 5, 10, 20]], [4, [4, 8, 16]], [12, [12, 16, 20]]]) {
+  for (const [qty, want] of [[5, [5, 10, 20]], [10, [10, 20, 40]], [0, [1, 5, 10, 20]], [4, [4, 8, 16]], [12, [12, 24, 48]], [15, [15, 33, 50]], [30, [30, 40, 50]]]) {
     const got = await bundleLabels(await raffleWith('Raffle start ' + qty, qty));
     check('a raffle with a starting quantity of ' + qty + ' offers the buttons ' + want.join(', '), JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
   }
