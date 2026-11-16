@@ -1074,7 +1074,7 @@ function csvEscape(val) {
 }
 
 async function exportCampaignReport(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin', 'finance']);
+  requireOrgRole(session, ['superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).single();
   if (!campaign) throw httpError(404, 'Campaign not found');
@@ -2615,10 +2615,10 @@ async function registrationPlacesLeft(c) {   // null = no limit
   return Math.max(0, c.places - (await registrationsUsed(c.id)));
 }
 
-// A registration form is created like any campaign, by the SuperAdmin — or by Finance or the Priest, who can then
+// A registration form is created like any campaign, by the SuperAdmin — or by Admin, Finance or the Priest, who can then
 // manage their own forms.
 async function createRegistrationCampaign(session, { name, client_ref, details_text, opens_on, closes_on, keep_until, is_draft, places, waiting_list, form_def }) {
-  requireOrgRole(session, ['superadmin', 'finance', 'priest']);
+  requireOrgRole(session, ['superadmin', 'admin', 'finance', 'priest']);
   const cleanedName = String(name == null ? '' : name).trim();
   if (!cleanedName) throw httpError(400, 'Give the form a name');
   const ref = cleanClientRef(client_ref);
@@ -2647,7 +2647,7 @@ async function createRegistrationCampaign(session, { name, client_ref, details_t
 
 // A person may manage a campaign if they are the SuperAdmin, or if it is a registration form they created themselves.
 async function requireCampaignManager(session, campaign_id) {
-  requireOrgRole(session, ['superadmin', 'finance', 'priest']);
+  requireOrgRole(session, ['superadmin', 'admin', 'finance', 'priest']);
   const { data: c } = await supabase.from('campaigns').select('org_id, kind, created_by').eq('id', campaign_id).maybeSingle();
   if (!c || c.org_id !== session.org_id) throw httpError(404, 'Campaign not found');
   if (!isSuperLike(session.role) && !(c.kind === 'registration' && c.created_by === session.uid)) throw httpError(403, 'Not permitted for this action');
@@ -2930,7 +2930,7 @@ async function publicFindRegistrations({ campaign_id, contact_value }) {
   return { registrations: (rows || []).map(r => ({ id: r.id, display_number: displayRegNumber(r.reg_number), name: r.name, status: r.status, created_at: r.created_at })) };
 }
 
-// ---- the organiser side (SuperAdmin, Finance, Priest — never Admin or Sellers — and only after the confidentiality statement)
+// ---- the organiser side (SuperAdmin, Admin, Finance, Priest — never Sellers — and only after the confidentiality statement)
 async function registrationForms(session) {
   requireOrgRole(session, CONFIDENTIAL_ROLES);
   await requireConfidentiality(session);
@@ -3134,7 +3134,7 @@ async function setRegistrationPlaces(session, { campaign_id, places }) {
 // Anyone who can see people's registrations (which can hold children's details) accepts a short statement once,
 // before the first time they do. Bumping the number makes everyone accept the new wording again.
 const CURRENT_CONFIDENTIALITY_VERSION = 1;
-const CONFIDENTIAL_ROLES = ['superadmin', 'finance', 'priest'];
+const CONFIDENTIAL_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
 async function requireConfidentiality(session) {
   const { data: u } = await supabase.from('users').select('confidentiality_version').eq('id', session.uid).maybeSingle();
   if (!u || (u.confidentiality_version || 0) < CURRENT_CONFIDENTIALITY_VERSION) {
@@ -3156,8 +3156,8 @@ async function acceptConfidentiality(session) {
 }
 
 // Registration responses. The registration forms themselves arrive in a later phase; this is the door they
-// will use, so the access rules (SuperAdmin, Finance and Priest only, after the confidentiality statement,
-// never Admin or Sellers) are already in force and tested.
+// will use, so the access rules (SuperAdmin, Admin, Finance and Priest only, after the confidentiality statement,
+// never Sellers) are already in force and tested.
 async function registrationResponses(session) {
   requireOrgRole(session, CONFIDENTIAL_ROLES);
   await requireConfidentiality(session);
