@@ -178,7 +178,7 @@ let slots = [];            // one entry per ticket wanted: a number, or null for
 let rolling = new Set(), rollText = {}, popping = new Set(), taken = new Set();
 let shuffling = false, busy = false, attempt = null, detailsOpen = false;
 
-const MAX_QTY = 20; // matches the server's per-purchase cap
+const MAX_QTY = 50; // matches the server's per-purchase cap
 
 function totalQty() { return info.tiers.reduce((s, t) => s + (counts[t.id] || 0), 0); }
 function totalPrice() { return info.tiers.reduce((s, t) => s + (counts[t.id] || 0) * Number(t.price), 0); }
@@ -475,10 +475,14 @@ function syncSlots() {
 }
 // Quick-pick sizes. When the campaign has a starting quantity (a raffle sold in fives), the smallest bundle is that
 // number and the others are its multiples (5, 10, 20): a single ticket is still one tap of − away on the stepper.
+// Doubling can run out of room (a start of 15 gives 15, 30, 60, but nobody can buy more than 50 at once), so then the three buttons are spread evenly
+// from the starting number up to that limit instead: 15, 33, 50.
 function bundleSizes() {
   const d = info.campaign.default_qty;
-  const list = d > 1 ? [d, d * 2, d * 4] : [1, 5, 10, 20];
-  return list.filter(k => k <= MAX_QTY);
+  if (!(d > 1)) return [1, 5, 10, 20].filter(k => k <= MAX_QTY);
+  const doubled = [d, d * 2, d * 4].filter(k => k <= MAX_QTY);
+  if (doubled.length >= 3 || d >= MAX_QTY) return doubled.length ? doubled : [MAX_QTY];
+  return [...new Set([d, Math.round((d + MAX_QTY) / 2), MAX_QTY])];
 }
 function renderMode() {
   const n = totalQty();

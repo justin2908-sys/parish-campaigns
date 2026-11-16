@@ -2673,7 +2673,7 @@ function drawCampaignSettings() {
       ${c.kind !== 'raffle' && hasOnline && c.public_page_enabled ? '<div class="card" id="wlCard"><b>Waiting list</b><div class="muted" style="margin-top:4px">Loading…</div></div>' : ''}
       <div class="card">
         <b>Starting quantity</b>
-        <div class="muted" style="margin:2px 0 6px">How many tickets are already filled in at the start of every sale, on the Sell screen and on the public buy page. A Seller or buyer can still change it; 0 starts empty. On the public page the quick-pick buttons are this number and its multiples (5, 10, 20 for 5).</div>
+        <div class="muted" style="margin:2px 0 6px">How many tickets are already filled in at the start of every sale, on the Sell screen and on the public buy page. A Seller or buyer can still change it; 0 starts empty. On the public page the three quick-pick buttons start at this number and double (5, 10, 20 for 5); if doubling would go past the limit of 50 tickets in one purchase, they are spread evenly up to 50 instead (15, 33, 50 for 15).</div>
         ${c.tiers.length === 1 ? `
           <label>Tickets pre-selected for each sale</label>
           <input id="csetQty" type="number" min="0" max="50" inputmode="numeric" value="${c.default_ticket_qty || 0}">

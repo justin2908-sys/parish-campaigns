@@ -252,6 +252,12 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('the switch turns the Thursday email on and says so', T('weekly_digest')[0].enabled === true && T('candle_settings')[0].enabled === true && await ev(`[...document.querySelectorAll('#adminContent .gw-status')].some(e => e.textContent.trim() === 'On')`));
   await click('#adminContent button', 'See what it would say'); await waitFor(`/This is what the email would say/.test(document.getElementById('toast').textContent)`);
   check('“See what it would say” shows the list without sending it', mails.length === 0 && await ev(`/Mary Murphy|Joseph Okafor|LIGHT A CANDLE/.test(document.getElementById('adminContent').innerText)`));
+  {   // "Send it now" mails the coming week (the next Monday). From Thursday to Sunday the first week a visitor can book is the one AFTER that (requests close on Wednesday),
+    // so move the sample requests into the week being mailed; the test then gives the same answer on any day of the week.
+    const d0 = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }), wd = new Date(d0 + 'T00:00:00Z').getUTCDay();
+    const nextMon = new Date(new Date(d0 + 'T00:00:00Z').getTime() + (((1 - wd + 7) % 7) || 7) * 864e5);
+    for (const r of T('candle_requests')) { const off = (new Date(String(r.light_date) + 'T00:00:00Z').getUTCDay() + 6) % 7; r.light_date = new Date(nextMon.getTime() + off * 864e5).toISOString().slice(0, 10); }
+  }
   await click('#adminContent button', 'Send it now'); await waitFor(`/Sent to office@example.org/.test(document.getElementById('toast').textContent)`);
   check('“Send it now” sends one email to that address and says so', mails.length === 1 && mails[0].to === 'office@example.org', JSON.stringify(mails.map(m => m.to)));
   check('the email has the names and counts but never a phone number, an email address of a parishioner, or an intention', mails[0] && /Joseph Okafor|Mary Murphy/.test(mails[0].text) && !/07700|joseph@example|Thanksgiving|For my mother/.test(mails[0].text + mails[0].html), mails[0] && mails[0].text.slice(0, 300));

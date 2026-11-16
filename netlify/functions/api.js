@@ -1429,8 +1429,9 @@ async function replaySale(client_ref, expectedSellerId) {
 // for cash. Unlike the seller-attended recordSale above, a buyer here MAY pick a specific
 // "lucky number" (see docs/scope-v1.0.md §13) — that restriction was about sellers, not
 // online tickets as such.
-const MAX_PUBLIC_PURCHASE_QTY = 20; // a sane per-transaction cap, not a business rule — guards
-                                     // against a single automated request grabbing a whole series
+const MAX_PUBLIC_PURCHASE_QTY = 50; // a sane per-transaction cap, not a business rule — guards
+                                     // against a single automated request grabbing a whole series (raised from 20 on 2026-11-16 at the
+                                     // parish's request: the per-address ceiling on unpaid tickets, PUBLIC_MAX_HELD_PER_IP, is what really bounds a flood)
 
 // What a buyer sees before paying: campaign name/details, church name/address, tiers, and
 // which online block(s) exist (with their range, so a lucky-number field can say what's valid).
