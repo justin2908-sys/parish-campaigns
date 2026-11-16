@@ -475,10 +475,14 @@ function syncSlots() {
 }
 // Quick-pick sizes. When the campaign has a starting quantity (a raffle sold in fives), the smallest bundle is that
 // number and the others are its multiples (5, 10, 20): a single ticket is still one tap of − away on the stepper.
+// Doubling can run out of room (a start of 10 gives 10, 20, 40, but nobody can buy more than 20 at once), so then the three buttons are spread evenly
+// from the starting number up to that limit instead: 10, 15, 20.
 function bundleSizes() {
   const d = info.campaign.default_qty;
-  const list = d > 1 ? [d, d * 2, d * 4] : [1, 5, 10, 20];
-  return list.filter(k => k <= MAX_QTY);
+  if (!(d > 1)) return [1, 5, 10, 20].filter(k => k <= MAX_QTY);
+  const doubled = [d, d * 2, d * 4].filter(k => k <= MAX_QTY);
+  if (doubled.length >= 3 || d >= MAX_QTY) return doubled.length ? doubled : [MAX_QTY];
+  return [...new Set([d, Math.round((d + MAX_QTY) / 2), MAX_QTY])];
 }
 function renderMode() {
   const n = totalQty();
