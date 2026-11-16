@@ -223,10 +223,11 @@ test('counts per choice, the printable list, and the CSV', async (t) => {
     assert.ok(!/Your meal/.test(lines[0]));
     assert.match(lines[1], /A One/); assert.match(lines[1], /Lift; Gluten free/);
   });
-  await t.test('only SuperAdmin, Finance and Priest may see the counts; Admin and another organisation get nothing', async () => {
+  await t.test('SuperAdmin, Admin, Finance and Priest may see the counts; a Seller and another organisation get nothing', async () => {
     await setup();
     assert.equal((await call('registration_table', { campaign_id: id }, { session: FI })).status, 200);
-    assert.equal((await call('registration_table', { campaign_id: id }, { session: AD })).status, 403);
+    assert.equal((await call('registration_table', { campaign_id: id }, { session: AD })).status, 200);
+    const sl = addUser('u-sl', 'seller', 'org-A'); assert.equal((await call('registration_table', { campaign_id: id }, { session: sl })).status, 403);
     const other = addUser('u-sa-b', 'superadmin', 'org-B'); T('users').find(u => u.id === 'u-sa-b').confidentiality_version = 1;
     assert.equal((await call('registration_table', { campaign_id: id }, { session: other })).status, 404);
     const noStatement = addUser('u-new', 'finance', 'org-A');

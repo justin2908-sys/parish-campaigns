@@ -49,9 +49,12 @@ function verifySession(token) {
 // A Priest can do everything a SuperAdmin can (decided 2026-11-12): wherever SuperAdmin is allowed, so is Priest. The one thing a Priest cannot
 // do is touch a SuperAdmin's account (see requireNotSuperAdminTarget), so the church's owner login cannot be taken over or locked out.
 const isSuperLike = (role) => role === 'superadmin' || role === 'priest';
+// A Volunteer (added 2026-11-16) helps with the parish page, Repository orders, Listings approval and Light a Candle. They never create or change
+// campaigns and never touch money. A Volunteer ticked "also sells tickets" is let through wherever a Seller is, and nowhere else extra.
+const sellsTickets = (s) => !!s && (s.role === 'seller' || (s.role === 'volunteer' && !!s.also_sells));
 function requireRole(session, roles) {
   if (!session) throw httpError(401, 'Not logged in');
-  if (!roles.includes(session.role) && !(session.role === 'priest' && roles.includes('superadmin'))) throw httpError(403, 'Not permitted for this action');
+  if (!roles.includes(session.role) && !(session.role === 'priest' && roles.includes('superadmin')) && !(roles.includes('seller') && sellsTickets(session))) throw httpError(403, 'Not permitted for this action');
 }
 // Org-scoped roles must always act within their own org — this guards every handler
 // that takes a campaign/user id against reaching across into another church's data.
@@ -228,18 +231,19 @@ async function login({ mobile, password }) {
 // church's). Bumping this number makes every Seller accept again next time they log in — the
 // wording changed, so their earlier agreement no longer covers it.
 const CURRENT_CONSENT_VERSION = 1;
-function needsConsent(u) { return u.role === 'seller' && (u.consent_version || 0) < CURRENT_CONSENT_VERSION; }
+function needsConsent(u) { return (u.role === 'seller' || (u.role === 'volunteer' && !!u.also_sells)) && (u.consent_version || 0) < CURRENT_CONSENT_VERSION; }
 
 // Every authenticated request re-checks that the account still exists, is still active, and
 // still has the password the token was issued for — so disabling someone or resetting their
 // password ends their session immediately instead of at the 2-hour expiry. A Seller who hasn't
 // accepted the current consent is also signed out (skipConsent lets accept_consent itself through).
 async function assertSessionLive(session, { skipConsent } = {}) {
-  const { data: u } = await supabase.from('users').select('active, password_hash, role, consent_version').eq('id', session.uid).maybeSingle();
+  const { data: u } = await supabase.from('users').select('active, password_hash, role, consent_version, also_sells').eq('id', session.uid).maybeSingle();
   // A role change (e.g. SuperAdmin -> Seller) ends the old session at once rather than lingering up to 2 hours.
   if (!u || !u.active || u.role !== session.role || !session.pf || session.pf !== passwordFingerprint(u.password_hash)) {
     throw httpError(401, 'Your session has ended — please log in again.');
   }
+  session.also_sells = !!u.also_sells;   // read fresh on every request, so ticking or unticking "also sells" takes effect at once
   if (!skipConsent && needsConsent(u)) throw httpError(401, 'Please log in again to review the seller terms.');
 }
 
@@ -251,9 +255,9 @@ async function acceptConsent(session) {
   return { ok: true };
 }
 
-function safeUser(u) { return { id: u.id, mobile: u.mobile, name: u.name, role: u.role, org_id: u.org_id }; }
+function safeUser(u) { return { id: u.id, mobile: u.mobile, name: u.name, role: u.role, org_id: u.org_id, also_sells: !!u.also_sells }; }
 
-async function createUser(session, { org_id, mobile, name, role, password, disabled_campaign_ids }) {
+async function createUser(session, { org_id, mobile, name, role, password, disabled_campaign_ids, also_sells }) {
   // Platform Owner creates a new Organization's first SuperAdmin (org_id required, explicit).
   // A SuperAdmin creates Admins/Sellers/other SuperAdmins within their own org only —
   // org_id is never taken from the caller here, always the session's own, so a SuperAdmin
@@ -265,7 +269,7 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
     targetOrgId = org_id;
   } else {
     requireOrgRole(session, ['superadmin']);
-    if (!['seller', 'admin', 'superadmin', 'finance', 'priest'].includes(role)) throw httpError(400, 'Invalid role');
+    if (!['seller', 'admin', 'superadmin', 'finance', 'priest', 'volunteer'].includes(role)) throw httpError(400, 'Invalid role');
     if (role === 'superadmin' && session.role !== 'superadmin') throw httpError(403, 'Only a SuperAdmin can create another SuperAdmin.');
     targetOrgId = session.org_id;
   }
@@ -276,7 +280,7 @@ async function createUser(session, { org_id, mobile, name, role, password, disab
   if (cleanedMobile.length > 32) throw httpError(400, 'That mobile number is too long.');
   const hash = await bcrypt.hash(password, 10);
   const { data, error } = await supabase.from('users')
-    .insert({ mobile: cleanedMobile, name: cleanedName, role, org_id: targetOrgId, password_hash: hash, created_by: session.uid })
+    .insert({ mobile: cleanedMobile, name: cleanedName, role, org_id: targetOrgId, password_hash: hash, created_by: session.uid, also_sells: role === 'volunteer' && !!also_sells })
     .select().single();
   if (error) throw httpError(400, error.message);
   if (disabled_campaign_ids && disabled_campaign_ids.length) {
@@ -297,6 +301,17 @@ async function setDisabledCampaigns(session, { user_id, disabled_campaign_ids })
     const { error } = await supabase.from('user_campaigns').insert(disabled_campaign_ids.map(campaign_id => ({ user_id, campaign_id, assigned_by: session.uid })));
     if (error) throw httpError(400, error.message);
   }
+  return { ok: true };
+}
+
+// Tick or untick "also sells tickets" on a Volunteer. Takes effect on their very next tap (the session is checked against the account each time).
+async function setUserAlsoSells(session, { user_id, also_sells }) {
+  requireOrgRole(session, ['superadmin']);
+  await requireUserInOwnOrg(session, user_id);
+  const { data: u } = await supabase.from('users').select('role').eq('id', user_id).maybeSingle();
+  if (!u || u.role !== 'volunteer') throw httpError(400, 'This only applies to a Volunteer.');
+  const { error } = await supabase.from('users').update({ also_sells: !!also_sells }).eq('id', user_id);
+  if (error) throw httpError(400, error.message);
   return { ok: true };
 }
 
@@ -338,7 +353,7 @@ async function requireCampaignsInOwnOrg(session, campaignIds) {
 
 async function listUsers(session) {
   requireOrgRole(session, ['admin', 'superadmin', 'finance']);
-  const { data: users } = await supabase.from('users').select('id,mobile,name,role,active,created_at').eq('org_id', session.org_id).order('created_at');
+  const { data: users } = await supabase.from('users').select('id,mobile,name,role,active,created_at,also_sells').eq('org_id', session.org_id).order('created_at');
   const { data: disabled } = users.length ? await supabase.from('user_campaigns').select('user_id, campaign_id').in('user_id', users.map(u => u.id)) : { data: [] };   // only this organisation's people (the whole table is every customer's)
   const { data: campaigns } = await supabase.from('campaigns').select('id, name').eq('org_id', session.org_id);
   const out = users.map(u => ({
@@ -957,14 +972,18 @@ async function releaseStalePendingLinkPayments() {
 }
 
 async function listCampaigns(session, { include_inactive } = {}) {
-  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
+  requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance', 'volunteer']);
+  // A Volunteer who does not sell, or who is looking at the Campaigns tab rather than the Sell screen, gets a look-only list: ongoing campaigns,
+  // never drafts, registration forms or anything switched off.
+  const lookOnly = session.role === 'volunteer' && (include_inactive || !session.also_sells);
+  const asSeller = sellsTickets(session) && !lookOnly;
   // The database is an ocean away from the server, so every round trip counts: independent
   // queries run side by side rather than one after another. The expired-link sweep doesn't change
   // what this returns (campaigns, prices, series), so it overlaps the first query, and only runs
   // at most once a minute (sweepIfDue) instead of on every screen load.
   let q = supabase.from('campaigns').select('*').eq('org_id', session.org_id).eq('binned', false).order('created_at');
-  const sellableOnly = !(include_inactive && session.role !== 'seller');   // the Sell screen vs the Admin lists
-  if (sellableOnly) q = q.eq('active', true);
+  const sellableOnly = !lookOnly && !(include_inactive && !asSeller);   // the Sell screen vs the Admin lists
+  if (sellableOnly || lookOnly) q = q.eq('active', true);
   const [{ data: campaigns }] = await Promise.all([q, sweepIfDue().catch(() => { /* housekeeping only */ })]);
 
   const campaignIds = campaigns.map(c => c.id);
@@ -973,14 +992,15 @@ async function listCampaigns(session, { include_inactive } = {}) {
     campaignIds.length ? supabase.from('ticket_blocks').select('*').in('campaign_id', campaignIds) : { data: [] },
     // A row here means this specific campaign is explicitly DISABLED for this user —
     // default is full access to every active campaign, unless a SuperAdmin switched one off.
-    session.role === 'seller' ? supabase.from('user_campaigns').select('campaign_id').eq('user_id', session.uid) : { data: [] },
+    asSeller ? supabase.from('user_campaigns').select('campaign_id').eq('user_id', session.uid) : { data: [] },
   ]);
 
   let visible = campaigns;
-  if (session.role === 'seller') {
+  if (asSeller) {
     const disabledIds = new Set(((disabledRes && disabledRes.data) || []).map(a => a.campaign_id));
     visible = campaigns.filter(c => !disabledIds.has(c.id) && !c.public_only);
   }
+  if (lookOnly) visible = visible.filter(c => c.kind !== 'registration' && !c.is_draft);
   // Something to sell from only appears while it is actually open: not before its opening date, not after it closes.
   if (sellableOnly) visible = visible.filter(c => c.kind !== 'registration' && campaignOpenState(c) === 'open');
   visible = visible.filter(c => !shopIsHiddenCampaign(c));   // the Repository's weekend campaigns and the Listings months are never listed
@@ -1074,7 +1094,7 @@ function csvEscape(val) {
 }
 
 async function exportCampaignReport(session, { campaign_id }) {
-  requireOrgRole(session, ['superadmin', 'finance']);
+  requireOrgRole(session, ['superadmin']);
   await requireCampaignsInOwnOrg(session, [campaign_id]);
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).single();
   if (!campaign) throw httpError(404, 'Campaign not found');
@@ -1915,7 +1935,7 @@ async function logLinkShared(session, { payment_id, channel }) {
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (payment.method !== 'link') throw httpError(400, 'Only pay-by-link sales have a link to share');
-  if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'Not your sale');
+  if (sellsTickets(session) && payment.seller_id !== session.uid) throw httpError(403, 'Not your sale');
   const isEmail = (payment.contact_value || '').includes('@');
   if (channel === 'email' && !isEmail) throw httpError(400, 'That contact is a mobile number, not an email.');
   if (channel !== 'email' && isEmail) throw httpError(400, 'That contact is an email, not a mobile number.');
@@ -2219,7 +2239,7 @@ async function updateLinkContact(session, { payment_id, contact_value }) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
-  if (session.role === 'seller' && payment.seller_id !== session.uid) throw httpError(403, 'You can only change the details on your own sale.');
+  if (sellsTickets(session) && payment.seller_id !== session.uid) throw httpError(403, 'You can only change the details on your own sale.');
   if (payment.method !== 'link') throw httpError(400, 'Only pay-by-link sales have a contact to change');
   if (payment.status === 'paid' || payment.status === 'void') throw httpError(400, `This payment is already ${payment.status} — there is nothing left to send.`);
   const contact = parseContact(contact_value);
@@ -2275,7 +2295,7 @@ async function cancelSumupCheckout(checkoutId) {
 // ever issued when the old one can no longer be paid — never two live links for one sale.
 async function resendPayment(session, { payment_id }) {
   requireOrgRole(session, ['seller', 'admin', 'superadmin', 'finance']);
-  const isSeller = session.role === 'seller';
+  const isSeller = sellsTickets(session);
   const { data: payment } = await supabase.from('payments').select('*, campaigns!inner(org_id, name)').eq('id', payment_id).single();
   if (!payment || payment.campaigns.org_id !== session.org_id) throw httpError(404, 'Payment not found');
   if (isSeller && payment.seller_id !== session.uid) throw httpError(403, 'You can only resend a link for your own sale.');
@@ -2615,10 +2635,10 @@ async function registrationPlacesLeft(c) {   // null = no limit
   return Math.max(0, c.places - (await registrationsUsed(c.id)));
 }
 
-// A registration form is created like any campaign, by the SuperAdmin — or by Finance or the Priest, who can then
+// A registration form is created like any campaign, by the SuperAdmin — or by Admin, Finance or the Priest, who can then
 // manage their own forms.
 async function createRegistrationCampaign(session, { name, client_ref, details_text, opens_on, closes_on, keep_until, is_draft, places, waiting_list, form_def }) {
-  requireOrgRole(session, ['superadmin', 'finance', 'priest']);
+  requireOrgRole(session, ['superadmin', 'admin', 'finance', 'priest']);
   const cleanedName = String(name == null ? '' : name).trim();
   if (!cleanedName) throw httpError(400, 'Give the form a name');
   const ref = cleanClientRef(client_ref);
@@ -2647,7 +2667,7 @@ async function createRegistrationCampaign(session, { name, client_ref, details_t
 
 // A person may manage a campaign if they are the SuperAdmin, or if it is a registration form they created themselves.
 async function requireCampaignManager(session, campaign_id) {
-  requireOrgRole(session, ['superadmin', 'finance', 'priest']);
+  requireOrgRole(session, ['superadmin', 'admin', 'finance', 'priest']);
   const { data: c } = await supabase.from('campaigns').select('org_id, kind, created_by').eq('id', campaign_id).maybeSingle();
   if (!c || c.org_id !== session.org_id) throw httpError(404, 'Campaign not found');
   if (!isSuperLike(session.role) && !(c.kind === 'registration' && c.created_by === session.uid)) throw httpError(403, 'Not permitted for this action');
@@ -2930,7 +2950,7 @@ async function publicFindRegistrations({ campaign_id, contact_value }) {
   return { registrations: (rows || []).map(r => ({ id: r.id, display_number: displayRegNumber(r.reg_number), name: r.name, status: r.status, created_at: r.created_at })) };
 }
 
-// ---- the organiser side (SuperAdmin, Finance, Priest — never Admin or Sellers — and only after the confidentiality statement)
+// ---- the organiser side (SuperAdmin, Admin, Finance, Priest — never Sellers — and only after the confidentiality statement)
 async function registrationForms(session) {
   requireOrgRole(session, CONFIDENTIAL_ROLES);
   await requireConfidentiality(session);
@@ -3134,7 +3154,7 @@ async function setRegistrationPlaces(session, { campaign_id, places }) {
 // Anyone who can see people's registrations (which can hold children's details) accepts a short statement once,
 // before the first time they do. Bumping the number makes everyone accept the new wording again.
 const CURRENT_CONFIDENTIALITY_VERSION = 1;
-const CONFIDENTIAL_ROLES = ['superadmin', 'finance', 'priest'];
+const CONFIDENTIAL_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
 async function requireConfidentiality(session) {
   const { data: u } = await supabase.from('users').select('confidentiality_version').eq('id', session.uid).maybeSingle();
   if (!u || (u.confidentiality_version || 0) < CURRENT_CONFIDENTIALITY_VERSION) {
@@ -3156,8 +3176,8 @@ async function acceptConfidentiality(session) {
 }
 
 // Registration responses. The registration forms themselves arrive in a later phase; this is the door they
-// will use, so the access rules (SuperAdmin, Finance and Priest only, after the confidentiality statement,
-// never Admin or Sellers) are already in force and tested.
+// will use, so the access rules (SuperAdmin, Admin, Finance and Priest only, after the confidentiality statement,
+// never Sellers) are already in force and tested.
 async function registrationResponses(session) {
   requireOrgRole(session, CONFIDENTIAL_ROLES);
   await requireConfidentiality(session);
@@ -3303,6 +3323,7 @@ const actions = {
   create_user: (s, b) => createUser(s, b),
   accept_consent: (s) => acceptConsent(s),
   set_user_active: (s, b) => setUserActive(s, b),
+  set_user_also_sells: (s, b) => setUserAlsoSells(s, b),
   reset_password: (s, b) => resetPassword(s, b),
   list_users: (s) => listUsers(s),
 
@@ -3414,7 +3435,7 @@ exports.handler = async (event) => {
 // own details — never a person, a payment, a ticket or a registration, and never a raffle's sales.
 // It keeps its own "today" (in the organisation's time zone) instead of ukToday(), and its own opening test instead of
 // campaignOpenState(), so nothing the rest of the app does can move.
-const GATEWAY_ROLES = ['superadmin', 'admin', 'finance', 'priest'];   // may change what is on the page
+const GATEWAY_ROLES = ['superadmin', 'admin', 'finance', 'priest', 'volunteer'];   // may change what is on the page
 const GATEWAY_RESERVED_SLUGS = ['api', 'admin', 'go', 'assets', 'fonts'];
 // All wording the public sees that comes from the server lives here, one object per kind of organisation.
 const GATEWAY_WORDING = {
@@ -4034,6 +4055,7 @@ Object.assign(actions, {
 //    personal details are cleared by the normal retention job. It never appears in any list of campaigns or forms.
 //  * Name and contact are kept on the payment only, never on the order.
 const SHOP_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const SHOP_DESK_ROLES = [...SHOP_ROLES, 'volunteer'];   // a Volunteer sees the orders and marks them prepared or collected - nothing else here
 const SHOP_MAX_LINES = 40, SHOP_MAX_QTY = 20, SHOP_MAX_TOTAL = 500, SHOP_WEEKENDS_OFFERED = 2, SHOP_MAX_SLOTS = 8, SHOP_MAX_IMPORT_ROWS = 1000;
 const shopRef = (n) => `REP-${String(n).padStart(3, '0')}`;
 const shopAddDays = (iso, n) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -4294,8 +4316,8 @@ async function shopOrderFailed(payment) {
 }
 
 // ----- the office side (Admin, SuperAdmin, Finance, Priest)
-async function shopOrgOfSession(session) {
-  requireOrgRole(session, SHOP_ROLES);
+async function shopOrgOfSession(session, roles = SHOP_ROLES) {
+  requireOrgRole(session, roles);
   const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone, gateway_enabled').eq('id', session.org_id).maybeSingle();
   if (!org) throw httpError(404, 'Organisation not found');
   if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
@@ -4304,7 +4326,7 @@ async function shopOrgOfSession(session) {
 function shopItemShape(i) { return { id: i.id, name: i.name, description: i.description || '', category: i.category || '', sku: i.sku || '', barcode: i.barcode || '', price: Number(i.price), stock: i.stock === undefined ? null : i.stock, available: i.available !== false,
   featured: !!i.featured, image: shopImageUrl(i.image_path), has_picture: !!i.image_src, from_sumup: !!i.sumup_variant_id, hearts: i.hearts || 0 }; }
 async function shopGet(session) {
-  const org = await shopOrgOfSession(session);
+  const org = await shopOrgOfSession(session, SHOP_DESK_ROLES);
   const settings = await shopSettings(org.id, { create: true });
   const { data: items } = await supabase.from('repository_items').select('*').eq('org_id', org.id);
   const list = (items || []).slice().sort((a, b) => String(a.category || '~').localeCompare(String(b.category || '~')) || (a.sort - b.sort) || String(a.name).localeCompare(String(b.name)));
@@ -4625,7 +4647,7 @@ async function shopPopularity(orgId, now, days = 120) {   // units sold per item
 
 // ----- the orders list
 async function shopOrders(session, { weekend } = {}) {
-  const org = await shopOrgOfSession(session);
+  const org = await shopOrgOfSession(session, SHOP_DESK_ROLES);
   const { data: all } = await supabase.from('repository_orders').select('*').eq('org_id', org.id).order('ref_no', { ascending: true }).limit(5000);
   const orders = all || [];
   const byWeekend = new Map();
@@ -4649,14 +4671,16 @@ async function shopOrders(session, { weekend } = {}) {
     name: p ? (p.payer_name || '(details cleared)') : '', contact: p ? (p.contact_value || '') : '', payment_id: o.payment_id, paid_at: o.paid_at, prepared_at: o.prepared_at, collected_at: o.collected_at,
     cancel_reason: o.cancel_reason || '', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, sumup_code: p ? p.sumup_transaction_code || '' : '',
   }); });
+  const volunteer = session.role === 'volunteer';   // a Volunteer packs the orders; they are not shown refunds, SumUp codes or what the week took
+  if (volunteer) out.forEach(o => { o.refunded = 0; o.sumup_code = ''; });
   const live = out.filter(o => o.status === 'paid' || o.status === 'prepared' || o.status === 'collected');
   return {
     weekends, weekend: chosen, weekend_label: chosen ? shopDayLabel(chosen) : '', orders: out,
-    totals: { orders: live.length, to_prepare: live.filter(o => o.status === 'paid').length, taken: Math.round(live.reduce((s, o) => s + o.total * 100, 0)) / 100 },
+    totals: { orders: live.length, to_prepare: live.filter(o => o.status === 'paid').length, taken: volunteer ? null : Math.round(live.reduce((s, o) => s + o.total * 100, 0)) / 100 },
   };
 }
 async function shopOrderMark(session, { order_id, status }) {
-  const org = await shopOrgOfSession(session);
+  const org = await shopOrgOfSession(session, SHOP_DESK_ROLES);
   const { data: o } = await supabase.from('repository_orders').select('id, status').eq('id', order_id).eq('org_id', org.id).maybeSingle();
   if (!o) throw httpError(404, 'Order not found');
   if (!['paid', 'prepared', 'collected'].includes(status)) throw httpError(400, 'Choose prepared or collected.');
@@ -4709,6 +4733,7 @@ READ_ONLY_PUBLIC.add('public_shop');
 // choose either suggestion or "Other", including 0. A fee is an ordinary SumUp card payment (a row in `payments`, so refunds, the books check and
 // Needs Attention all work); each month has one hidden campaign to hold them. The church takes no part in any deal and checks nothing: the page says so.
 const LISTING_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const LISTING_DESK_ROLES = [...LISTING_ROLES, 'volunteer'];   // a Volunteer sees the listings and approves or declines the waiting ones - nothing else
 const LISTING_CATEGORIES = ['Services & trades', 'Food & baking', 'Furniture & home', 'Clothes & children', 'Garden & outdoors', 'Other'];
 const LISTING_KINDS = { sell: 'For sale', free: 'Free to a good home', service: 'Service offered' };
 const LISTING_DAY_CHOICES = [7, 14, 21, 30], LISTING_MAX_IMAGES = 4, LISTING_MAX_FEE = 200, LISTING_DISCLAIMER_VERSION = 1;
@@ -5033,15 +5058,15 @@ async function listingFailed(payment) {
 }
 
 // ----- the office side (Admin, SuperAdmin, Finance, Priest)
-async function listingsOrg(session) {
-  requireOrgRole(session, LISTING_ROLES);
+async function listingsOrg(session, roles = LISTING_ROLES) {
+  requireOrgRole(session, roles);
   const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone').eq('id', session.org_id).maybeSingle();
   if (!org) throw httpError(404, 'Organisation not found');
   if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
   return org;
 }
 async function listingsGet(session) {
-  const org = await listingsOrg(session), settings = await listingSettings(org.id, { create: true });
+  const org = await listingsOrg(session, LISTING_DESK_ROLES), settings = await listingSettings(org.id, { create: true });
   try { await listingsSweep(org.id, new Date()); } catch { /* housekeeping only */ }
   const { data: all } = await supabase.from('listings').select('*').eq('org_id', org.id).limit(1000);
   const rows = all || [], nowMs = Date.now();
@@ -5060,6 +5085,7 @@ async function listingsGet(session) {
   const by = (st) => rows.filter(r => r.status === st);
   return {
     org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/listings/${org.slug}` : null },
+    can_manage: session.role !== 'volunteer',
     settings: { enabled: !!settings.enabled, intro_text: settings.intro_text || '', price_base: Number(settings.price_base), price_per_extra_week: Number(settings.price_per_extra_week), price_per_image: Number(settings.price_per_image) },
     quotes: listingQuoteTable(settings), disclaimer: LISTING_DISCLAIMER,
     waiting: by('pending_review').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map(shape),
@@ -5068,14 +5094,14 @@ async function listingsGet(session) {
     counts: { waiting: by('pending_review').length, live: rows.filter(r => listingLive(r, nowMs)).length, reported: rows.filter(r => listingLive(r, nowMs) && r.reports > 0).length },
   };
 }
-async function listingsOne(session, id) {
-  const org = await listingsOrg(session);
+async function listingsOne(session, id, roles) {
+  const org = await listingsOrg(session, roles);
   const { data: l } = await supabase.from('listings').select('*').eq('id', id).eq('org_id', org.id).maybeSingle();
   if (!l) throw httpError(404, 'Listing not found');
   return { org, l };
 }
 async function listingsReview(session, { id, decision, note, refund_amount, refund_note }) {
-  const { l } = await listingsOne(session, id);
+  const { l } = await listingsOne(session, id, LISTING_DESK_ROLES);
   if (l.status !== 'pending_review') throw httpError(400, l.status === 'awaiting_payment' ? 'This listing has not been paid for yet.' : 'This listing has already been dealt with.');
   const nowMs = Date.now();
   if (decision === 'approve') {
@@ -5195,6 +5221,7 @@ Object.assign(actions, { cash_pending: (s, b) => cashPending(s, b) });
 // The payment is the ordinary SumUp card payment (a row in `payments`, held in one hidden campaign a month); the person's name and contact stay on the
 // payment only. An optional intention ("who it is for") is private to the office: never in the email, and cleared a month after the day.
 const CANDLE_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const CANDLE_DESK_ROLES = [...CANDLE_ROLES, 'volunteer'];   // a Volunteer sees the week's requests and ticks each candle as it is lit - nothing else
 const CANDLE_MIN = 1.5, CANDLE_MAX = 5, CANDLE_SUGGESTED = [1.5, 2, 3, 5], CANDLE_MAX_CANDLES = 10, CANDLE_WEEKS_OFFERED = 4;
 const candleRef = (n) => `CAN-${String(n).padStart(3, '0')}`;
 const candleDefaultAltars = () => [{ id: 'mary', name: 'Altar of Our Lady', active: true }, { id: 'anthony', name: 'Altar of St Anthony of Padua', active: true }];
@@ -5334,8 +5361,8 @@ async function candleFailed(payment) {
 }
 
 // ----- the office side
-async function candlesOrg(session) {
-  requireOrgRole(session, CANDLE_ROLES);
+async function candlesOrg(session, roles = CANDLE_ROLES) {
+  requireOrgRole(session, roles);
   const { data: org } = await supabase.from('organizations').select('id, name, slug, timezone, contact_email').eq('id', session.org_id).maybeSingle();
   if (!org) throw httpError(404, 'Organisation not found');
   if (!gwValidTimezone(org.timezone)) org.timezone = 'Europe/London';
@@ -5351,18 +5378,19 @@ function digestShape(d, org) {
   return { enabled: !!d.enabled, to_email: d.to_email || '', sends_to: d.to_email || org.contact_email || '', mail_ready: mailReady(), last_sent_at: d.last_sent_at || null, last_attempt_at: d.last_attempt_at || null, last_status: d.last_status || null, last_note: d.last_note || '', last_week_start: d.last_week_start || null };
 }
 async function candlesGet(session) {
-  const org = await candlesOrg(session), settings = await candleSettings(org.id, { create: true }), now = new Date();
+  const org = await candlesOrg(session, CANDLE_DESK_ROLES), settings = await candleSettings(org.id, { create: true }), now = new Date();
   try { await candlesSweep(org.id, now); } catch { /* housekeeping only */ }
   const dg = await digestRow(org.id, { create: true });
   const today = gwToday(org.timezone, now), nextMonday = shopAddDays(today, ((1 - shopWeekdayOf(today) + 7) % 7) || 7);
   return {
     org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/candles/${org.slug}` : null, timezone: org.timezone },
     settings: { enabled: !!settings.enabled, altars: Array.isArray(settings.altars) ? settings.altars : candleDefaultAltars(), intro_text: settings.intro_text || '', cutoff_weekday: settings.cutoff_weekday, cutoff_time: settings.cutoff_time },
+    can_manage: session.role !== 'volunteer',
     digest: digestShape(dg, org), next_monday: nextMonday, this_monday: shopAddDays(today, -((shopWeekdayOf(today) + 6) % 7)),
   };
 }
 async function candlesWeek(session, { monday } = {}) {
-  const org = await candlesOrg(session);
+  const org = await candlesOrg(session, CANDLE_DESK_ROLES);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(monday || '')) || shopWeekdayOf(String(monday)) !== 1) throw httpError(400, 'Choose a Monday.');
   const { data: rows } = await supabase.from('candle_requests').select('*').eq('org_id', org.id).gte('light_date', monday).lte('light_date', shopAddDays(monday, 6)).order('ref_no', { ascending: true }).limit(2000);
   const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
@@ -5374,7 +5402,7 @@ async function candlesWeek(session, { monday } = {}) {
   return { monday, label: `Week of ${shopDayLabel(monday)}`, requests: out, totals: { requests: live.length, candles: live.reduce((s, r) => s + r.candles, 0), to_light: live.filter(r => r.status === 'paid').reduce((s, r) => s + r.candles, 0), offered: Math.round(live.reduce((s, r) => s + r.total * 100, 0)) / 100 } };
 }
 async function candlesMark(session, { id, lit }) {
-  const org = await candlesOrg(session);
+  const org = await candlesOrg(session, CANDLE_DESK_ROLES);
   const { data: r } = await supabase.from('candle_requests').select('id, status').eq('id', id).eq('org_id', org.id).maybeSingle();
   if (!r) throw httpError(404, 'Request not found');
   if (!['paid', 'lit'].includes(r.status)) throw httpError(400, r.status === 'awaiting_payment' ? 'This request has not been paid yet.' : 'This request was cancelled.');
