@@ -1295,14 +1295,14 @@ async function renderRetentionBanner() {
   try {
     const { count, undated } = await call('retention_flags');
     const parts = [];
-    if (count) parts.push(`<div class="hint">${count} record${count === 1 ? ' still carries' : 's still carry'} a name or contact detail past the ${RETENTION_DAYS_SHOWN}-day limit after their campaign's "keep until" date. They are removed automatically every night.
+    if (count) parts.push(`<div class="hint">${count} record${count === 1 ? ' still carries' : 's still carry'} a name or contact detail past the removal day set for their campaign. They are removed automatically every night.
       <button class="small" style="margin-top:8px" onclick="doAnonymize()">Remove them now</button></div>`);
     if (undated && undated.length) parts.push(`<div class="hint">${undated.length === 1 ? 'This campaign has' : 'These campaigns have'} no "keep the details until" date, so ${undated.length === 1 ? 'its' : 'their'} names and contact details are never removed: <b>${undated.map(c => esc(c.name)).join(', ')}</b>. Open ⚙ Settings and set one under Dates.</div>`);
     bannerEl.innerHTML = parts.length ? `<div class="card">${parts.join('')}</div>` : '';
   } catch { bannerEl.innerHTML = ''; }
 }
 async function doAnonymize() {
-  if (!confirm('Remove names and contact details from every campaign that is past its keep-until date plus 90 days? This cannot be undone.')) return;
+  if (!confirm('Remove names and contact details from every campaign that is past its removal day (its keep-until date plus the days chosen for it)? This cannot be undone.')) return;
   try { const r = await call('anonymize_old_data', {}, 60000); toast(`✓ Removed details from ${r.payments_cleared} sale(s) and ${r.tickets_cleared} ticket holder name(s)`); renderRetentionBanner(); }
   catch (e) { alert(e.message); }
 }
@@ -1537,7 +1537,17 @@ const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 function fmtDay(iso) { const [y, m, d] = String(iso).split('-').map(Number); return `${d} ${MONTHS_SHORT[m - 1]} ${y}`; }
 function addDaysISO(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function ukTodayISO() { return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); }
-const RETENTION_DAYS_SHOWN = 90;   // matches the server; shown to people so they know when details are removed
+// How many days after "keep the details until" the names and contact details are removed: the person chooses, 30 to 90 (matches the server).
+// 30 is suggested because it is long enough to reconcile the accounts. Campaigns made before this was a choice are on 90.
+const RETENTION_DEFAULT_SHOWN = 30, RETENTION_MIN_SHOWN = 30, RETENTION_MAX_SHOWN = 90;
+function retDays(v) { const n = Number(v); return v !== '' && v != null && Number.isInteger(n) && n >= RETENTION_MIN_SHOWN && n <= RETENTION_MAX_SHOWN ? n : null; }   // null = not a usable number
+function retProblem(v) { return retDays(v) == null ? `Enter a whole number of days between ${RETENTION_MIN_SHOWN} and ${RETENTION_MAX_SHOWN} for how long after that date names and contact details are kept.` : ''; }
+// The "remove after N days" box, the same everywhere a campaign's dates are set.
+function retField(id, value, onInput) {
+  return `<label>Then remove names and contact details after <span class="muted">(${RETENTION_MIN_SHOWN} to ${RETENTION_MAX_SHOWN} days — ${RETENTION_DEFAULT_SHOWN} is enough to reconcile the accounts)</span></label>
+    <div style="display:flex;align-items:center;gap:8px"><input id="${id}" type="number" min="${RETENTION_MIN_SHOWN}" max="${RETENTION_MAX_SHOWN}" step="1" inputmode="numeric" value="${esc(value == null ? '' : value)}" style="max-width:110px"${onInput ? ` oninput="${onInput}"` : ''}> <span>days later</span></div>`;
+}
+function retNoteText(keep, days) { const n = retDays(days); return keep && n ? `Names, mobile numbers, emails and IP addresses will be removed on ${fmtDay(addDaysISO(keep, n))}, ${n} days after that. Amounts and ticket numbers are kept for the accounts.` : ''; }
 
 // Ready-made starting points. Each only fills in answers; the person still reviews every step.
 const WIZ_TEMPLATES = {
@@ -1938,7 +1948,7 @@ function regSummaryHtml() {
   const party = R.partyOn ? ` One registration can take up to ${esc(R.partyMax)} places.` : '';
   const money = R.payEnabled ? ` They pay by card as part of registering: ${esc(regPayText(regPayDef(R)))}.` : ' There is no payment.';
   const appr = R.approval ? ' Each application is checked and marked Accepted or Declined.' : '';
-  const keep = wiz.keep_until ? ` Names, contact details, answers and any uploaded files are kept until ${fmtDay(wiz.keep_until)} and removed 90 days later, on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}.` : '';
+  const keep = wiz.keep_until ? ` Names, contact details, answers and any uploaded files are kept until ${fmtDay(wiz.keep_until)} and removed ${retDays(wiz.retention_days) || RETENTION_DEFAULT_SHOWN} days later, on ${fmtDay(addDaysISO(wiz.keep_until, retDays(wiz.retention_days) || RETENTION_DEFAULT_SHOWN))}.` : '';
   return `<b>${n}</b> is a registration form. ${open}${close}${places}${party}${money}${appr} Only SuperAdmin, Finance and Priest can read the answers.${keep}`;
 }
 function regBuildFormDef(R) {
@@ -2271,10 +2281,11 @@ function drawRegForm() {
         <button class="small" onclick="closeRegForm(); openRegResponses('${f.id}')">Responses (${f.total})</button>
       </div></div>
     <div class="card"><b>Dates</b>
-      <div class="muted" style="margin:2px 0 6px">The form takes registrations between these dates. Names, contact details, answers and files are removed 90 days after “keep until”.</div>
+      <div class="muted" style="margin:2px 0 6px">The form takes registrations between these dates. Names, contact details, answers and files are removed ${f.retention_days || RETENTION_MAX_SHOWN} days after “keep until”.</div>
       <label>Opens (optional)</label><input id="rfOpens" type="date" value="${esc(f.opens_on || '')}">
       <label>Closes (optional — the last day people can register)</label><input id="rfCloses" type="date" value="${esc(f.closes_on || '')}">
       <label>Keep the details until <b>*</b></label><input id="rfKeep" type="date" value="${esc(f.keep_until || '')}">
+      ${retField('rfRetain', f.retention_days || RETENTION_MAX_SHOWN)}
       <button class="primary" style="margin-top:8px" onclick="doRegDates(false)">Save dates</button><div id="rfDatesMsg"></div></div>
     <div class="card"><b>Places</b>
       <div class="muted" style="margin:2px 0 6px">${f.total} taken. Leave blank for no limit.</div>
@@ -2287,7 +2298,7 @@ function drawRegForm() {
         ${f.is_draft ? `<button class="small" style="border-color:var(--bad);color:var(--bad)" onclick="doDeleteDraft('${f.id}', true)">Delete this draft</button>` : ''}
         <button class="small" onclick="doRegBin()">Move to Recycle Bin</button>
       </div>
-      <p class="muted" style="margin:8px 0 0">Closing a form just pauses it — the link keeps working and says it isn't taking registrations. The Recycle Bin removes it from the lists and the link stops working; the SuperAdmin can restore it. Either way, people's details are removed automatically 90 days after “keep until”.</p></div>
+      <p class="muted" style="margin:8px 0 0">Closing a form just pauses it — the link keeps working and says it isn't taking registrations. The Recycle Bin removes it from the lists and the link stops working; the SuperAdmin can restore it. Either way, people's details are removed automatically ${f.retention_days || RETENTION_MAX_SHOWN} days after “keep until”.</p></div>
     <div class="card"><b>The form</b>
       <div class="muted" style="margin:2px 0 6px">${(def.fields || []).length} question${(def.fields || []).length === 1 ? '' : 's'} · ${(def.agreements || []).length} agreement${(def.agreements || []).length === 1 ? '' : 's'} · ${def.payment ? `payment: ${regPayText(def.payment)}` : 'no payment'} · ${def.approval ? 'each one is checked' : 'no approval step'}</div>
       <ol style="margin:6px 0 0;padding-left:20px;line-height:1.6">${(def.fields || []).map(q => `<li>${q.sensitive ? '🔒 ' : ''}${q.type === 'heading' ? '<b>' + esc(q.label) + '</b>' : esc(q.label.length > 90 ? q.label.slice(0, 90) + '…' : q.label)}${q.required ? ' *' : ''} <span class="muted">(${esc(REG_TYPE_LABELS[q.type] || q.type)}${q.show_if ? ', shown only for some answers' : ''})</span></li>`).join('') || '<li class="muted">No questions of its own — just name and contact.</li>'}</ol>
@@ -2319,8 +2330,10 @@ async function doRegPreview() {
 }
 async function doRegDates(confirmed) {
   const msg = document.getElementById('rfDatesMsg');
+  const retainBad = retProblem(document.getElementById('rfRetain').value);
+  if (retainBad) { msg.innerHTML = `<div class="error">${esc(retainBad)}</div>`; return; }
   try {
-    const r = await call('set_campaign_dates', { campaign_id: regPanel.id, opens_on: document.getElementById('rfOpens').value, closes_on: document.getElementById('rfCloses').value, keep_until: document.getElementById('rfKeep').value, confirm: !!confirmed });
+    const r = await call('set_campaign_dates', { campaign_id: regPanel.id, opens_on: document.getElementById('rfOpens').value, closes_on: document.getElementById('rfCloses').value, keep_until: document.getElementById('rfKeep').value, retention_days: Number(document.getElementById('rfRetain').value), confirm: !!confirmed });
     toast(`✓ Dates saved — details will be removed on ${fmtDay(r.delete_on)}`);
     await regPanelRefresh();
   } catch (e) {
@@ -2345,7 +2358,7 @@ function wizResetContent() {
   wiz.copiedFrom = '';
 }
 async function openCampaignWizard(startKind) {
-  wiz = { kind: startKind || (isSuperLike() ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', copiedFrom: '', ref: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10) };   // ref: one per sitting, so pressing Create twice makes one campaign
+  wiz = { kind: startKind || (isSuperLike() ? 'raffle' : 'registration'), template: 'blank', name: '', opens_on: '', closes_on: '', keep_until: '', retention_days: String(RETENTION_DEFAULT_SHOWN), copiedFrom: '', ref: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10) };   // ref: one per sitting, so pressing Create twice makes one campaign
   wizResetContent();
   wizStep = 1;
   wizCampaigns = [];
@@ -2408,11 +2421,11 @@ function goToWizStep(n) { wizStep = n; drawWizard(); }
 // The same ordering rules the server applies, so a mistake shows up here in plain words first.
 function wizDateProblem() {
   const { opens_on: o, closes_on: c, keep_until: k } = wiz;
-  if (!k) return 'Pick the date to keep the details until. Names and contact details are removed 90 days after it, so they are never kept for ever.';
+  if (!k) return 'Pick the date to keep the details until. Names and contact details are removed 30 to 90 days after it (you choose), so they are never kept for ever.';
   if (o && c && c < o) return "The closing date can't be before the opening date.";
   if (c && k < c) return 'Keep the details until a date on or after the closing date.';
   if (o && k < o) return 'Keep the details until a date on or after the opening date.';
-  return '';
+  return retProblem(wiz.retention_days);
 }
 function wizValidate(step) {
   if (wiz.kind === 'registration') { const e = regValidateStep(step); if (e) return e; }
@@ -2438,7 +2451,7 @@ function wizKeepSameAsClose() { if (!wiz.closes_on) return; wiz.keep_until = wiz
 // Live note under the dates: when the details will actually be removed. Updates in place (no redraw) so typing isn't interrupted.
 function wizDatesNote() {
   const el = document.getElementById('wizDelNote'); if (!el) return;
-  el.textContent = wiz.keep_until ? `Names, mobile numbers, emails and IP addresses will be removed on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}, ${RETENTION_DAYS_SHOWN} days after that. Amounts and ticket numbers are kept for the accounts.` : '';
+  el.textContent = retNoteText(wiz.keep_until, wiz.retention_days);
 }
 
 function wizSummaryHtml() {
@@ -2452,7 +2465,8 @@ function wizSummaryHtml() {
   const open = wiz.opens_on ? `Sales open on ${fmtDay(wiz.opens_on)}.` : 'Sales open as soon as you open it.';
   const close = wiz.closes_on ? `They close on ${fmtDay(wiz.closes_on)}.` : 'There is no closing date.';
   const lot = lotteryWarning(wiz.kind, wiz.closes_on, wizOrg);
-  const keep = wiz.keep_until ? `Names and contact details are kept until ${fmtDay(wiz.keep_until)} and removed 90 days later, on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}.` : '';
+  const keepDays = retDays(wiz.retention_days) || RETENTION_DEFAULT_SHOWN;
+  const keep = wiz.keep_until ? `Names and contact details are kept until ${fmtDay(wiz.keep_until)} and removed ${keepDays} days later, on ${fmtDay(addDaysISO(wiz.keep_until, keepDays))}.` : '';
   return `<b>${n}</b> is a ${kind}, sold ${who}. ${open} ${close} ${prices || 'No prices yet'}; ${places} ticket${places === 1 ? '' : 's'} in total. ${wizWaitingApplicable() ? (wiz.waitingList ? 'When every place is taken, a waiting list opens. ' : 'When every place is taken, sales stop. ') : ''}${keep}${lot ? ` <b class="warnText">${lot}</b>` : ''}`;
 }
 
@@ -2483,7 +2497,8 @@ function wizStepHtml() {
     <label>Keep the details until <b>*</b> <span class="muted">${wiz.kind === 'registration' ? '(usually the end of the programme)' : wizIsRaffle() ? '(for a raffle, usually the draw date)' : '(usually the date of the event)'}</span></label>
     <input type="date" id="wKeep" value="${esc(wiz.keep_until)}" oninput="wiz.keep_until=this.value; wizDatesNote()">
     <button type="button" class="link" style="margin-top:6px" onclick="wizKeepSameAsClose()">Same as the closing date</button>
-    <p class="muted" id="wizDelNote" style="margin-top:8px">${wiz.keep_until ? `Names, mobile numbers, emails and IP addresses will be removed on ${fmtDay(addDaysISO(wiz.keep_until, RETENTION_DAYS_SHOWN))}, ${RETENTION_DAYS_SHOWN} days after that. Amounts and ticket numbers are kept for the accounts.` : ''}</p>`;
+    ${retField('wRetain', wiz.retention_days, 'wiz.retention_days=this.value; wizDatesNote()')}
+    <p class="muted" id="wizDelNote" style="margin-top:8px">${retNoteText(wiz.keep_until, wiz.retention_days)}</p>`;
   if (wizStep === 4) { const canPublic = wizCanGoPublic(); return `
     <label style="margin-top:0">What kind of tickets?</label>
     <div class="toggle" style="width:100%;flex-wrap:wrap">
@@ -2557,7 +2572,7 @@ async function doCreateCampaignWizard(asDraft) {
     if (wiz.kind === 'registration') {
       const r = await call('create_campaign', {
         kind: 'registration', name: wiz.name.trim(), client_ref: wiz.ref, details_text: wiz.detailsText,
-        opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
+        opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until, retention_days: retDays(wiz.retention_days) || RETENTION_DEFAULT_SHOWN,
         is_draft: !!asDraft, places: wiz.places, waiting_list: regWaitingApplicable() && !!wiz.waitingList, form_def: regBuildFormDef(),
       }, 60000);
       closeCampaignWizard();
@@ -2576,7 +2591,7 @@ async function doCreateCampaignWizard(asDraft) {
     const r = await call('create_campaign', {
       name: wiz.name.trim(), client_ref: wiz.ref, tagline: (wiz.tagline || '').trim(), tiers, blocks, details_text: wiz.detailsText,
       kind: wiz.kind,
-      opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until,
+      opens_on: wiz.opens_on || undefined, closes_on: wiz.closes_on || undefined, keep_until: wiz.keep_until, retention_days: retDays(wiz.retention_days) || RETENTION_DEFAULT_SHOWN,
       is_draft: !!asDraft,
       public_only: wiz.audience === 'public',
       public_page_enabled: wiz.audience !== 'sellers',
@@ -2658,7 +2673,7 @@ function drawCampaignSettings() {
       </div>
       <div class="card">
         <b>Dates</b>
-        <div class="muted" style="margin:2px 0 6px">Sales stop outside the opening and closing dates. Names and contact details are removed ${RETENTION_DAYS_SHOWN} days after "keep until".</div>
+        <div class="muted" style="margin:2px 0 6px">Sales stop outside the opening and closing dates. Names and contact details are removed ${c.retention_days || RETENTION_MAX_SHOWN} days after "keep until".</div>
         ${c.keep_until ? '' : `<div class="hint" style="margin:6px 0">This campaign has no "keep until" date, so its names and contact details are never removed. Set one below.</div>`}
         <label>Opens <span class="muted">(optional)</span></label>
         <input id="csetOpens" type="date" value="${esc(c.opens_on || '')}">
@@ -2666,6 +2681,7 @@ function drawCampaignSettings() {
         <input id="csetCloses" type="date" value="${esc(c.closes_on || '')}">
         <label>Keep the details until <b>*</b></label>
         <input id="csetKeep" type="date" value="${esc(c.keep_until || '')}">
+        ${retField('csetRetain', c.retention_days || RETENTION_MAX_SHOWN)}
         <button class="primary" style="margin-top:8px" onclick="doSaveCsetDates(false)">Save dates</button>
         <div id="cmsg-dates">${cset.msgs.dates || ''}</div>
         ${lotteryWarning(c.kind, c.closes_on, wizOrg) ? `<div class="hint" style="margin-top:8px">${esc(lotteryWarning(c.kind, c.closes_on, wizOrg))}</div>` : ''}
@@ -2739,11 +2755,13 @@ async function doSaveDefaultQty() {
   } catch (e) { msgEl.innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   openCampaignSettings(cset.id);
 }
-// Dates are saved on their own. Moving "keep until" to a day already more than 90 days gone would remove that
+// Dates are saved on their own. Moving "keep until" to a day already past its removal day (its days after "keep until") would remove that
 // campaign's names and contact details at the next nightly clean-up, so the server asks first and this confirms.
 async function doSaveCsetDates(confirmed) {
   const msgEl = document.getElementById('cmsg-dates');
-  const body = { campaign_id: cset.id, opens_on: document.getElementById('csetOpens').value, closes_on: document.getElementById('csetCloses').value, keep_until: document.getElementById('csetKeep').value };
+  const retainBad = retProblem(document.getElementById('csetRetain').value);
+  if (retainBad) { msgEl.innerHTML = `<div class="error">${esc(retainBad)}</div>`; return; }
+  const body = { campaign_id: cset.id, opens_on: document.getElementById('csetOpens').value, closes_on: document.getElementById('csetCloses').value, keep_until: document.getElementById('csetKeep').value, retention_days: Number(document.getElementById('csetRetain').value) };
   try {
     const r = await call('set_campaign_dates', { ...body, confirm: !!confirmed });
     cset.msgs.dates = `<div class="info">Saved. Names and contact details will be removed on ${esc(fmtDay(r.delete_on))}.</div>`;

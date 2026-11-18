@@ -1690,3 +1690,14 @@ Not built: "assigning a candle to someone". Light a Candle only has "lit / not l
 Migration `20261116000000_volunteer_role` (applied live): the allowed-roles list gains `volunteer`; `users.also_sells boolean not null default false`. Additive only.
 
 Tests: `volunteer.test.js` (19: what they can do, what is refused with 403, listing refund cannot ride along, the tickbox and its effect at once, consent for a seller-volunteer), `report-export.test.js`, `registrations.test.js` updated (Admin allowed, Seller refused), `ui-admin-nav.js` updated (Admin has Registrations) and extended with Volunteer checks (sections, no switches or settings, add-user form, tickbox). Server tests 379 pass.
+
+## 76. Refund cap, online-only campaigns, and how long details are kept — 2026-11-18
+
+- **Refunds** can never exceed what was paid, and only money actually received can be refunded (the app refuses it; a database trigger `payments_refund_cap` refuses it too, and stops the sale amount being lowered below a refund). Migration `20261116010000_refund_cap`.
+- **Online-only campaigns** are never sold in person: removed from every Sell screen (Seller, Admin, SuperAdmin) and `record_sale` refuses them.
+- **Removal of names and contact details** is now chosen per campaign: **30 to 90 days after "keep the details until"**, **30 suggested** for new campaigns (enough to reconcile the accounts). Replaces the fixed 90 days of §45. Every campaign that existed before stays on **90**, because that is what its buyers were told. The Repository, Listings and Candles internal campaigns also stay on 90 (the column default).
+  - A "days later" box sits under "Keep the details until" in the new-campaign wizard (all kinds), in the campaign's Dates settings, and in a registration form's Dates. A live note shows the exact removal day. Anything outside 30 to 90, or not a whole number, is refused in plain words (screen and server).
+  - The public buy page's Privacy sheet says the campaign's own number of days.
+  - The nightly job (`retention-daily`, 03:30) and the "still waiting to be removed" count use each campaign's own number. Moving "keep until" so the removal day has already passed still asks for confirmation, using that campaign's days.
+  - Migration `20261118000000_retention_days` (applied live): `campaigns.retention_days integer not null default 90 check (30..90)`; `retention_run` and `retention_pending` replaced (same names and results; `p_days` kept but ignored).
+  - Tests: `retention-days.test.js` (7), browser check `ui-retention.js`.
