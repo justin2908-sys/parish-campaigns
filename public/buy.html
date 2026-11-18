@@ -233,7 +233,7 @@ function legalSheetsHtml() {
       <button type="button" class="close" data-close="privacyCard" aria-label="Close">✕</button>
       <h2>Privacy &amp; your data</h2>
       <p class="note" style="margin:0 0 8px">The Parish keeps your name and your mobile number or email only to issue your ticket and find it again for you${l ? ', and to contact you if you win' : ''}. Card payments are processed by SumUp.</p>
-      <p class="note" style="margin:0 0 8px">Your details are removed automatically about 90 days after ${l ? 'the raffle' : 'it'} ends.</p>
+      <p class="note" style="margin:0 0 8px">Your details are removed automatically about ${Number(info.campaign.retention_days) || 90} days after ${l ? 'the raffle' : 'it'} ends.</p>
       ${o.privacy_url ? `<p class="note" style="margin:0 0 8px">How we process your data, and your rights: <a href="${esc(o.privacy_url)}" target="_blank" rel="noopener">Privacy Notice</a>.</p>` : ''}
       ${o.contact_email ? `<p class="note" style="margin:0">Questions about your details: <a href="mailto:${esc(o.contact_email)}">${esc(o.contact_email)}</a>.</p>` : ''}
     </div>`;

@@ -430,7 +430,7 @@ async function setCampaignDetails(session, { campaign_id, details_text, tagline 
 // range and pre-populate every number as 'unsold'. number_prefix (e.g. "O") is display-only,
 // and only meaningful for digital: a physical ticket must show exactly the number printed on
 // it (non-negotiable #8), so a physical block's prefix is always forced blank here.
-async function createCampaign(session, { name, client_ref, tagline, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, is_draft, waiting_list }) {
+async function createCampaign(session, { name, client_ref, tagline, tiers, blocks, details_text, public_only, age_restricted, public_page_enabled, physical_payment_methods, online_payment_methods, default_ticket_qty, kind, opens_on, closes_on, keep_until, retention_days, is_draft, waiting_list }) {
   requireOrgRole(session, ['superadmin']);
   if (!name || !name.trim()) throw httpError(400, 'Give the campaign a name');
   const ref = cleanClientRef(client_ref);
@@ -444,11 +444,12 @@ async function createCampaign(session, { name, client_ref, tagline, tiers, block
   if (kind !== undefined && !['raffle', 'event'].includes(kind)) throw httpError(400, 'Choose raffle or ticket event.');
   const campaignKind = kind || (age_restricted === false ? 'event' : 'raffle');
   // Dates (UK calendar days). Every campaign says how long its personal details are kept, so they can
-  // never live on indefinitely: they're removed 90 days after this date.
+  // never live on indefinitely: they're removed 30 to 90 days (their choice, 30 suggested) after this date.
   const dates = {
     opens_on: cleanDate(opens_on, 'The opening date'),
     closes_on: cleanDate(closes_on, 'The closing date'),
     keep_until: cleanDate(keep_until, 'The "keep the details until" date', { required: true }),
+    retention_days: cleanRetentionDays(retention_days),
   };
   checkDateOrder(dates);
   // A public buy page (whether public-only, or public-and-Sellers) needs somewhere to sell from —
@@ -738,18 +739,21 @@ async function campaignPreviewLink(session, { campaign_id }) {
   return { token: makePreviewToken(campaign_id) };
 }
 
-// Opening, closing and keep-until dates, changed after creation. Moving "keep until" to a day that has
-// already passed (+90) would remove that campaign's personal details at the next daily clean-up, so that
-// needs an explicit confirmation.
-async function setCampaignDates(session, { campaign_id, opens_on, closes_on, keep_until, confirm }) {
+// Opening, closing and keep-until dates (and how many days later the details are removed), changed after creation.
+// Moving "keep until" so that the removal day has already passed would remove that campaign's personal details at the
+// next daily clean-up, so that needs an explicit confirmation.
+async function setCampaignDates(session, { campaign_id, opens_on, closes_on, keep_until, retention_days, confirm }) {
   await requireCampaignManager(session, campaign_id);
+  const { data: existing } = await supabase.from('campaigns').select('retention_days').eq('id', campaign_id).maybeSingle();
   const dates = {
     opens_on: cleanDate(opens_on, 'The opening date'),
     closes_on: cleanDate(closes_on, 'The closing date'),
     keep_until: cleanDate(keep_until, 'The "keep the details until" date', { required: true }),
+    // Not sent = unchanged (an old screen keeps whatever the campaign already has).
+    retention_days: cleanRetentionDays(retention_days, existing && existing.retention_days ? existing.retention_days : RETENTION_MAX_DAYS),
   };
   checkDateOrder(dates);
-  const delDay = new Date(dates.keep_until + 'T00:00:00Z'); delDay.setUTCDate(delDay.getUTCDate() + RETENTION_DAYS);
+  const delDay = new Date(dates.keep_until + 'T00:00:00Z'); delDay.setUTCDate(delDay.getUTCDate() + dates.retention_days);
   const deleteOn = delDay.toISOString().slice(0, 10);
   const willClearNow = deleteOn < ukToday();
   if (willClearNow && !confirm) {
@@ -758,7 +762,7 @@ async function setCampaignDates(session, { campaign_id, opens_on, closes_on, kee
       supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('campaign_id', campaign_id).not('attendee_name', 'is', null),
     ]);
     if ((pay || 0) + (tix || 0) > 0) {
-      throw httpError(409, `That date is already more than ${RETENTION_DAYS} days ago, so the names and contact details of ${pay || 0} sale${pay === 1 ? '' : 's'} would be removed at the next daily clean-up. Choose a later date, or confirm to remove them.`);
+      throw httpError(409, `That date is already more than ${dates.retention_days} days ago, so the names and contact details of ${pay || 0} sale${pay === 1 ? '' : 's'} would be removed at the next daily clean-up. Choose a later date, or confirm to remove them.`);
     }
   }
   const { error } = await supabase.from('campaigns').update(dates).eq('id', campaign_id);
@@ -1462,7 +1466,7 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   // church details ride along with the campaign row) — one round trip to the database, not five.
   // It lists series and prices, not which numbers are free, so it has no need for the stale-hold sweep.
   const [{ data: campaign }, { data: tiers }, { data: blocks }, placesLeft, queued] = await Promise.all([
-    supabase.from('campaigns').select('id, name, tagline, details_text, org_id, age_restricted, default_ticket_qty, waiting_list, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
+    supabase.from('campaigns').select('id, name, tagline, details_text, org_id, age_restricted, default_ticket_qty, waiting_list, retention_days, active, binned, is_draft, opens_on, closes_on, organizations(name, address, thank_you_text, contact_email, privacy_url, lottery_reg_number, lottery_authority)').eq('id', campaign_id).eq('binned', false).eq('public_page_enabled', true).maybeSingle(),
     supabase.from('tiers').select('id, name, price').eq('campaign_id', campaign_id).order('sort_order'),
     supabase.from('ticket_blocks').select('id, label, number_prefix, range_start, range_end').eq('campaign_id', campaign_id).eq('type', 'digital'),
     onlinePlacesLeft(campaign_id), waitingCount(campaign_id),
@@ -1477,7 +1481,7 @@ async function publicCampaignInfo({ campaign_id, preview }) {
   if (!blocks || !blocks.length) throw httpError(400, 'This campaign has no online tickets available.');
   const org = campaign.organizations;
   return {
-    campaign: { id: campaign.id, name: campaign.name, tagline: campaign.tagline || '', details_text: campaign.details_text, age_restricted: campaign.age_restricted !== false, default_qty: campaign.default_ticket_qty || 0 },
+    campaign: { id: campaign.id, name: campaign.name, tagline: campaign.tagline || '', details_text: campaign.details_text, age_restricted: campaign.age_restricted !== false, default_qty: campaign.default_ticket_qty || 0, retention_days: campaign.retention_days || RETENTION_MAX_DAYS },
     org: { name: org ? org.name : '', address: org ? org.address : '', thank_you: org ? org.thank_you_text : null, contact_email: org ? org.contact_email : null, privacy_url: org ? org.privacy_url : null,
       // Only a raffle (a lottery) carries the council registration.
       lottery: org && campaign.age_restricted !== false && org.lottery_reg_number ? { number: org.lottery_reg_number, authority: org.lottery_authority || null } : null },
@@ -2367,16 +2371,24 @@ async function resendPayment(session, { payment_id }) {
   return { ok: true, pay_url: created.pay_url, amount: payment.amount };
 }
 
-const RETENTION_DAYS = 90;
+// How many days after "keep the details until" the names and contact details are removed. Chosen per campaign, between 30 and 90 days;
+// 30 is suggested for a new campaign (long enough to reconcile the accounts). Campaigns that existed before it was a choice stay on 90.
+const RETENTION_DEFAULT_DAYS = 30, RETENTION_MIN_DAYS = 30, RETENTION_MAX_DAYS = 90;
+function cleanRetentionDays(v, fallback = RETENTION_DEFAULT_DAYS) {
+  if (v === undefined || v === null || v === '') return fallback;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < RETENTION_MIN_DAYS || n > RETENTION_MAX_DAYS) throw httpError(400, `Names and contact details can be kept for between ${RETENTION_MIN_DAYS} and ${RETENTION_MAX_DAYS} days after the "keep until" date. Enter a whole number in that range.`);
+  return n;
+}
 
-// Personal details are removed RETENTION_DAYS after each campaign's own "keep the details until" date — not
+// Personal details are removed that campaign's own retention_days (30 to 90) after its "keep the details until" date — not
 // after the day of purchase, so a raffle's winner can still be reached after the draw. A database job does it
 // every night (retention_run); the Admin banner shows what is waiting and can run it now. Campaigns that
 // predate the date (keep_until empty) are never touched automatically; the banner asks for a date instead.
 async function retentionFlags(session) {
   requireOrgRole(session, ['superadmin']);
   const [{ data: pending, error }, { data: undated }] = await Promise.all([
-    supabase.rpc('retention_pending', { p_org: session.org_id, p_days: RETENTION_DAYS }),
+    supabase.rpc('retention_pending', { p_org: session.org_id }),   // each campaign's own number of days is used inside the database
     supabase.from('campaigns').select('id, name').eq('org_id', session.org_id).eq('binned', false).is('keep_until', null).order('created_at'),
   ]);
   if (error) throw httpError(500, error.message);
@@ -2390,7 +2402,7 @@ async function retentionFlags(session) {
 // GDPR says the personal data attached to them shouldn't linger past its purpose.
 async function anonymizeOldData(session) {
   requireOrgRole(session, ['superadmin']);
-  const { data, error } = await supabase.rpc('retention_run', { p_org: session.org_id, p_days: RETENTION_DAYS });
+  const { data, error } = await supabase.rpc('retention_run', { p_org: session.org_id });
   if (error) throw httpError(500, error.message);
   return { ok: true, payments_cleared: data.payments, tickets_cleared: data.tickets, registrations_cleared: data.registrations || 0 };
 }
@@ -2640,7 +2652,7 @@ async function registrationPlacesLeft(c) {   // null = no limit
 
 // A registration form is created like any campaign, by the SuperAdmin — or by Admin, Finance or the Priest, who can then
 // manage their own forms.
-async function createRegistrationCampaign(session, { name, client_ref, details_text, opens_on, closes_on, keep_until, is_draft, places, waiting_list, form_def }) {
+async function createRegistrationCampaign(session, { name, client_ref, details_text, opens_on, closes_on, keep_until, retention_days, is_draft, places, waiting_list, form_def }) {
   requireOrgRole(session, ['superadmin', 'admin', 'finance', 'priest']);
   const cleanedName = String(name == null ? '' : name).trim();
   if (!cleanedName) throw httpError(400, 'Give the form a name');
@@ -2651,6 +2663,7 @@ async function createRegistrationCampaign(session, { name, client_ref, details_t
     opens_on: cleanDate(opens_on, 'The opening date'),
     closes_on: cleanDate(closes_on, 'The closing date'),
     keep_until: cleanDate(keep_until, 'The "keep the details until" date', { required: true }),
+    retention_days: cleanRetentionDays(retention_days),
   };
   checkDateOrder(dates);
   const def = cleanFormDef(form_def);
@@ -2971,7 +2984,7 @@ async function registrationForms(session) {
     const by = (s) => mine.filter(r => r.status === s).length;
     const def = c.form_def || {};
     return {
-      id: c.id, name: c.name, state: campaignOpenState(c), is_draft: c.is_draft, active: c.active, opens_on: c.opens_on, closes_on: c.closes_on, keep_until: c.keep_until,
+      id: c.id, name: c.name, state: campaignOpenState(c), is_draft: c.is_draft, active: c.active, opens_on: c.opens_on, closes_on: c.closes_on, keep_until: c.keep_until, retention_days: c.retention_days,
       places: c.places, waiting_list: !!c.waiting_list, waiting_count: (waits || []).filter(w => w.campaign_id === c.id).length,
       total: mine.filter(r => r.status !== 'cancelled' && r.status !== 'declined').length,   // registrations still standing
       places_used: mine.filter(r => REG_ACTIVE_STATUSES.includes(r.status)).reduce((n, r) => n + (r.party_size || 1), 0),   // places they hold between them
@@ -3201,7 +3214,7 @@ function contactVariants(c) {
 }
 async function findPersonRecords(session, query) {
   const c = parseContact(query, 'Enter the mobile number or email to look up.');
-  const { data: camps } = await supabase.from('campaigns').select('id, name, keep_until, closes_on, kind').eq('org_id', session.org_id);
+  const { data: camps } = await supabase.from('campaigns').select('id, name, keep_until, retention_days, closes_on, kind').eq('org_id', session.org_id);
   const campById = Object.fromEntries((camps || []).map(x => [x.id, x]));
   const ids = Object.keys(campById);
   let payments = [];
@@ -3223,7 +3236,7 @@ async function findPersonRecords(session, query) {
       refund_amount: p.refund_amount, refund_note: p.refund_note, void_reason: p.void_reason,
       stored_ip_scrambled: p.client_ip,
       tickets: (tix || []).filter(t => t.payment_id === p.id).map(t => ({ number: `${prefix[t.block_id] || ''}${t.ticket_number}`, attendee_name: t.attendee_name })),
-      keep_until: camp.keep_until, auto_removal_on: camp.keep_until ? addDaysISO(camp.keep_until, RETENTION_DAYS) : null,
+      keep_until: camp.keep_until, auto_removal_on: camp.keep_until ? addDaysISO(camp.keep_until, camp.retention_days || RETENTION_MAX_DAYS) : null,
       campaign_still_running: !!(camp.closes_on ? today <= camp.closes_on : !camp.keep_until || today <= camp.keep_until),
     };
   });

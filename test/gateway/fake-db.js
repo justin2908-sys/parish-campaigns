@@ -52,6 +52,7 @@ function createFakeDb(clock) {
         case 'gt': return v !== null && v !== undefined && v > f.val;
         case 'is': return f.val === null ? (v === null || v === undefined) : v === f.val;
         case 'notnull': return v !== null && v !== undefined;
+        case 'or_notnull': return f.cols.some(c => { const x = get(row, c); return x !== null && x !== undefined; });
         default: throw new Error('fake db: unsupported filter ' + f.op);
       }
     });
@@ -135,6 +136,8 @@ function createFakeDb(clock) {
       gt: (col, val) => (st.filters.push({ op: 'gt', col, val }), api),
       is: (col, val) => (st.filters.push({ op: 'is', col, val }), api),
       not: (col, op, val) => { if (op === 'is' && val === null) st.filters.push({ op: 'notnull', col }); else throw new Error('fake db: unsupported not()'); return api; },
+      // .or('a.not.is.null,b.not.is.null') — any of the listed columns is filled in (the only form the app uses)
+      or: (expr) => { const cols = String(expr).split(',').map(p => { const m = /^(.+)\.not\.is\.null$/.exec(p.trim()); if (!m) throw new Error('fake db: unsupported or() ' + p); return m[1]; }); st.filters.push({ op: 'or_notnull', col: cols[0], cols }); return api; },
       order: (col, o) => (st.orders.push({ col, asc: !(o && o.ascending === false) }), api),
       limit: (n) => ((st.limit = n), api),
       range: (a, b) => ((st.range = [a, b]), api),
