@@ -1002,7 +1002,8 @@ async function listCampaigns(session, { include_inactive } = {}) {
   }
   if (lookOnly) visible = visible.filter(c => c.kind !== 'registration' && !c.is_draft);
   // Something to sell from only appears while it is actually open: not before its opening date, not after it closes.
-  if (sellableOnly) visible = visible.filter(c => c.kind !== 'registration' && campaignOpenState(c) === 'open');
+  // An online-only campaign is never sold in person, so it is not on anyone's Sell screen (Seller, Admin or SuperAdmin alike).
+  if (sellableOnly) visible = visible.filter(c => c.kind !== 'registration' && !c.public_only && campaignOpenState(c) === 'open');
   visible = visible.filter(c => !shopIsHiddenCampaign(c));   // the Repository's weekend campaigns and the Listings months are never listed
 
   return {
@@ -1249,6 +1250,7 @@ async function recordSale(session, { campaign_id, tier_counts, ticket_numbers, a
 
   const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', campaign_id).single();
   if (!campaign) throw httpError(404, 'Campaign not found');
+  if (campaign.public_only) throw httpError(400, 'This campaign is online only, so it cannot be sold in person. Nothing has been recorded.');
   // A campaign takes sales only while it is open: opened (not a draft), switched on, and between its dates.
   const openState = campaignOpenState(campaign);
   if (openState !== 'open') {
