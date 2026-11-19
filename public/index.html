@@ -3531,7 +3531,12 @@ function gwStyle() {
   .gw-addr { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .gw-addr code { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:14.5px; overflow-wrap:anywhere; }
   .gw-btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
-  .gw-btns button { min-height:44px; }`;
+  .gw-btns button { min-height:44px; }
+  .gw-donrow { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:52px; padding:8px 12px; margin:0 0 6px; border:1.5px solid var(--line); border-radius:12px; background:var(--surface); }
+  .gw-donrow.me { border-color:var(--pine); background:var(--paper); }
+  .gw-donmv { display:flex; gap:6px; margin-left:auto; }
+  .gw-donmv button { min-height:44px; min-width:44px; }
+  .gw-donmv button:disabled { opacity:.4; }`;
   document.head.appendChild(st);
 }
 function gwDraftFrom(d) {
@@ -3549,11 +3554,14 @@ async function renderParishPageTab() {
   try { d = await call('gateway_get'); }
   catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
   gwStyle();
-  gw = { d, draft: gwDraftFrom(d), removeArm: null, form: null, slugConfirm: false };
+  gw = { d, draft: gwDraftFrom(d), removeArm: null, form: null, slugConfirm: false, don: null };
+  if (!isVolunteer()) { try { gw.don = await call('donations_get'); } catch { gw.don = null; } }
+  if (adminSeq !== seq) return;
   gwPaint();
 }
 async function gwReload(parts) {   // refetch; only the parts that were just saved take the server's version, so nothing typed elsewhere is lost
   gw.d = await call('gateway_get');
+  if (!isVolunteer()) { try { gw.don = await call('donations_get'); } catch { /* keep what is shown */ } }
   const fresh = gwDraftFrom(gw.d);
   for (const p of parts || []) gw.draft[p] = fresh[p];
   gwPaint();
@@ -3561,7 +3569,7 @@ async function gwReload(parts) {   // refetch; only the parts that were just sav
 function gwPaint() {
   const el = document.getElementById('adminContent');
   if (!el || adminTab !== 'parishpage' || !gw) return;
-  el.innerHTML = gwHeadHtml() + gwLinksHtml() + gwAnnHtml() + gwItemsHtml();
+  el.innerHTML = gwHeadHtml() + gwLinksHtml() + gwDonateHtml() + gwAnnHtml() + gwItemsHtml();
   gwAnnRefresh();
   if (gw.form) gwFormCheck();
 }
@@ -3584,7 +3592,7 @@ function gwHeadHtml() {
       <div class="gw-btns"><button class="primary" style="width:auto;margin:0;padding:12px 18px;font-size:16px" onclick="gwSaveAddress()">Save address and name</button></div>`
       : `<p class="muted" style="margin:10px 0 0">Only the SuperAdmin can change the address or switch the page on or off.</p>`}
     <h4 style="margin:18px 0 0;font-size:16px">WhatsApp channel</h4>
-    <p class="muted" style="margin:2px 0 0">Paste your parish's WhatsApp channel link and a “Join our WhatsApp channel” button appears at the top of the page. Leave it empty for no button. In WhatsApp, open your channel, tap its name, then tap “Share” or “Copy link”.</p>
+    <p class="muted" style="margin:2px 0 0">Paste your parish's WhatsApp channel link and a “Follow us on WhatsApp” link appears at the bottom of the page, with the parish details. Leave it empty for no button. In WhatsApp, open your channel, tap its name, then tap “Share” or “Copy link”.</p>
     <label for="gwWhatsapp">Channel link</label><input id="gwWhatsapp" value="${esc(draft.details.whatsapp)}" maxlength="200" autocomplete="off" autocapitalize="off" inputmode="url" placeholder="https://whatsapp.com/channel/…" oninput="gw.draft.details.whatsapp=this.value">
     <h4 style="margin:18px 0 0;font-size:16px">Today in the Church</h4>
     <div class="gw-switchrow" style="margin-top:6px"><div><b>Show today's feast and Mass readings</b><div class="muted">A card near the top of the page, new every day. It names the day or saint being celebrated and links to the readings (Universalis, England and Wales) and to more about the day (Vatican News). You do nothing each day.</div></div><label class="gw-switch" style="margin:0"><input type="checkbox" ${draft.details.daily ? 'checked' : ''} aria-label="Show today's feast and Mass readings" onchange="gw.draft.details.daily=this.checked"><span></span></label></div>
@@ -3633,7 +3641,7 @@ async function gwSaveDetails() {
 function gwLinksHtml() {
   const w = gwWords();
   return `<div class="card"><h3 style="margin-top:0">Permanent links</h3>
-    <p class="gw-lede">The three big buttons at the top of the page. They stay in this order. Links must start with https://. A link left blank is not shown.</p>
+    <p class="gw-lede">The three big buttons at the top of the page. They stay in this order (the Make a Donation button can be placed among them, in the next box). Links must start with https://. A link left blank is not shown.</p>
     ${gw.draft.links.map((l, i) => `<div class="gw-linkrow"><div class="gw-lock">${esc(w.positions[i])}</div>
       <label for="gwL${i}">Title</label><input id="gwL${i}" value="${esc(l.label)}" maxlength="60" autocomplete="off" oninput="gwLinkInput(${i},'label',this.value)">
       <label for="gwS${i}">One line underneath</label><input id="gwS${i}" value="${esc(l.sub)}" maxlength="60" autocomplete="off" oninput="gwLinkInput(${i},'sub',this.value)">
@@ -3653,6 +3661,31 @@ async function gwSaveLink(i) {
   const l = gw.draft.links[i];
   if (l.url.trim() && !gwOkUrl(l.url)) { gwLinkInput(i, 'url', l.url); toast('That web address is not valid yet.', 'error'); return; }
   try { await call('gateway_save_links', { links: [l] }); toast(l.label.trim() || l.url.trim() ? `✓ Link ${i + 1} saved` : `✓ Link ${i + 1} cleared`); await gwReload(['links']); } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- the Make a Donation button: where it sits among the big buttons (the money side is under Money → Donations)
+function gwDonOrder() {
+  const don = gw.don, labels = (don.links || []).filter(Boolean).map(l => ({ label: l, donate: false }));
+  const at = Math.min(Math.max(1, Number(don.settings.door_position) || 1), labels.length + 1) - 1;
+  labels.splice(at, 0, { label: 'Make a Donation', donate: true });
+  return { rows: labels, at };
+}
+function gwDonateHtml() {
+  if (!gw.don) return '';
+  const { rows, at } = gwDonOrder(), on = gw.don.settings.enabled;
+  const row = (r, i) => r.donate
+    ? `<div class="gw-donrow me"><b>${esc(r.label)}</b><span class="gw-status ${on ? 'live' : ''}">${on ? 'On' : 'Switched off'}</span><span class="gw-donmv"><button type="button" class="small" aria-label="Move Make a Donation up" title="Move up" onclick="gwDonMove(-1)" ${i === 0 ? 'disabled' : ''}>▲ Up</button><button type="button" class="small" aria-label="Move Make a Donation down" title="Move down" onclick="gwDonMove(1)" ${i === rows.length - 1 ? 'disabled' : ''}>▼ Down</button></span></div>`
+    : `<div class="gw-donrow"><span>${esc(r.label)}</span></div>`;
+  return `<div class="card"><h3 style="margin-top:0">Make a Donation button</h3>
+    <p class="gw-lede">Choose where it sits among the big buttons. Each press moves it one place and is saved at once. ${on ? '' : 'It is switched off at the moment, so visitors will not see it yet.'} Switch it on, and see the gifts, under Money → Donations.</p>
+    <div id="gwDonOrder" role="list" aria-label="Order of the big buttons">${rows.map(row).join('')}</div>
+    <div class="gw-btns"><button class="small" onclick="setAdminTab('donations')">Open Donations (Money)</button></div></div>`;
+}
+async function gwDonMove(delta) {
+  const { rows, at } = gwDonOrder(), to = Math.min(Math.max(0, at + delta), rows.length - 1);
+  if (to === at) return;
+  try { await call('donations_set_settings', { door_position: to + 1 }); toast(delta < 0 ? '✓ Make a Donation moved up' : '✓ Make a Donation moved down'); await gwReload(); const b = document.querySelector('.gw-donrow.me .gw-donmv button:' + (delta < 0 ? 'first-child' : 'last-child')); if (b && !b.disabled) b.focus({ preventScroll: true }); }
+  catch (e) { toast(e.message, 'error'); }
 }
 
 // ---- the notice
@@ -4542,7 +4575,7 @@ async function renderDonationsTab() {
   try { d = await call('donations_get'); }
   catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
   gwStyle();
-  don = { d, view: 'list', draft: { intro_text: d.settings.intro_text || '', door_position: d.settings.door_position || 1 } };
+  don = { d, view: 'list', draft: { intro_text: d.settings.intro_text || '' } };
   if (adminSeq === seq) donPaint();
 }
 async function donReload(parts) {
@@ -4584,18 +4617,14 @@ function donListHtml() {
 }
 async function donRefresh() { try { don.d = await call('donations_get'); donPaint(); toast('✓ List refreshed'); } catch (e) { toast(e.message, 'error'); } }
 function donSettingsHtml() {
-  const links = don.d.links || [], pos = Math.min(Math.max(1, Number(don.draft.door_position) || 1), links.length + 1);
-  const opts = [{ v: 1, t: 'At the top (first button)' }, ...links.map((l, i) => ({ v: i + 2, t: 'After “' + l + '”' }))];
-  return `<div class="card"><h3 style="margin-top:0">Where it goes on the parish page</h3>
-    <label for="dnPos">The “Make a Donation” button sits</label><select id="dnPos" onchange="don.draft.door_position=Number(this.value)">${opts.map(o => `<option value="${o.v}" ${o.v === pos ? 'selected' : ''}>${esc(o.t)}</option>`).join('')}</select>
-    <div class="muted" style="margin-top:4px">Among the big buttons under the shortcuts. Press Save below to keep a change.</div></div>
-    <div class="card"><h3 style="margin-top:0">Welcome line</h3>
+  return `<div class="card"><h3 style="margin-top:0">Welcome line</h3>
     <label for="dnIntro">A line at the top of the donation page (optional)</label><input id="dnIntro" maxlength="300" value="${esc(don.draft.intro_text)}" placeholder="e.g. Thank you for supporting the life and work of our parish." autocomplete="off" oninput="don.draft.intro_text=this.value">
     <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="donSaveSettings()">Save</button></div></div>
-    <div class="card"><h4 style="margin:0 0 6px">The amount</h4><p class="muted" style="margin:0">People can type any amount from £1.00 to £5,000.00. The page suggests £10 and offers £10, £20, £50 and £100 as quick choices.</p></div>`;
+    <div class="card"><h4 style="margin:0 0 6px">The amount</h4><p class="muted" style="margin:0">People can type any amount from £1.00 to £5,000.00. The page suggests £10 and offers £10, £20, £50 and £100 as quick choices.</p></div>
+    <div class="card"><h4 style="margin:0 0 6px">Where the button goes</h4><p class="muted" style="margin:0 0 8px">Its place among the big buttons on the parish page is set with the rest of the page.</p><button class="small" onclick="setAdminTab('parishpage')">Go to Parish page</button></div>`;
 }
 async function donSaveSettings() {
-  try { await call('donations_set_settings', { intro_text: don.draft.intro_text, door_position: don.draft.door_position }); toast('✓ Saved'); await donReload(['intro_text', 'door_position']); }
+  try { await call('donations_set_settings', { intro_text: don.draft.intro_text }); toast('✓ Saved'); await donReload(['intro_text']); }
   catch (e) { toast(e.message, 'error'); }
 }
 
