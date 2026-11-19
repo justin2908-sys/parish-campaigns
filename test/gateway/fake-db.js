@@ -12,7 +12,7 @@ function createFakeDb(clock) {
   const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
     repository_items: () => ({ available: true, stock: null, sort: 0, featured: false, hearts: 0 }),
     listings: () => ({ views: 0, contacts: 0, reports: 0, hearts: 0, featured: false, images: [], description: '' }),
-    donation_settings: () => ({ enabled: false, intro_text: null, next_ref: 1 }),
+    donation_settings: () => ({ enabled: false, intro_text: null, next_ref: 1, door_position: 1 }),
     candle_settings: () => ({ enabled: false, altars: [{ id: 'mary', name: 'Altar of Our Lady', active: true }, { id: 'anthony', name: 'Altar of St Anthony of Padua', active: true }], intro_text: null, cutoff_weekday: 3, cutoff_time: '23:59', next_ref: 1 }),
     weekly_digest: () => ({ enabled: false, to_email: null, last_week_start: null, last_sent_at: null, last_status: null, last_note: null, last_attempt_at: null }),
     listings_settings: () => ({ enabled: false, intro_text: null, price_base: 3, price_per_extra_week: 1.5, price_per_image: 0.5 }),

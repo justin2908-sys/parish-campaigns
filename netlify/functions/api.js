@@ -3654,7 +3654,7 @@ async function publicGateway({ slug }) {
     org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null, whatsapp: org.gateway_whatsapp || null },
     daily,
     candles: candlesRow && candlesRow.enabled && candleActiveAltars(candlesRow).length ? { path: `/candles/${s}` } : null,   // Light a Candle, only while it is open
-    donate: donationRow && donationRow.enabled ? { path: `/donate/${s}` } : null,   // "Make a Donation", the first door on the page, only while it is open
+    donate: donationRow && donationRow.enabled ? { path: `/donate/${s}`, position: Number(donationRow.door_position) || 1 } : null,   // "Make a Donation", the first door on the page, only while it is open
     listings: listingsRow && listingsRow.enabled ? { path: `/listings/${s}` } : null,   // the Listings shortcut, only while it is open
     shop: shopRow && shopRow.enabled ? { path: `/shop/${s}` } : null,   // the Repository: a shopping-bag shortcut on the page, only while it is open for orders
     links: (linksRes.data || []).map(l => ({ label: l.label, sub: l.sub || '', url: l.url })),
@@ -5730,7 +5730,8 @@ async function donationsGet(session) {
   const inMonth = paid.filter(d => d.paid_at && gwToday(org.timezone, new Date(d.paid_at)).slice(0, 7) === month);
   return {
     org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/donate/${org.slug}` : null, timezone: org.timezone },
-    settings: { enabled: !!settings.enabled, intro_text: settings.intro_text || '' },
+    settings: { enabled: !!settings.enabled, intro_text: settings.intro_text || '', door_position: Number(settings.door_position) || 1 },
+    links: ((await supabase.from('gateway_links').select('position, label').eq('org_id', org.id).order('position')).data || []).map(l => l.label),   // the other big buttons, so the office can choose where this one goes among them
     totals: { this_month: inMonth.reduce((s, d) => s + net(d), 0) / 100, this_month_count: inMonth.length, shown: paid.reduce((s, d) => s + net(d), 0) / 100, shown_count: paid.length },
     donations,
   };
@@ -5739,6 +5740,11 @@ async function donationsSetSettings(session, b) {
   const org = await donationsOrg(session), patch = { updated_at: new Date().toISOString() };
   await donationSettings(org.id, { create: true });
   if (b.intro_text !== undefined) patch.intro_text = gwText(b.intro_text, 300, 'The welcome line') || null;
+  if (b.door_position !== undefined) {
+    const n = Number(b.door_position);
+    if (!Number.isInteger(n) || n < 1 || n > 10) throw httpError(400, 'Choose where the Make a Donation button goes.');
+    patch.door_position = n;
+  }
   if (b.enabled !== undefined) {
     if (b.enabled && !org.slug) throw httpError(400, 'Give the parish page an address first (Admin → Parish page).');
     patch.enabled = !!b.enabled;

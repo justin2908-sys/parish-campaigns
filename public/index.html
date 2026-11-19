@@ -4542,12 +4542,12 @@ async function renderDonationsTab() {
   try { d = await call('donations_get'); }
   catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
   gwStyle();
-  don = { d, view: 'list', draft: { intro_text: d.settings.intro_text || '' } };
+  don = { d, view: 'list', draft: { intro_text: d.settings.intro_text || '', door_position: d.settings.door_position || 1 } };
   if (adminSeq === seq) donPaint();
 }
 async function donReload(parts) {
   don.d = await call('donations_get');
-  for (const p of parts || []) don.draft[p] = don.d.settings[p] || '';
+  for (const p of parts || []) don.draft[p] = don.d.settings[p] || (p === 'door_position' ? 1 : '');
   donPaint();
 }
 function donPaint() {
@@ -4584,13 +4584,18 @@ function donListHtml() {
 }
 async function donRefresh() { try { don.d = await call('donations_get'); donPaint(); toast('✓ List refreshed'); } catch (e) { toast(e.message, 'error'); } }
 function donSettingsHtml() {
-  return `<div class="card"><h3 style="margin-top:0">Welcome line</h3>
+  const links = don.d.links || [], pos = Math.min(Math.max(1, Number(don.draft.door_position) || 1), links.length + 1);
+  const opts = [{ v: 1, t: 'At the top (first button)' }, ...links.map((l, i) => ({ v: i + 2, t: 'After “' + l + '”' }))];
+  return `<div class="card"><h3 style="margin-top:0">Where it goes on the parish page</h3>
+    <label for="dnPos">The “Make a Donation” button sits</label><select id="dnPos" onchange="don.draft.door_position=Number(this.value)">${opts.map(o => `<option value="${o.v}" ${o.v === pos ? 'selected' : ''}>${esc(o.t)}</option>`).join('')}</select>
+    <div class="muted" style="margin-top:4px">Among the big buttons under the shortcuts. Press Save below to keep a change.</div></div>
+    <div class="card"><h3 style="margin-top:0">Welcome line</h3>
     <label for="dnIntro">A line at the top of the donation page (optional)</label><input id="dnIntro" maxlength="300" value="${esc(don.draft.intro_text)}" placeholder="e.g. Thank you for supporting the life and work of our parish." autocomplete="off" oninput="don.draft.intro_text=this.value">
     <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="donSaveSettings()">Save</button></div></div>
     <div class="card"><h4 style="margin:0 0 6px">The amount</h4><p class="muted" style="margin:0">People can type any amount from £1.00 to £5,000.00. The page suggests £10 and offers £10, £20, £50 and £100 as quick choices.</p></div>`;
 }
 async function donSaveSettings() {
-  try { await call('donations_set_settings', { intro_text: don.draft.intro_text }); toast('✓ Saved'); await donReload(['intro_text']); }
+  try { await call('donations_set_settings', { intro_text: don.draft.intro_text, door_position: don.draft.door_position }); toast('✓ Saved'); await donReload(['intro_text', 'door_position']); }
   catch (e) { toast(e.message, 'error'); }
 }
 

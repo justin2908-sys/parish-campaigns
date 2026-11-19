@@ -1714,3 +1714,5 @@ Tests: `volunteer.test.js` (19: what they can do, what is refused with 403, list
 **Parish page layout.** The email envelope moved up into the top banner (right of the parish name, 44 px, still copies the address). "Follow us on WhatsApp" is still words, but now sits with the parish details at the foot instead of taking a line under the shortcut row.
 
 Tests: `test/gateway/donations.test.js` (12 server tests) and `test/gateway/ui-donate.js` (browser); `ui-check.js` and `ui-admin-nav.js` updated for the new layout and the Money tab row.
+
+**Position is configurable (2026-11-19).** Money → Donations → Settings has "Where it goes on the parish page": at the top (default), or after any of the other big buttons (named, e.g. After "Book the Parish Hall"). Column `donation_settings.door_position` (migration `20261119010000_donation_door_position.sql`, applied live; default 1 so nothing moved). A position past the last button puts it at the end. Tests added to `donations.test.js` and `ui-donate.js`.

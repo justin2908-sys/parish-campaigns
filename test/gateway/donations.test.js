@@ -133,10 +133,23 @@ test('Make a Donation', async (t) => {
     T('organizations')[0].slug = null;
     assert.equal((await call('donations_set_settings', { enabled: true }, { session: S.sa })).status, 400);
   });
+  await t.test('where the button goes among the big buttons is chosen by the office, defaults to first, and reaches the parish page', async () => {
+    reset();
+    T('gateway_links').push({ id: 'l1', org_id: 'org-A', position: 1, label: 'Book the Parish Hall', sub: '', url: 'https://example.org/hall' }, { id: 'l2', org_id: 'org-A', position: 2, label: 'Mass times', sub: '', url: 'https://example.org/mass' });
+    let g = await call('donations_get', {}, { session: S.sa });
+    assert.equal(g.body.settings.door_position, 1); assert.deepEqual(g.body.links, ['Book the Parish Hall', 'Mass times']);
+    let r = await call('donations_set_settings', { door_position: 2 }, { session: S.fi });
+    assert.equal(r.status, 200, r.raw);
+    assert.equal((await call('donations_get', {}, { session: S.sa })).body.settings.door_position, 2);
+    assert.equal((await call('public_gateway', { slug: 'svp-osterley' })).body.donate.position, 2);
+    for (const bad of [0, 11, 1.5, 'x', -1]) assert.equal((await call('donations_set_settings', { door_position: bad }, { session: S.sa })).status, 400, String(bad));
+    assert.equal(T('donation_settings')[0].door_position, 2);   // a refused value changes nothing
+    assert.equal((await call('donations_set_settings', { door_position: 3 }, { session: S.vo })).status, 403);
+  });
   await t.test('the parish page shows the donate door only while donations are open', async () => {
     reset();
     let r = await call('public_gateway', { slug: 'svp-osterley' });
-    assert.equal(r.status, 200, r.raw); assert.deepEqual(r.body.donate, { path: '/donate/svp-osterley' });
+    assert.equal(r.status, 200, r.raw); assert.deepEqual(r.body.donate, { path: '/donate/svp-osterley', position: 1 });
     T('donation_settings')[0].enabled = false;
     r = await call('public_gateway', { slug: 'svp-osterley' });
     assert.equal(r.body.donate, null);

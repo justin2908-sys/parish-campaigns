@@ -171,6 +171,15 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   await shot('donate-320-form');
   await view(390, 844);
 
+  // ---- moving it down below the Hall button (as the office would, in Settings)
+  T('donation_settings')[0].door_position = 2;
+  await open(base + '/go/svp-osterley', "document.querySelector('.door')");
+  check('with the position set to 2, "Book the Parish Hall" comes first and "Make a Donation" second', await ev(`(() => { const d = [...document.querySelectorAll('.door')]; return /Book the Parish Hall/.test(d[0].textContent) && /Make a Donation/.test(d[1].textContent); })()`));
+  T('donation_settings')[0].door_position = 9;
+  await open(base + '/go/svp-osterley', "document.querySelector('.door')");
+  check('a position past the last button still shows it (at the end), never loses it', await ev(`(() => { const d = [...document.querySelectorAll('.door')]; return d.length === 2 && /Make a Donation/.test(d[1].textContent); })()`));
+  T('donation_settings')[0].door_position = 1;
+
   // ---- the office
   const loginAs = async (token, user) => {
     await open(base + '/theme.css', 'document.body');
@@ -187,9 +196,11 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('the Donations screen: no sideways scroll, tap targets 44px or larger', !am.hscroll && !am.smallTargets.length, JSON.stringify([am.scrollWidth, am.smallTargets.slice(0, 5)]));
   await shot('admin-390-donations');
   await click('.seg button', 'Settings');
+  check('Settings offers where the button goes: at the top, or after each of the other buttons (named)', await waitFor(`document.getElementById('dnPos')`) && await ev(`[...document.querySelectorAll('#dnPos option')].map(o => o.textContent).join('|')`) === 'At the top (first button)|After “Book the Parish Hall”');
+  await ev(`(() => { const s = document.getElementById('dnPos'); s.value = '2'; s.dispatchEvent(new Event('change', { bubbles: true })); return 'ok'; })()`);
   await typeIn('#dnIntro', 'God bless your generosity.');
   await click('#adminContent button', 'Save');
-  check('saving the welcome line says Saved, and the donation page then shows it', await waitFor(`/Saved/.test(document.getElementById('toast').textContent)`) && T('donation_settings')[0].intro_text === 'God bless your generosity.');
+  check('saving the welcome line says Saved, and the donation page then shows it', await waitFor(`/Saved/.test(document.getElementById('toast').textContent)`) && T('donation_settings')[0].intro_text === 'God bless your generosity.' && T('donation_settings')[0].door_position === 2);
   await click('.seg button', 'Donations');
   await ev(`document.querySelector('#adminContent .gw-switchrow input').click(); 'ok'`);
   check('switching it off says Donations are now closed', await waitFor(`/now closed/.test(document.getElementById('toast').textContent)`) && T('donation_settings')[0].enabled === false);
