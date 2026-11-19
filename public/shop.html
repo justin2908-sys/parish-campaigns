@@ -130,6 +130,8 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
 .f input:focus { border-color:var(--brand-text); outline:none; box-shadow:0 0 0 3px var(--brand-tint); }
 .f .help { color:var(--muted); font-size:.9375rem; }
 .f.bad input { border-color:var(--bad); }
+.privacy { margin:0; padding:10px 12px; border-radius:12px; background:var(--brand-tint); color:var(--fg); font-size:.9375rem; line-height:1.4; }
+.privacy a { display:flex; align-items:center; min-height:44px; color:var(--brand-text); font-weight:700; text-decoration:underline; text-underline-offset:3px; }
 .trap { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
 
 .bar { position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--surface); border-top:2px solid var(--line); padding-top:10px; padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
@@ -337,6 +339,11 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
     return '<button type="button" class="chip" data-cat="" aria-pressed="' + (!catSel && !q.trim()) + '">' + esc(W.all) + '</button>' + cats.map(function (c) { return '<button type="button" class="chip' + (c.season ? ' hot' : '') + '" data-cat="' + esc(c.name) + '" aria-pressed="' + (catSel === c.name) + '">' + esc(c.name) + ' <span>' + c.count + '</span></button>'; }).join('');
   }
   function drawList() { var b = $('list'); if (b) b.innerHTML = listHtml(); var c = $('chips'); if (c) c.innerHTML = chipsHtml(); var x = document.querySelector('.search .clear'); if (x) x.hidden = !q; }
+  // The note shown wherever a name or contact is asked for: they are told, before they go on, that the church stores what they enter, and where the privacy notice is.
+  function privacyNote() {
+    var o = data.org || {}, link = /^https:\/\/[^\s]+$/i.test(o.privacy_url || '') ? '<a class="plink" href="' + esc(o.privacy_url) + '" target="_blank" rel="noopener">How we use your details, and your rights: Privacy Notice</a>' : '';
+    return 'By continuing, you confirm you are happy to share the details you enter here with ' + esc(o.name || 'the parish') + ', and you understand they are stored by the church.' + link;
+  }
   function render() {
     var html = mast(data.org.name, W.title, slug) + '<main class="gutter"><div class="wrap" style="display:grid;grid-template-columns:minmax(0,1fr);gap:14px">';
     if (data.intro || data.cutoff_text) html += '<section class="panel">' + (data.intro ? '<p class="intro">' + esc(data.intro) + '</p>' : '') + (data.cutoff_text ? '<p class="cut">' + esc(data.cutoff_text) + '</p>' : '') + '</section>';
@@ -355,6 +362,7 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
       '<div class="f' + (badField === 'name' ? ' bad' : '') + '"><label for="fName">' + esc(W.name) + '</label><input id="fName" type="text" autocomplete="name" maxlength="80" value="' + esc(who.name) + '"></div>' +
       '<div class="f' + (badField === 'contact' ? ' bad' : '') + '"><label for="fPhone">' + esc(W.phone) + '</label><input id="fPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" value="' + esc(who.phone) + '"></div>' +
       '<div class="f' + (badField === 'contact' ? ' bad' : '') + '"><label for="fEmail">' + esc(W.email) + '</label><input id="fEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" value="' + esc(who.email) + '"><span class="help">' + esc(W.contactHelp) + '</span></div>' +
+      '<p class="privacy">' + privacyNote() + '</p>' +
       '<div class="trap" aria-hidden="true"><label>Leave this empty<input id="fWebsite" type="text" tabindex="-1" autocomplete="off"></label></div></section>';
     html += '</div></main>';
     html += '<div class="bar gutter"><div class="wrap">' + (errMsg ? '<p class="err" role="alert">' + esc(errMsg) + '</p>' : '') +

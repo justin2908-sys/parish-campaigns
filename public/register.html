@@ -100,6 +100,8 @@ window.__infoP = (function () {
   .shuf { width:100%; border:none; padding:12px 8px; border-radius:13px; font-size:16.5px; font-weight:800; color:var(--ink); background:linear-gradient(180deg,#DDBA66,#B8913A); box-shadow:0 4px 0 #8B6A22; }
   .veil { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center; background:rgba(46,71,57,.92); color:#fff; font-size:20px; font-weight:700; text-align:center; padding:20px; }
   .veil.on { display:flex; }
+  .consent { margin:8px 0 0; padding:10px 12px; border-radius:12px; background:var(--paper, #f6f4ec); border:1px solid var(--line, #d9d4c0); color:var(--ink); font-size:13.5px; line-height:1.4; text-align:left; }
+  .consent a { display:flex; align-items:center; min-height:44px; color:var(--wine); font-weight:600; text-decoration:underline; text-underline-offset:3px; }
 </style>
 </head>
 <body>
@@ -130,6 +132,12 @@ const campaignId = new URLSearchParams(location.search).get('campaign_id');
 const previewToken = new URLSearchParams(location.search).get('preview') || undefined;
 let info = null, busy = false, attempt = null, files = {};
 
+// The note shown wherever a name or contact is asked for: they are told, before they go on, that the church stores what they enter, and where the privacy notice is.
+function consentHtml(joining) {
+  const o = info.org || {}, link = /^https:\/\/[^\s]+$/i.test(o.privacy_url || '') ? `<a class="plink" href="${esc(o.privacy_url)}" target="_blank" rel="noopener">How we use your details, and your rights: Privacy Notice</a>` : '';
+  return joining ? `By joining, you confirm you are happy for ${esc(o.name || 'the parish')} to keep your email for this waiting list, and you understand it is stored by the church.${link}`
+    : `By continuing, you confirm you are happy to share the details you enter here with ${esc(o.name || 'the parish')}, and you understand they are stored by the church.${link}`;
+}
 // ---- small print behind links, so the form stays clear
 function privacyLine() { return `<button type="button" class="linkbtn" data-sheet="privacyCard">Privacy &amp; your data</button>`; }
 function sheets() {
@@ -309,6 +317,7 @@ function buildForm() {
         <div class="q" id="q_name"><label for="f_name">Your name <span class="req">*</span></label><input type="text" id="f_name" maxlength="80" autocomplete="name"><div class="why"></div></div>
         <div class="q" id="q_phone"><label for="f_phone">Mobile number${both ? ' <span class="req">*</span>' : ''}</label><input type="tel" id="f_phone" inputmode="tel" autocomplete="tel"><div class="why"></div></div>
         <div class="q" id="q_email"><label for="f_email">Email address${both ? ' <span class="req">*</span>' : ''}</label><input type="email" id="f_email" inputmode="email" autocomplete="email"><div class="help" style="margin-top:6px">${both ? '' : 'Give a mobile number or an email — either one. '}You use it to find your registration again.</div><div class="why"></div></div>
+        <p class="consent">${consentHtml()}</p>
       </div>
       ${F.fields.length ? `<div class="card"><h2>Questions</h2>${F.fields.map(fieldHtml).join('')}</div>` : ''}
       ${F.party ? partyCard(F.party) : ''}
@@ -472,7 +481,7 @@ async function boot() {
   if (!info.preview && info.queue_open) {
     app.innerHTML = statusPage(`<p class="note" style="font-size:18px;margin-top:14px"><b>All places are taken.</b></p>
       <p class="note">Join the waiting list and we'll email you if places open up. Nothing to pay. When places open, we send one email to everyone on the list, and places go to whoever registers first. We keep your email only until then.</p>
-      <div id="wlForm"><input id="wlEmail" type="email" placeholder="Your email" autocomplete="email" inputmode="email" style="width:100%;padding:11px 12px;font-size:16.5px;border:1.5px solid var(--line);border-radius:12px"><button type="button" class="shuf" id="wlBtn" style="margin-top:10px">🔔 Join the waiting list</button></div><div id="wlOut" role="status" aria-live="polite"></div>`);
+      <div id="wlForm"><input id="wlEmail" type="email" placeholder="Your email" autocomplete="email" inputmode="email" style="width:100%;padding:11px 12px;font-size:16.5px;border:1.5px solid var(--line);border-radius:12px"><p class="consent">${consentHtml(true)}</p><button type="button" class="shuf" id="wlBtn" style="margin-top:10px">🔔 Join the waiting list</button></div><div id="wlOut" role="status" aria-live="polite"></div>`);
     wireSheets(); $('wlBtn').onclick = joinWaitingList; $('wlEmail').onkeydown = (e) => { if (e.key === 'Enter') joinWaitingList(); }; $('findBtn').onclick = findRegistration; return;
   }
   if (!info.preview && info.sold_out) {

@@ -14,6 +14,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 clock.live();
 const T = db.T;
 T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', address: '2 Witham Road, Osterley' });
+T('organizations').find(o => o.id === 'org-A').privacy_url = 'https://example.org/privacy';
 const SA = addUser('uA-sa', 'superadmin', 'org-A', Date.now() + 6 * 36e5);
 Object.assign(T('users').find(u => u.id === 'uA-sa'), { mobile: '07000000001', name: 'superadmin', confidentiality_version: 1 });
 
@@ -119,6 +120,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('it opens the candle page', await waitFor(`document.querySelector('.altar')`));
   check('the page names the parish, has both candle stands, and a pay bar that says nothing is chosen yet', await ev(`(() => { const t = document.body.innerText; return /Osterley/.test(t) && /Altar of Our Lady/.test(t) && /Altar of St Anthony of Padua/.test(t) && !!document.getElementById('payBtn') && /Choose an offering/.test(document.getElementById('totalLine').textContent); })()`));
   check('the week buttons are short ("From Mon 16 Nov"), one for each week offered', await ev(`(() => { const c = [...document.querySelectorAll('.weeks .chip')]; return c.length === 4 && c.every(b => /^From [A-Z][a-z]{2} \\d{1,2} [A-Z][a-z]{2}$/.test(b.textContent.trim())); })()`), JSON.stringify(await ev(`[...document.querySelectorAll('.weeks .chip')].map(b => b.textContent)`)));
+  check('the candle form: the note says they are happy to share their details with the church and that it stores them, with the Privacy Notice link', await ev(`(() => { const n = document.querySelector('.privacy, .consent'); return !!n && /happy to share the details you enter here with St\\.Vincent De Paul Church, Osterley/.test(n.textContent) && /stored by the church/.test(n.textContent) && !!n.querySelector('a[href="https://example.org/privacy"][target=_blank]') && /Privacy Notice/.test(n.querySelector('a').textContent); })()`));
   const m0 = await ev(MEASURE_PAGE);
   check('the request form: no sideways scroll, text 15px or larger, tap targets 44px or larger', !m0.hscroll && !m0.smallText.length && !m0.smallTargets.length, JSON.stringify([m0.scrollWidth, m0.smallText.slice(0, 3), m0.smallTargets.slice(0, 4)]));
   await shot('candles-390-form');

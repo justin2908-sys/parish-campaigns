@@ -14,6 +14,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 clock.live();
 const T = db.T;
 T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', address: '2 Witham Road, Osterley' });
+T('organizations').find(o => o.id === 'org-A').privacy_url = 'https://example.org/privacy';
 const SA = addUser('uA-sa', 'superadmin', 'org-A', Date.now() + 6 * 36e5);
 Object.assign(T('users').find(u => u.id === 'uA-sa'), { mobile: '07000000001', name: 'superadmin', confidentiality_version: 1 });
 
@@ -162,6 +163,7 @@ const MEASURE_PAGE = MEASURE.replace('ROOT', 'body'), MEASURE_ADMIN = MEASURE.re
   check('choosing a time highlights it and clears the message', await ev(`!document.querySelector('.err') && document.querySelector('.opt.on') !== null`));
   await click('#payBtn'); await sleep(300);
   check('no name: asked, and the box is marked', await ev(`/enter your name/.test(document.querySelector('.err').textContent) && document.querySelector('.f.bad') !== null`));
+  check('the Repository order form: the note says they are happy to share their details with the church and that it stores them, with the Privacy Notice link', await ev(`(() => { const n = document.querySelector('.privacy, .consent'); return !!n && /happy to share the details you enter here with St\\.Vincent De Paul Church, Osterley/.test(n.textContent) && /stored by the church/.test(n.textContent) && !!n.querySelector('a[href="https://example.org/privacy"][target=_blank]') && /Privacy Notice/.test(n.querySelector('a').textContent); })()`));
   await setVal('#fName', 'Mary Murphy'); await click('#payBtn'); await sleep(300);
   check('no way to reach them: asked', await ev(`/mobile number or an email/.test(document.querySelector('.err').textContent)`));
   const kept = await ev(`JSON.parse(localStorage.getItem('shop_basket_svp-osterley') || '{}')`);

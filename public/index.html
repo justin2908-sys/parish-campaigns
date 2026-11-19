@@ -542,6 +542,7 @@ function drawSeller(screen) {
         <input id="buyerName" aria-label="Buyer name (required)" placeholder="Buyer name *" value="${esc(buyerNameValue)}" oninput="buyerNameValue=this.value">
         <input id="contactInput" aria-label="Buyer's mobile or email (required)" placeholder="Mobile / email *" value="${esc(contactValue)}" oninput="contactValue=this.value" autocomplete="off">
       </div>
+      <p class="muted" id="sellerPrivacy" style="font-size:13.5px;line-height:1.4;margin:6px 2px 0">${sellerPrivacyNote()}</p>
 
       <div class="totalline"><span>Total</span><b id="totalDisplay">£0.00</b></div>
       <div class="pay3" id="paymentButtons">${paymentButtonsHtml()}</div>
@@ -627,6 +628,11 @@ function linkShareHtml(paymentId, contact, message, subject) {
 function thankYou() {
   const o = state.org;
   return (o && o.thank_you_text) || (o && o.name ? 'Thank you for supporting ' + o.name + '.' : 'Thank you for your support!');
+}
+// Shown to a seller where they type a buyer's name and mobile or email: the buyer must know their details are stored by the church (and where the privacy notice is).
+function sellerPrivacyNote() {
+  const o = state.org || {}, link = /^https:\/\/[^\s]+$/i.test(o.privacy_url || '') ? ` <a href="${esc(o.privacy_url)}" target="_blank" rel="noopener" style="display:flex;align-items:center;min-height:44px;color:var(--pine);font-weight:600">Privacy Notice</a>` : '';
+  return `Please tell the buyer: by giving their name and contact details they are happy to share them with ${esc(churchName())}, and they understand they are stored by the church.${link}`;
 }
 function churchName() { return (state.org && state.org.name) || 'St.Vincent De Paul Church'; }
 function linkMessage(campaignName, amount, ticketNumbers, payUrl, isOnline) {
@@ -4575,12 +4581,12 @@ async function renderDonationsTab() {
   try { d = await call('donations_get'); }
   catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; return; }
   gwStyle();
-  don = { d, view: 'list', draft: { intro_text: d.settings.intro_text || '' } };
+  don = { d, view: 'list', draft: { intro_text: d.settings.intro_text || '', purposes: [...(d.settings.purposes || [])] } };
   if (adminSeq === seq) donPaint();
 }
 async function donReload(parts) {
   don.d = await call('donations_get');
-  for (const p of parts || []) don.draft[p] = don.d.settings[p] || (p === 'door_position' ? 1 : '');
+  for (const p of parts || []) don.draft[p] = Array.isArray(don.d.settings[p]) ? [...don.d.settings[p]] : (don.d.settings[p] || '');
   donPaint();
 }
 function donPaint() {
@@ -4608,23 +4614,31 @@ function donListHtml() {
   const { d } = don, t = d.totals, money = cndMoney;
   const when = (iso) => iso ? new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: d.org.timezone }) : '';
   const label = { paid: 'Paid', awaiting_payment: 'Waiting for payment', cancelled: 'Not completed' };
-  const rows = d.donations.length ? d.donations.map(r => `<div class="rp-order" style="margin:0 0 8px"><div class="rp-top"><b class="rp-name">${money(r.amount)}${r.name ? ' · ' + esc(r.name) : ''}</b><span class="gw-status ${r.status === 'paid' ? 'live' : ''}">${label[r.status] || esc(r.status)}</span></div>
+  const rows = d.donations.length ? d.donations.map(r => `<div class="rp-order" style="margin:0 0 8px"><div class="rp-top"><b class="rp-name">${money(r.amount)}${r.purpose ? ' · for ' + esc(r.purpose) : ''}${r.name ? ' · ' + esc(r.name) : ''}</b><span class="gw-status ${r.status === 'paid' ? 'live' : ''}">${label[r.status] || esc(r.status)}</span></div>
       <div class="muted">${esc(r.ref)} · ${esc(when(r.paid_at || r.created_at))}${r.contact ? ' · ' + esc(r.contact) : ''}${r.refunded ? ' · refunded ' + money(r.refunded) : ''}</div></div>`).join('')
     : '<p class="muted" style="margin:0">No donations yet.</p>';
-  return `<div class="card"><h3 style="margin-top:0">This month</h3><div style="font-size:1.6rem;font-weight:700">${money(t.this_month)}</div><div class="muted">${t.this_month_count} paid donation${t.this_month_count === 1 ? '' : 's'}, after any refunds.</div></div>
+  return `<div class="card"><h3 style="margin-top:0">This month</h3><div style="font-size:1.6rem;font-weight:700">${money(t.this_month)}</div><div class="muted">${t.this_month_count} paid donation${t.this_month_count === 1 ? '' : 's'}, after any refunds.</div>${(d.by_purpose || []).length ? `<h4 style="margin:14px 0 6px;font-size:16px">By purpose</h4>${d.by_purpose.map(g => `<div class="gw-switchrow" style="min-height:44px"><span>${g.purpose ? esc(g.purpose) : '<span class="muted">No purpose given</span>'} <span class="muted">· ${g.count} gift${g.count === 1 ? '' : 's'}</span></span><b style="margin-left:auto">${money(g.total)}</b></div>`).join('')}` : ''}</div>
     <div class="card"><h3 style="margin-top:0">Latest donations</h3>${rows}<div class="gw-btns"><button class="small" onclick="donRefresh()">Refresh</button></div>
     <div class="muted" style="margin-top:8px">The latest 200 are shown.</div></div>`;
 }
 async function donRefresh() { try { don.d = await call('donations_get'); donPaint(); toast('✓ List refreshed'); } catch (e) { toast(e.message, 'error'); } }
 function donSettingsHtml() {
-  return `<div class="card"><h3 style="margin-top:0">Welcome line</h3>
+  const ps = don.draft.purposes;
+  return `<div class="card"><h3 style="margin-top:0">Suggested purposes</h3>
+    <p class="gw-lede">Optional. People can say what their gift is for. Anything you list here appears on the donation page as buttons they can tap (for example Altar Flowers, Church Building Fund, St Vincent de Paul Society). They can also write their own. Up to 8. This month's gifts are totalled by purpose on the Donations screen.</p>
+    ${ps.map((p, i) => `<div class="gw-switchrow" style="gap:8px;margin-bottom:6px"><input id="dnP${i}" aria-label="Purpose ${i + 1}" maxlength="40" value="${esc(p)}" autocomplete="off" style="flex:1;min-width:0" oninput="don.draft.purposes[${i}]=this.value"><button class="small" style="min-height:44px" onclick="donRemovePurpose(${i})" aria-label="Remove purpose ${i + 1}">Remove</button></div>`).join('')}
+    <div class="gw-btns"><button class="small" onclick="donAddPurpose()">+ Add a purpose</button></div>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="donSaveSettings()">Save</button></div></div>
+    <div class="card"><h3 style="margin-top:0">Welcome line</h3>
     <label for="dnIntro">A line at the top of the donation page (optional)</label><input id="dnIntro" maxlength="300" value="${esc(don.draft.intro_text)}" placeholder="e.g. Thank you for supporting the life and work of our parish." autocomplete="off" oninput="don.draft.intro_text=this.value">
     <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="donSaveSettings()">Save</button></div></div>
     <div class="card"><h4 style="margin:0 0 6px">The amount</h4><p class="muted" style="margin:0">People can type any amount from £1.00 to £5,000.00. The page suggests £10 and offers £10, £20, £50 and £100 as quick choices.</p></div>
     <div class="card"><h4 style="margin:0 0 6px">Where the button goes</h4><p class="muted" style="margin:0 0 8px">Its place among the big buttons on the parish page is set with the rest of the page.</p><button class="small" onclick="setAdminTab('parishpage')">Go to Parish page</button></div>`;
 }
+function donAddPurpose() { if (don.draft.purposes.length >= 8) { toast('Up to 8 suggested purposes.', 'error'); return; } don.draft.purposes.push(''); donPaint(); const el = document.getElementById('dnP' + (don.draft.purposes.length - 1)); if (el) el.focus(); toast('Added — type the purpose, then press Save'); }
+function donRemovePurpose(i) { don.draft.purposes.splice(i, 1); donPaint(); toast('Removed — press Save to keep this change'); }
 async function donSaveSettings() {
-  try { await call('donations_set_settings', { intro_text: don.draft.intro_text }); toast('✓ Saved'); await donReload(['intro_text']); }
+  try { await call('donations_set_settings', { intro_text: don.draft.intro_text, purposes: don.draft.purposes.map(p => String(p).trim()).filter(Boolean) }); toast('✓ Saved'); await donReload(['intro_text', 'purposes']); }
   catch (e) { toast(e.message, 'error'); }
 }
 

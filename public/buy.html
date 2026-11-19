@@ -144,6 +144,8 @@ window.__infoP = (function () {
   @media (max-height:700px) { .bundleHead { margin:8px 0 6px; } .bundle { padding:7px 2px 6px; } .bundle b { font-size:23px; } }
   .fatal { max-width:480px; margin:40px auto; padding:0 16px; }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } .bit { display:none; } }
+  .consent { margin:8px 0 0; padding:10px 12px; border-radius:12px; background:var(--paper, #f6f4ec); border:1px solid var(--line, #d9d4c0); color:var(--ink); font-size:13.5px; line-height:1.4; text-align:left; }
+  .consent a { display:flex; align-items:center; min-height:44px; color:var(--wine); font-weight:600; text-decoration:underline; text-underline-offset:3px; }
 </style>
 </head>
 <body>
@@ -200,6 +202,12 @@ function isRaffle() { return !!(info && info.campaign && info.campaign.age_restr
 const previewToken = new URLSearchParams(location.search).get('preview') || undefined;
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 function dayText(iso) { const [y, m, d] = String(iso).split('-').map(Number); return `${d} ${MONTH_NAMES[m - 1]} ${y}`; }
+// The note shown wherever a name or contact is asked for: they are told, before they go on, that the church stores what they enter, and where the privacy notice is.
+function consentHtml(joining) {
+  const o = info.org || {}, link = /^https:\/\/[^\s]+$/i.test(o.privacy_url || '') ? `<a class="plink" href="${esc(o.privacy_url)}" target="_blank" rel="noopener">How we use your details, and your rights: Privacy Notice</a>` : '';
+  return joining ? `By joining, you confirm you are happy for ${esc(o.name || 'the parish')} to keep your email for this waiting list, and you understand it is stored by the church.${link}`
+    : `By continuing, you confirm you are happy to share the details you enter here with ${esc(o.name || 'the parish')}, and you understand they are stored by the church.${link}`;
+}
 // A line about who to ask and where the privacy notice is — shown where details are collected.
 function privacyHtml() {
   const o = info.org;
@@ -274,6 +282,7 @@ function waitingPageHtml() {
     <div id="wlForm">
       <label class="sr" for="wlEmail">Your email</label>
       <input id="wlEmail" type="email" placeholder="Your email" autocomplete="email" inputmode="email" style="width:100%">
+      <p class="consent">${consentHtml(true)}</p>
       <button type="button" class="shuf" id="wlBtn" style="width:100%;margin-top:10px">🔔 Join the waiting list</button>
     </div>
     <div id="wlOut" role="status" aria-live="polite"></div>`, waitingPrivacyHtml());
@@ -387,6 +396,7 @@ function buildShell() {
             <label class="sr" for="contactInput">Mobile or email</label><input id="contactInput" placeholder="Mobile or email" autocomplete="email" inputmode="email">
           </div>
         </div>
+        <p class="consent">${consentHtml()}</p>
         <p class="fine">🔒 Secure payment by SumUp · <button type="button" class="linkbtn inl" id="findToggle">Already paid? Find your ticket</button></p>
         <p class="fine" id="legalLine">${legalLineHtml()}</p>
       </div>
@@ -402,7 +412,7 @@ function buildShell() {
       <div class="confirmBox"><div class="who">We don't email or text your ticket — <b id="cName"></b>, you'll need these exact details to find it again:</div><div class="big" id="cContact"></div><div class="amt" id="cAmt"></div></div>
       <div class="warn2" id="cWarn" hidden></div>
       <div class="keep">📲 <b>Important — after you pay, come back to this page</b> (tap the button on SumUp's page) and <b>save your ticket</b> to your phone. Then you'll always have it.</div>
-      <p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">Your details are used only for your ticket. <button type="button" class="linkbtn inl" data-sheet="privacyCard">Privacy &amp; your data</button></p>
+      <p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">Your details are used only for your ticket, and are stored by the church. <button type="button" class="linkbtn inl" data-sheet="privacyCard">Privacy &amp; your data</button></p>
       ${info.campaign.age_restricted ? `<p class="muted" style="font-size:12.5px;line-height:1.4;text-align:center;margin:0 0 10px">By tapping "Yes, that's right" you confirm you are aged 18 or over — the minimum age to buy a raffle ticket.</p>` : ''}
       <button type="button" class="pay" id="confirmPay">Yes, that's right — pay</button>
       <button type="button" class="shuf alt" id="confirmEdit" style="width:100%;margin-top:8px">✏️ Change my details</button>

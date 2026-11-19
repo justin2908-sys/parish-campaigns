@@ -13,6 +13,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 clock.live();
 const T = db.T;
 T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', address: '2 Witham Road, Osterley' });
+T('organizations').find(o => o.id === 'org-A').privacy_url = 'https://example.org/privacy';
 const SA = addUser('uA-sa', 'superadmin', 'org-A', Date.now() + 6 * 36e5);
 Object.assign(T('users').find(u => u.id === 'uA-sa'), { mobile: '07000000001', name: 'superadmin', confidentiality_version: 1 });
 
@@ -68,6 +69,7 @@ const setVal = (sel, v, evName = 'input') => ev(`(() => { const e = document.que
 let failures = 0;
 const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PASS ' : 'FAIL ') + name + (extra ? ' — ' + extra : '')); };
 
+for (const c of T('campaigns')) if (!c.org_id) c.org_id = 'org-A';   // so the public page can read the church's name and privacy link
 (async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = 'http://localhost:' + server.address().port;
@@ -92,6 +94,8 @@ const check = (name, ok, extra) => { if (!ok) failures++; console.log((ok ? 'PAS
   const lm = await ev(LINES);
   check('the longest tagline (50 wide letters) stays on one line at 320px and does not push the page sideways', lm.lines === 1 && !lm.hscroll, JSON.stringify(lm));
   await view(390, 844); await open(base + '/buy.html?campaign_id=' + without, "document.querySelector('.top h1')");
+  check('the ticket page next to the name and mobile/email boxes: the note says they are happy to share their details with the church and that it stores them, with the Privacy Notice link', await ev(`(() => { const n = document.querySelector('.privacy, .consent'); return !!n && /happy to share the details you enter here with St\\.Vincent De Paul Church, Osterley/.test(n.textContent) && /stored by the church/.test(n.textContent) && !!n.querySelector('a[href="https://example.org/privacy"][target=_blank]') && /Privacy Notice/.test(n.querySelector('a').textContent); })()`));
+
   const nm = await ev(LINES);
   check('no tagline: nothing extra is drawn on the public page', nm.none && !nm.hscroll, JSON.stringify(nm));
 

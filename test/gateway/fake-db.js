@@ -64,6 +64,8 @@ function createFakeDb(clock) {
       for (const n of names) if (n !== '*') out[n] = clone(row[n]);
       const em = /campaigns!inner\(([^)]*)\)/.exec(st.cols);   // the embedded join the payment code uses: campaigns!inner(org_id, name, ...)
       if (em) { const c = T('campaigns').find(x => x.id === row.campaign_id); out.campaigns = c ? Object.fromEntries(em[1].split(',').map(s => s.trim()).filter(Boolean).map(k => [k, c[k]])) : null; }
+      const eo = /organizations\(([^)]*)\)/.exec(st.cols);   // the church's details riding along with a campaign row (public pages): organizations(name, address, ...)
+      if (eo && table === 'campaigns') { const o = T('organizations').find(x => x.id === row.org_id); out.organizations = o ? Object.fromEntries(eo[1].split(',').map(k => k.trim()).filter(Boolean).map(k => [k, o[k] === undefined ? null : o[k]])) : null; }
       if (st.cols.includes('ticket_blocks!inner(type)')) { const b = T('ticket_blocks').find(x => x.id === row.block_id); out.ticket_blocks = b ? { type: b.type } : null; }
       return out;
     };

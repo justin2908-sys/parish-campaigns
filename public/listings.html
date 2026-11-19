@@ -169,6 +169,8 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
 .toast { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom, 0px)); transform:translate(-50%,20px); opacity:0; pointer-events:none; background:var(--fg); color:var(--bg); padding:14px 20px; border-radius:12px; max-width:calc(100% - 32px); transition:opacity .2s, transform .2s; z-index:50; }
 .toast.on { opacity:1; transform:translate(-50%,0); }
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; scroll-behavior:auto !important; } }
+.privacy { margin:0; padding:10px 12px; border-radius:12px; background:var(--brand-tint); color:var(--fg); font-size:.9375rem; line-height:1.4; }
+.privacy a { display:flex; align-items:center; min-height:44px; color:var(--brand-text); font-weight:700; text-decoration:underline; text-underline-offset:3px; }
 </style>
 </head>
 <body>
@@ -202,6 +204,11 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
   function say(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(tt); tt = setTimeout(function () { toastEl.classList.remove('on'); }, 3200); }
 
   var P = window.__lstP, slug = P.slug, manageToken = P.manage;
+  // The note shown wherever a name or contact is asked for: they are told, before they go on, that the church stores what they enter, and where the privacy notice is.
+  function privacyNote() {
+    var o = data.org || {}, link = /^https:\/\/[^\s]+$/i.test(o.privacy_url || '') ? '<a class="plink" href="' + esc(o.privacy_url) + '" target="_blank" rel="noopener">How we use your details, and your rights: Privacy Notice</a>' : '';
+    return 'By continuing, you confirm you are happy to share the details you enter here with ' + esc(o.name || 'the parish') + ', and you understand they are stored by the church.' + link;
+  }
   var data = null, q = '', kindSel = '', catSel = '', open = {}, index = [], vocab = [], searchTimer = null, noticeOpen = false;
   function mast(name, sub, backHref) { return '<header class="mast gutter"><div class="wrap"><div class="id">' + (backHref ? '<a class="back" href="' + esc(backHref) + '" aria-label="Back" title="Back">' + ico(I.back) + '</a>' : '') + '<h1>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + esc(name) + '</h1></div></div></header>'; }
   function status(title, help, retry, back) { $('app').innerHTML = mast(W.title, '', back) + '<main class="gutter"><div class="wrap"><div class="status"><h1>' + esc(title) + '</h1><p>' + esc(help) + '</p>' + (retry ? '<button class="btn solid" type="button" id="retry">' + esc(W.retry) + '</button>' : '') + '</div></div></main>'; }
@@ -404,7 +411,8 @@ main { padding-top:14px; padding-bottom:40px; display:grid; grid-template-column
       '<section class="panel"><h2><span class="n">3</span>How long?</h2>' + seg(days, f.days, 'data-fdays') + '<p class="small">The days start when the office approves your listing.</p></section>' +
       '<section class="panel"><h2><span class="n">4</span>Your email</h2><div class="f' + (badField === 'email' ? ' bad' : '') + '"><label for="fEmail">Email address</label><input id="fEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" value="' + esc(f.email) + '"><span class="help">Email only, never a phone number. It is never shown on the page: people press a button that hands it to them, and write to you from their own email.</span></div>' +
       '<div class="f' + (badField === 'email2' ? ' bad' : '') + '"><label for="fEmail2">Type your email address again</label><input id="fEmail2" type="email" inputmode="email" autocomplete="off" maxlength="254" value="' + esc(f.email2) + '"><span class="help" id="emailMatch">' + esc(emailMatchText() || 'To be sure we have it right.') + '</span></div>' +
-      '<div class="f"><label for="fName">Your first name (optional)</label><input id="fName" maxlength="40" autocomplete="given-name" value="' + esc(f.name) + '"></div></section>' +
+      '<div class="f"><label for="fName">Your first name (optional)</label><input id="fName" maxlength="40" autocomplete="given-name" value="' + esc(f.name) + '"></div>' +
+      '<p class="privacy">' + privacyNote() + '</p></section>' +
       '<section class="panel"><h2><span class="n">5</span>Supporting the parish</h2><p class="intro">A listing helps the parish when you can. Here are two suggestions for a listing like yours. Choose what suits you; <b>£0 is perfectly fine</b>.</p><div class="pay3" role="group" aria-label="Amount">' +
       '<button type="button" data-pay="suggested" aria-pressed="' + (f.payMode === 'suggested') + '"><span>Suggested<small>for ' + esc(days.filter(function (d) { return d[0] === f.days; })[0][1]) + ' and ' + f.photos.length + ' picture' + (f.photos.length === 1 ? '' : 's') + '</small></span><span class="amt">' + gbp(qt.suggested) + '</span></button>' +
       '<button type="button" data-pay="supporter" aria-pressed="' + (f.payMode === 'supporter') + '"><span>With thanks<small>a little more for the parish</small></span><span class="amt">' + gbp(qt.supporter) + '</span></button>' +

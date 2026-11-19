@@ -74,7 +74,8 @@ Object.assign(T('users').find(u => u.id === 'uA-ad'), { mobile: '07000000002', n
 const VO = addUser('uA-vo', 'volunteer', 'org-A', Date.now() + 6 * 36e5);
 Object.assign(T('users').find(u => u.id === 'uA-vo'), { mobile: '07000000004', name: 'volunteer', confidentiality_version: 1 });
 Object.assign(T('organizations').find(o => o.id === 'org-A'), { contact_email: 'osterley@example.org', gateway_whatsapp: 'https://whatsapp.com/channel/0029VaAbCdEf12345' });
-T('donation_settings').push({ org_id: 'org-A', enabled: true, intro_text: 'Thank you for supporting our parish.', next_ref: 1 });
+T('donation_settings').push({ org_id: 'org-A', enabled: true, intro_text: 'Thank you for supporting our parish.', next_ref: 1, purposes: ['Altar Flowers', 'Church Building Fund'] });
+T('organizations').find(o => o.id === 'org-A').privacy_url = 'https://example.org/privacy';
 T('gateway_links').push({ id: 'l1', org_id: 'org-A', position: 1, label: 'Book the Parish Hall', sub: '', url: 'https://example.org/hall' });
 
 // SumUp stand-in
@@ -128,6 +129,12 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   // ---- the donation page
   await click('.door', 'Make a Donation');
   check('it opens the donation page with the welcome line, the quick amounts and £10 already filled in', await waitFor(readyDonate) && await ev(`(() => { const t = document.body.innerText; return /Thank you for supporting our parish/.test(t) && [...document.querySelectorAll('.q')].map(b => b.textContent.trim()).join() === '£10,£20,£50,£100' && document.getElementById('fAmount').value === '10' && document.querySelector('.q[aria-pressed=true]').textContent.trim() === '£10' && /£10\\.00/.test(document.getElementById('payAmt').textContent); })()`));
+  check('the donation page: the note says they are happy to share their details with the church and that it stores them, with the Privacy Notice link', await ev(`(() => { const n = document.querySelector('.privacy, .consent'); return !!n && /happy to share the details you enter here with St\\.Vincent De Paul Church, Osterley/.test(n.textContent) && /stored by the church/.test(n.textContent) && !!n.querySelector('a[href="https://example.org/privacy"][target=_blank]') && /Privacy Notice/.test(n.querySelector('a').textContent); })()`));
+  check('the suggested purposes are offered as buttons above a "write your own" box', await ev(`[...document.querySelectorAll('.chip')].map(b => b.textContent.trim()).join('|') === 'Altar Flowers|Church Building Fund' && !!document.getElementById('fPurpose') && /personal details/.test(document.body.innerText)`));
+  await click('.chip', 'Church Building Fund');
+  check('tapping a purpose fills the box and highlights it; tapping it again clears it', (await ev("document.getElementById('fPurpose').value")) === 'Church Building Fund' && (await ev("document.querySelector('.chip[aria-pressed=true]').textContent")) === 'Church Building Fund');
+  await click('.chip', 'Church Building Fund');
+  check('…cleared again', (await ev("document.getElementById('fPurpose').value")) === '' && (await ev("document.querySelectorAll('.chip[aria-pressed=true]').length")) === 0);
   const m0 = await ev(MEASURE_PAGE);
   check('the donation page: no sideways scroll, text 15px or larger, tap targets 44px or larger', !m0.hscroll && !m0.smallText.length && !m0.smallTargets.length, JSON.stringify([m0.scrollWidth, m0.smallText.slice(0, 3), m0.smallTargets.slice(0, 4)]));
   await shot('donate-390-form');
@@ -148,10 +155,11 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('a contact that is neither an email nor a mobile number is refused in words (the server says which), and nothing is created', await waitFor(`document.querySelector('.err') && /mobile number/i.test(document.querySelector('.err').textContent)`) && T('donations').length === before, await ev("(document.querySelector('.err') || {}).textContent"));
 
   // ---- giving: no name, no contact needed
-  await typeIn('#fContact', ''); await typeIn('#fAmount', '25');
+  await typeIn('#fContact', ''); await typeIn('#fAmount', '25'); await click('.chip', 'Altar Flowers');
   await click('#payBtn');
   const made = await waitFor(`true`) && await (async () => { for (let i = 0; i < 40; i++) { await sleep(150); if (T('donations').length === before + 1) return true; } return false; })();
   check('pressing the pay button creates one donation for £25.00 with no name or contact, and sends the browser to the card page', made && T('donations')[before].amount === 25 && T('payments').at(-1).payer_name === null && T('payments').at(-1).contact_value === null, JSON.stringify(T('donations').at(-1)));
+  check('the gift carries the purpose that was tapped', T('donations')[before] && T('donations')[before].purpose === 'Altar Flowers');
   const donationId = T('donations')[before] && T('donations')[before].id;
 
   // ---- the donation's own page: waiting, then thanks
@@ -159,7 +167,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   check('before it is paid the donation page says it is waiting, shows the reference, and offers the payment page', await waitFor(`/Waiting for your payment/.test(document.querySelector('.status h1').textContent)`) && await ev(`/DON-001/.test(document.body.innerText) && !!document.querySelector('a.btn[href^="https://pay.example/"]')`));
   sumupStatus = 'PAID';
   await open(base + '/donate.html?donation=' + donationId, "document.querySelector('.status h1')");
-  check('once paid it says thank you with the amount, the reference, a copy button and a way back to the parish page', await waitFor(`/Thank you for your gift of £25\\.00/.test(document.querySelector('.status h1').textContent)`) && await ev(`/DON-001/.test(document.body.innerText) && !!document.querySelector('[data-copy="DON-001"]') && !!document.querySelector('a.btn[href="/go/svp-osterley"]')`));
+  check('once paid it says thank you with the amount and the purpose, the reference, a copy button and a way back to the parish page', await waitFor(`/Thank you for your gift of £25\\.00 for Altar Flowers/.test(document.querySelector('.status h1').textContent)`) && await ev(`/DON-001/.test(document.body.innerText) && !!document.querySelector('[data-copy="DON-001"]') && !!document.querySelector('a.btn[href="/go/svp-osterley"]')`));
   await shot('donate-390-thanks');
   await ev(CLIP); await click('[data-copy]');
   check('the copy button copies the reference and says so', await waitFor(`/Reference copied: DON-001/.test(document.getElementById('toast').textContent)`));
@@ -188,6 +196,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
     for (let k = 0; k < 6; k++) { await ev(`viewMode = 'admin'; render(); 'ok'`); if (await waitFor(`document.querySelector('.tabs button')`, 2500)) break; }
   };
   await loginAs(AD, { id: 'uA-ad', name: 'admin', role: 'admin', org_id: 'org-A', mobile: '07000000002' });
+  check('the in-person Sell screen has a note for the seller to tell the buyer their details are stored by the church, with the Privacy Notice link (44px tall)', await ev(`(() => { state.org = { name: 'St.Vincent De Paul Church', privacy_url: 'https://example.org/privacy' }; const d = document.createElement('div'); d.innerHTML = sellerPrivacyNote(); document.body.appendChild(d); const a = d.querySelector('a'), ok = /tell the buyer/.test(d.textContent) && /stored by the church/.test(d.textContent) && /St\.Vincent De Paul Church/.test(d.textContent) && a && a.getAttribute('href') === 'https://example.org/privacy' && a.getBoundingClientRect().height >= 44; d.remove(); return !!ok; })()`));
   await click('[data-group=money]');
   check('the admin sees a Donations tab in the Money section', await waitFor(`document.querySelector('[data-tab=donations]')`));
   await click('[data-tab=donations]');
@@ -195,11 +204,15 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   const am = await ev(MEASURE_ADMIN);
   check('the Donations screen: no sideways scroll, tap targets 44px or larger', !am.hscroll && !am.smallTargets.length, JSON.stringify([am.scrollWidth, am.smallTargets.slice(0, 5)]));
   await shot('admin-390-donations');
+  check('the list shows the purpose and this month is totalled by purpose', await ev(`/for Altar Flowers/.test(document.getElementById('adminContent').innerText) && /By purpose/.test(document.getElementById('adminContent').innerText)`));
   await click('.seg button', 'Settings');
+  check('Settings lists the suggested purposes to edit', await ev(`[...document.querySelectorAll('[id^=dnP]')].map(i => i.value).join('|') === 'Altar Flowers|Church Building Fund'`));
+  await click('#adminContent button', '+ Add a purpose');
+  await typeIn('#dnP2', 'St Vincent de Paul Society');
   check('Settings no longer has a position box; it points to the Parish page instead', await ev(`!document.getElementById('dnPos') && /Parish page/.test(document.getElementById('adminContent').innerText)`));
   await typeIn('#dnIntro', 'God bless your generosity.');
   await click('#adminContent button', 'Save');
-  check('saving the welcome line says Saved, and the donation page then shows it', await waitFor(`/Saved/.test(document.getElementById('toast').textContent)`) && T('donation_settings')[0].intro_text === 'God bless your generosity.');
+  check('saving the welcome line says Saved, and the donation page then shows it', await waitFor(`/Saved/.test(document.getElementById('toast').textContent)`) && T('donation_settings')[0].intro_text === 'God bless your generosity.' && T('donation_settings')[0].purposes.join('|') === 'Altar Flowers|Church Building Fund|St Vincent de Paul Society');
   // ---- the position is part of the Parish page tab: move it down below the Hall button, then back up
   await click('[data-group=page]'); await click('[data-tab=parishpage]');
   check('the Parish page tab has a Make a Donation card listing the big buttons in order, with the donation button first', await waitFor(`document.getElementById('gwDonOrder')`) && await ev(`[...document.querySelectorAll('#gwDonOrder .gw-donrow')].map(r => r.querySelector('b') ? 'DON' : r.textContent.trim()).join('|')`) === 'DON|Book the Parish Hall');

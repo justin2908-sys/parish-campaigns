@@ -14,6 +14,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 clock.live();
 const T = db.T;
 T('organizations').push({ id: 'org-A', name: 'St.Vincent De Paul Church, Osterley', slug: 'svp-osterley', gateway_enabled: true, timezone: 'Europe/London', address: '2 Witham Road, Osterley' });
+T('organizations').find(o => o.id === 'org-A').privacy_url = 'https://example.org/privacy';
 const SA = addUser('uA-sa', 'superadmin', 'org-A', Date.now() + 6 * 36e5);
 Object.assign(T('users').find(u => u.id === 'uA-sa'), { mobile: '07000000001', name: 'superadmin', confidentiality_version: 1 });
 
@@ -233,6 +234,7 @@ const CLIP = `(() => { window.__copied = []; const rec = (t) => { window.__copie
   await click('#sendBtn'); await sleep(300);
   check('pressing send with nothing filled in says what to do first', /whether it is for sale, free, or a service/.test(await ev(`document.querySelector('.err').textContent`)));
   await click('[data-fkind]', 'For sale'); await click('[data-fcat]', 'Furniture & home');
+  check('the Add a listing form: the note says they are happy to share their details with the church and that it stores them, with the Privacy Notice link', await ev(`(() => { const n = document.querySelector('.privacy, .consent'); return !!n && /happy to share the details you enter here with St\\.Vincent De Paul Church, Osterley/.test(n.textContent) && /stored by the church/.test(n.textContent) && !!n.querySelector('a[href="https://example.org/privacy"][target=_blank]') && /Privacy Notice/.test(n.querySelector('a').textContent); })()`));
   await typeIn('#fTitle', 'Oak bookcase, good condition'); await typeIn('#fDesc', 'A solid oak bookcase with four shelves. Call me on 07700 900123 to arrange a visit please.');
   check('a phone number typed in the description is flagged straight away', await ev(`!!document.querySelector('#fDesc').closest('.f').querySelector('.warnline')`));
   await typeIn('#fDesc', 'A solid oak bookcase with four shelves. Buyer collects from Osterley, any evening this week.');
