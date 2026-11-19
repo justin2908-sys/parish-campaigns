@@ -79,6 +79,11 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
 .f input:focus { border-color:var(--brand-text); outline:none; box-shadow:0 0 0 3px var(--brand-tint); }
 .f .help { color:var(--muted); font-size:.9375rem; }
 .f.bad input, .amt.bad { border-color:var(--bad); }
+.chips { display:flex; flex-wrap:wrap; gap:8px; }
+.chip { min-height:44px; padding:0 14px; border-radius:999px; border:2px solid var(--line); background:var(--surface); font-weight:600; font-size:.9375rem; }
+.chip[aria-pressed="true"] { background:var(--brand); border-color:var(--brand); color:#fff; }
+.privacy { margin:0; padding:10px 12px; border-radius:12px; background:var(--brand-tint); color:var(--fg); font-size:.9375rem; line-height:1.4; }
+.privacy a { display:flex; align-items:center; min-height:44px; color:var(--brand-text); font-weight:700; text-decoration:underline; text-underline-offset:3px; }
 .trap { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
 .bar { position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--surface); border-top:2px solid var(--line); padding-top:10px; padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
 .bar .wrap { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
@@ -119,8 +124,13 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
   function status(title, help, retry, slug) { $('app').innerHTML = mast(W.title, '', slug) + '<main class="gutter"><div class="wrap"><div class="status"><h1>' + esc(title) + '</h1><p>' + esc(help) + '</p>' + (retry ? '<button class="btn solid" type="button" id="retry">' + esc(W.retry) + '</button>' : '') + '</div></div></main>'; }
 
   var P = window.__donP, slug = P.slug, donationId = P.donation;
-  var data = null, f = { amount: '10', name: '', contact: '' }, busy = false, errMsg = '', badField = '', attemptRef = '';
+  var data = null, f = { amount: '10', purpose: '', name: '', contact: '' }, busy = false, errMsg = '', badField = '', attemptRef = '';
 
+  // The note shown wherever a name or contact is asked for: they are told, before they go on, that the church stores what they enter, and where the privacy notice is.
+  function privacyText() {
+    var o = data.org || {}, link = /^https:\/\/[^\s]+$/i.test(o.privacy_url || '') ? '<a class="plink" href="' + esc(o.privacy_url) + '" target="_blank" rel="noopener">How we use your details, and your rights: Privacy Notice</a>' : '';
+    return 'By continuing, you confirm you are happy to share the details you enter here with ' + esc(o.name || 'the parish') + ', and you understand they are stored by the church.' + link;
+  }
   function amountValue() { var s = String(f.amount).replace(/[£,\s]/g, ''); if (s === '') return NaN; var v = Math.round(Number(s) * 100) / 100; return isFinite(v) ? v : NaN; }
   function render() {
     var a = data.amount, v = amountValue();
@@ -129,18 +139,22 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
       '<section class="panel" aria-labelledby="h1"><h2 id="h1">How much would you like to give?</h2><div class="quick" role="group" aria-labelledby="h1">' +
       a.quick.map(function (q) { return '<button type="button" class="q" data-quick="' + q + '" aria-pressed="' + (v === q) + '">£' + q + '</button>'; }).join('') + '</div>' +
       '<div class="f"><label for="fAmount">Or type any amount</label><div class="amt' + (badField === 'amount' ? ' bad' : '') + '"><span aria-hidden="true">£</span><input id="fAmount" inputmode="decimal" autocomplete="off" value="' + esc(f.amount) + '" aria-describedby="amtHelp"></div><span class="help" id="amtHelp" style="color:var(--muted);font-size:.9375rem">From £' + a.min.toFixed(2) + ' to £' + a.max.toLocaleString('en-GB') + '.</span></div></section>' +
+      '<section class="panel" aria-labelledby="hp"><h2 id="hp">What is your gift for? (optional)</h2>' +
+      (data.purposes && data.purposes.length ? '<div class="chips" role="group" aria-labelledby="hp">' + data.purposes.map(function (p, i) { return '<button type="button" class="chip" data-purpose="' + i + '" aria-pressed="' + (f.purpose.trim().toLowerCase() === p.toLowerCase()) + '">' + esc(p) + '</button>'; }).join('') + '</div>' : '') +
+      '<div class="f"><label for="fPurpose">' + (data.purposes && data.purposes.length ? 'Or write your own' : 'If you would like your gift to go to something in particular') + '</label><input id="fPurpose" maxlength="100" autocomplete="off" value="' + esc(f.purpose) + '" placeholder="e.g. Altar flowers"><span class="help">Please do not put anyone\u2019s personal details here.</span></div></section>' +
       '<section class="panel" aria-labelledby="h2"><h2 id="h2">Your details (optional)</h2>' +
       '<div class="f"><label for="fName">Your name</label><input id="fName" autocomplete="name" maxlength="80" value="' + esc(f.name) + '"></div>' +
       '<div class="f' + (badField === 'contact' ? ' bad' : '') + '"><label for="fContact">Email address or mobile number</label><input id="fContact" autocomplete="email" maxlength="254" value="' + esc(f.contact) + '"><span class="help">Only if you would like the parish to be able to contact you about your gift. You can leave both empty.</span></div>' +
+      '<p class="privacy" id="privacyNote">' + privacyText() + '</p>' +
       '<div class="trap" aria-hidden="true"><label>Leave this empty<input id="fWebsite" tabindex="-1" autocomplete="off"></label></div></section></div></main>' +
       '<div class="bar gutter"><div class="wrap">' + (errMsg ? '<p class="err" role="alert">' + esc(errMsg) + '</p>' : '') + '<button class="pay" type="button" id="payBtn"' + (busy ? ' disabled' : '') + '><span id="payLabel">' + esc(busy ? 'Opening the payment…' : 'Give by card') + '</span><span id="payAmt">' + (!busy && isFinite(v) ? gbp(v) : '') + '</span></button><p class="note">You will pay on SumUp’s secure card page.</p></div></div>';
     var sy = window.scrollY, ae = document.activeElement && document.activeElement.id;
     $('app').innerHTML = html; window.scrollTo(0, sy);
-    if (ae && $(ae) && /^f(Amount|Name|Contact)$/.test(ae)) { var el = $(ae); el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* not for every type */ } }
+    if (ae && $(ae) && /^f(Amount|Purpose|Name|Contact)$/.test(ae)) { var el = $(ae); el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* not for every type */ } }
   }
   function submit() {
     if (busy) return;
-    f.name = $('fName').value.trim(); f.contact = $('fContact').value.trim(); f.amount = $('fAmount').value.trim();
+    f.name = $('fName').value.trim(); f.contact = $('fContact').value.trim(); f.amount = $('fAmount').value.trim(); f.purpose = $('fPurpose').value.trim();
     badField = ''; errMsg = '';
     var v = amountValue(), a = data.amount;
     if (!isFinite(v)) { badField = 'amount'; errMsg = 'Please enter the amount you would like to give.'; }
@@ -148,7 +162,7 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
     if (errMsg) { render(); var er = document.querySelector('.err'); if (er && er.scrollIntoView) er.scrollIntoView({ block: 'nearest' }); var bad = document.querySelector('.bad'); if (bad && bad.scrollIntoView) bad.scrollIntoView({ block: 'center' }); return; }
     busy = true; render();
     if (!attemptRef) attemptRef = 'd' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-    fetch('/api/public_donation_create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, amount: v, name: f.name, contact: f.contact, client_ref: attemptRef, website: ($('fWebsite') || {}).value || '' }) })
+    fetch('/api/public_donation_create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, amount: v, purpose: f.purpose, name: f.name, contact: f.contact, client_ref: attemptRef, website: ($('fWebsite') || {}).value || '' }) })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (r) {
         if (r.ok && r.d.donation_id) { var pay = /^https:\/\/[^\s]+$/i.test(r.d.pay_url || '') ? r.d.pay_url : ''; if (pay) { location.href = pay; return; } location.href = '/donate.html?donation=' + encodeURIComponent(r.d.donation_id); return; }
@@ -164,7 +178,7 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
   function donationPage(r) {
     var paid = r.status === 'paid';
     var html = mast(W.title, r.org_name, r.org_slug ? r.org_slug : '') + '<main class="gutter"><div class="wrap"><div class="status">';
-    if (paid) html += '<h1>Thank you for your gift of ' + gbp(r.amount) + '.</h1><div class="ref"><div><span class="k">Your reference</span><b>' + esc(r.ref) + '</b></div><button class="btn" type="button" data-copy="' + esc(r.ref) + '" aria-label="Copy the reference" title="Copy the reference">' + ico(I.copy, 22) + '</button></div>' +
+    if (paid) html += '<h1>Thank you for your gift of ' + gbp(r.amount) + (r.purpose ? ' for ' + esc(r.purpose) : '') + '.</h1><div class="ref"><div><span class="k">Your reference</span><b>' + esc(r.ref) + '</b></div><button class="btn" type="button" data-copy="' + esc(r.ref) + '" aria-label="Copy the reference" title="Copy the reference">' + ico(I.copy, 22) + '</button></div>' +
       '<p>We are very grateful for your generosity. God bless you.</p>' + (r.org_slug ? '<a class="btn solid" href="/go/' + esc(r.org_slug) + '">Back to the parish page</a>' : '');
     else if (r.status === 'cancelled') html += '<h1>This donation was not completed.</h1><p>' + esc(r.ref) + ' was cancelled, so nothing was taken. If you were charged, please contact the parish office.</p>' + (r.org_slug ? '<a class="btn solid" href="/donate/' + esc(r.org_slug) + '">Try again</a>' : '');
     else html += '<h1>Waiting for your payment…</h1><div class="ref"><div><span class="k">Your reference</span><b>' + esc(r.ref) + '</b></div></div><p>We are checking with the card payment. This page updates by itself. If you have not paid yet:</p>' + (/^https:\/\//.test(r.pay_url || '') ? '<a class="btn solid" href="' + esc(r.pay_url) + '">Go to the payment page</a>' : '');
@@ -176,6 +190,7 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
 
   document.addEventListener('click', function (e) {
     var t = e.target, b;
+    if ((b = t.closest('[data-purpose]'))) { var pv = data.purposes[Number(b.getAttribute('data-purpose'))] || ''; f.purpose = f.purpose.trim().toLowerCase() === pv.toLowerCase() ? '' : pv; errMsg = ''; render(); return; }
     if ((b = t.closest('[data-quick]'))) { f.amount = b.getAttribute('data-quick'); errMsg = ''; badField = ''; render(); return; }
     if (t.closest('#payBtn')) { submit(); return; }
     if (t.closest('#retry')) { start(); return; }
@@ -186,7 +201,8 @@ main { padding-top:14px; padding-bottom:150px; display:grid; grid-template-colum
     if (t.id === 'fAmount') {
       f.amount = t.value; var v = amountValue(), pa = $('payAmt'); if (pa && !busy) pa.textContent = isFinite(v) ? gbp(v) : '';
       Array.prototype.forEach.call(document.querySelectorAll('[data-quick]'), function (q) { q.setAttribute('aria-pressed', String(Number(q.getAttribute('data-quick')) === v)); });
-    } else if (t.id === 'fName') f.name = t.value; else if (t.id === 'fContact') f.contact = t.value;
+    } else if (t.id === 'fPurpose') { f.purpose = t.value; Array.prototype.forEach.call(document.querySelectorAll('[data-purpose]'), function (c) { c.setAttribute('aria-pressed', String(f.purpose.trim().toLowerCase() === data.purposes[Number(c.getAttribute('data-purpose'))].toLowerCase())); }); }
+    else if (t.id === 'fName') f.name = t.value; else if (t.id === 'fContact') f.contact = t.value;
   });
   function take(r) {
     if (donationId) {

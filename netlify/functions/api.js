@@ -3654,7 +3654,7 @@ async function publicGateway({ slug }) {
     org: { name: org.display_name || org.name, address: org.address || null, contact_email: org.contact_email || null, timezone: tz, phone: org.gateway_phone || null, hours: org.gateway_hours || null, whatsapp: org.gateway_whatsapp || null },
     daily,
     candles: candlesRow && candlesRow.enabled && candleActiveAltars(candlesRow).length ? { path: `/candles/${s}` } : null,   // Light a Candle, only while it is open
-    donate: donationRow && donationRow.enabled ? { path: `/donate/${s}` } : null,   // "Make a Donation", the first door on the page, only while it is open
+    donate: donationRow && donationRow.enabled ? { path: `/donate/${s}`, position: Number(donationRow.door_position) || 1 } : null,   // "Make a Donation", the first door on the page, only while it is open
     listings: listingsRow && listingsRow.enabled ? { path: `/listings/${s}` } : null,   // the Listings shortcut, only while it is open
     shop: shopRow && shopRow.enabled ? { path: `/shop/${s}` } : null,   // the Repository: a shopping-bag shortcut on the page, only while it is open for orders
     links: (linksRes.data || []).map(l => ({ label: l.label, sub: l.sub || '', url: l.url })),
@@ -4162,7 +4162,7 @@ const shopIsHiddenCampaign = (c) => !!(c && c.form_def && (c.form_def.shop || c.
 async function shopOrgBySlug(slug) {
   const s = String(slug == null ? '' : slug).trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
-  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug, privacy_url').eq('slug', s).maybeSingle();
   if (!org) throw httpError(404, 'This page is not available.');
   const settings = await shopSettings(org.id);
   if (!settings.enabled) throw httpError(404, 'The repository is not taking online orders right now.');
@@ -4201,7 +4201,7 @@ async function publicShop({ slug }) {
     { key: 'new', title: 'New in', ids: top(byScore(live.filter(s => s.isNew)), 8) },
   ].filter(sh => sh.ids.length >= 2 || (sh.key === 'picks' && sh.ids.length));
   return {
-    org: { name: org.display_name || org.name },
+    org: { name: org.display_name || org.name, privacy_url: org.privacy_url || null },
     intro: settings.intro_text || null,
     cutoff_text: shopCutoffText(settings),
     img_base: shopImageBase(),
@@ -4842,7 +4842,7 @@ async function listingMonthCampaign(orgId, today) {
 async function listingOrgBySlug(slug) {
   const s = String(slug == null ? '' : slug).trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
-  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug, privacy_url').eq('slug', s).maybeSingle();
   if (!org) throw httpError(404, 'This page is not available.');
   const settings = await listingSettings(org.id);
   if (!settings.enabled) throw httpError(404, 'Listings are not open right now.');
@@ -4897,7 +4897,7 @@ async function publicListings({ slug }) {
   const count = (f) => { const m = new Map(); for (const x of live) m.set(f(x.l), (m.get(f(x.l)) || 0) + 1); return m; };
   const cats = count(l => l.category), kinds = count(l => l.kind);
   return {
-    org: { name: org.display_name || org.name },
+    org: { name: org.display_name || org.name, privacy_url: org.privacy_url || null },
     intro: settings.intro_text || null, disclaimer: LISTING_DISCLAIMER, agreement: LISTING_AGREEMENT, agreement_version: LISTING_DISCLAIMER_VERSION,
     img_base: listingImageBase(),
     categories: LISTING_CATEGORIES.map(c => ({ name: c, count: cats.get(c) || 0 })),
@@ -5294,7 +5294,7 @@ async function candlesSweep(orgId, now) {
 async function candleOrgBySlug(slug) {
   const s = String(slug == null ? '' : slug).trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
-  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug, privacy_url').eq('slug', s).maybeSingle();
   if (!org) throw httpError(404, 'This page is not available.');
   const settings = await candleSettings(org.id);
   if (!settings.enabled || !candleActiveAltars(settings).length) throw httpError(404, 'Candle requests are not open right now.');
@@ -5304,7 +5304,7 @@ async function publicCandles({ slug }) {
   const { org, settings, tz } = await candleOrgBySlug(slug);
   try { if ((await rateHit(`csweep:${org.id}`, 21600)) === 1) await candlesSweep(org.id, new Date()); } catch { /* housekeeping only */ }
   return {
-    org: { name: org.display_name || org.name }, intro: settings.intro_text || null,
+    org: { name: org.display_name || org.name, privacy_url: org.privacy_url || null }, intro: settings.intro_text || null,
     altars: candleActiveAltars(settings).map(a => ({ id: a.id, name: a.name })),
     offering: { min: CANDLE_MIN, max: CANDLE_MAX, suggested: CANDLE_SUGGESTED }, max_candles: CANDLE_MAX_CANDLES,
     weeks: candleWeeks(settings, tz, new Date()).map(w => ({ monday: w.monday, label: w.label, dates: w.dates })),
@@ -5613,6 +5613,8 @@ READ_ONLY_PUBLIC.add('public_candles');
 const DONATION_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
 const DONATION_MIN = 1, DONATION_MAX = 5000, DONATION_SUGGESTED = 10, DONATION_QUICK = [10, 20, 50, 100];
 const donationRef = (n) => `DON-${String(n).padStart(3, '0')}`;
+const DONATION_MAX_PURPOSES = 8, DONATION_PURPOSE_MAX = 100, DONATION_PURPOSE_LABEL_MAX = 40;
+const donationPurposes = (st) => (Array.isArray(st.purposes) ? st.purposes : []).filter(p => typeof p === 'string' && p.trim()).slice(0, DONATION_MAX_PURPOSES);
 async function donationSettings(orgId, { create } = {}) {
   let { data } = await supabase.from('donation_settings').select('*').eq('org_id', orgId).maybeSingle();
   if (!data && create) {
@@ -5638,7 +5640,7 @@ async function donationMonthCampaign(orgId, today) {
 async function donationOrgBySlug(slug) {
   const s = String(slug == null ? '' : slug).trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
-  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug').eq('slug', s).maybeSingle();
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone, slug, privacy_url, contact_email').eq('slug', s).maybeSingle();
   if (!org) throw httpError(404, 'This page is not available.');
   const settings = await donationSettings(org.id);
   if (!settings.enabled) throw httpError(404, 'Donations are not open right now.');
@@ -5646,9 +5648,9 @@ async function donationOrgBySlug(slug) {
 }
 async function publicDonationInfo({ slug }) {
   const { org, settings } = await donationOrgBySlug(slug);
-  return { org: { name: org.display_name || org.name }, intro: settings.intro_text || null, amount: { min: DONATION_MIN, max: DONATION_MAX, suggested: DONATION_SUGGESTED, quick: DONATION_QUICK } };
+  return { org: { name: org.display_name || org.name, privacy_url: org.privacy_url || null, contact_email: org.contact_email || null }, intro: settings.intro_text || null, amount: { min: DONATION_MIN, max: DONATION_MAX, suggested: DONATION_SUGGESTED, quick: DONATION_QUICK }, purposes: donationPurposes(settings) };
 }
-async function publicDonationCreate({ slug, amount, name, contact, client_ref, website }) {
+async function publicDonationCreate({ slug, amount, purpose, name, contact, client_ref, website }) {
   if (website) return { ok: true, donation_id: null, ref: '', status: 'awaiting_payment' };   // the hidden spam-trap box was filled in: pretend, store nothing
   if (clientIp && (await rateHit(`donate:${clientIp}`, 3600)) > 30) throw httpError(429, 'Too many requests from your connection — please try again later.');
   client_ref = cleanClientRef(client_ref);
@@ -5665,6 +5667,7 @@ async function publicDonationCreate({ slug, amount, name, contact, client_ref, w
   if (raw === '' || !Number.isFinite(value)) throw httpError(400, 'Please enter the amount you would like to give.');
   if (value < DONATION_MIN || value > DONATION_MAX) throw httpError(400, `A donation can be from £${DONATION_MIN.toFixed(2)} to £${DONATION_MAX.toLocaleString('en-GB')}.00. For a larger gift, please contact the parish office.`);
   const cleanedName = cleanName(name, 'Your name') || null;
+  const purposeV = gwText(purpose, DONATION_PURPOSE_MAX, 'What your gift is for') || null;
   let contactV = null;
   if (String(contact || '').trim()) contactV = String(contact).includes('@') ? validateRegEmail(contact, 'your email address') : validateRegPhone(contact, 'your mobile number');
   await enforcePublicPurchaseLimits(contactV, 1);
@@ -5675,10 +5678,10 @@ async function publicDonationCreate({ slug, amount, name, contact, client_ref, w
   const { data: refData, error: refErr } = await supabase.rpc('donation_next_ref', { p_org: org.id });
   const refNo = Array.isArray(refData) ? refData[0] : refData;
   if (refErr || !refNo) { await voidPayment('donation not saved'); throw httpError(500, 'Could not save your donation — please try again.'); }
-  const { data: row, error } = await supabase.from('donations').insert({ org_id: org.id, ref_no: refNo, payment_id: pay.id, amount: value, client_ref, status: 'awaiting_payment' }).select().single();
+  const { data: row, error } = await supabase.from('donations').insert({ org_id: org.id, ref_no: refNo, payment_id: pay.id, amount: value, purpose: purposeV, client_ref, status: 'awaiting_payment' }).select().single();
   if (error || !row) { await voidPayment('donation not saved'); throw httpError(500, 'Could not save your donation — please try again.'); }
   const created = await createSumupCheckout({ payment_id: pay.id, refSuffix: '', amount: value, campaignName: 'Donation', ticketNumbers: [donationRef(refNo)],
-    description: `Donation ${donationRef(refNo)}`, redirectUrl: `${baseUrl}/donate.html?donation=${row.id}` });
+    description: `Donation ${donationRef(refNo)}${purposeV ? ' · ' + purposeV : ''}`, redirectUrl: `${baseUrl}/donate.html?donation=${row.id}` });
   if (!created.ok) { await supabase.from('donations').update({ status: 'cancelled', cancel_reason: 'Could not start the payment', cancelled_at: new Date().toISOString() }).eq('id', row.id); await voidPayment('could not create SumUp payment link'); throw httpError(502, created.message); }
   await supabase.from('payments').update({ sumup_checkout_id: created.checkout_id, sumup_checkout_ref: created.ref, link_url: created.pay_url }).eq('id', pay.id);
   return { ok: true, donation_id: row.id, ref: donationRef(refNo), status: 'awaiting_payment', amount: value, pay_url: created.pay_url };
@@ -5693,7 +5696,7 @@ async function publicDonationStatus({ donation_id }) {
     if (pay && r.status === 'awaiting_payment') { try { await syncCheckout(pay); } catch { /* SumUp unreachable: show what we know */ } ({ data: r } = await supabase.from('donations').select('*').eq('id', donation_id).maybeSingle()); }
   }
   const { data: org } = await supabase.from('organizations').select('name, display_name, slug').eq('id', r.org_id).maybeSingle();
-  return { ref: donationRef(r.ref_no), status: r.status, amount: Number(r.amount), pay_url: r.status === 'awaiting_payment' && pay ? pay.link_url : null, org_name: org ? (org.display_name || org.name) : '', org_slug: org ? org.slug : null };
+  return { ref: donationRef(r.ref_no), status: r.status, amount: Number(r.amount), purpose: r.purpose || null, pay_url: r.status === 'awaiting_payment' && pay ? pay.link_url : null, org_name: org ? (org.display_name || org.name) : '', org_slug: org ? org.slug : null };
 }
 async function donationPaid(payment) {
   try {
@@ -5722,15 +5725,20 @@ async function donationsGet(session) {
   const payIds = (rows || []).map(r => r.payment_id).filter(Boolean);
   const { data: pays } = payIds.length ? await supabase.from('payments').select('id, payer_name, contact_value, refund_amount').in('id', payIds) : { data: [] };
   const payOf = new Map((pays || []).map(p => [p.id, p]));
-  const donations = (rows || []).map(r => { const p = payOf.get(r.payment_id); return { id: r.id, ref: donationRef(r.ref_no), status: r.status, amount: Number(r.amount), created_at: r.created_at, paid_at: r.paid_at,
+  const donations = (rows || []).map(r => { const p = payOf.get(r.payment_id); return { id: r.id, ref: donationRef(r.ref_no), status: r.status, amount: Number(r.amount), purpose: r.purpose || '', created_at: r.created_at, paid_at: r.paid_at,
     name: p ? (p.payer_name || '') : '', contact: p ? (p.contact_value || '') : '', refunded: p && p.refund_amount ? Number(p.refund_amount) : 0, payment_id: r.payment_id }; });
   const month = gwToday(org.timezone, new Date()).slice(0, 7);
   const paid = donations.filter(d => d.status === 'paid');
   const net = (d) => Math.round((d.amount - d.refunded) * 100);
   const inMonth = paid.filter(d => d.paid_at && gwToday(org.timezone, new Date(d.paid_at)).slice(0, 7) === month);
+  const groups = new Map();   // this month's paid gifts, totalled by purpose (the same words in any capitals count together)
+  for (const d of inMonth) { const label = String(d.purpose || '').trim(), key = label.toLowerCase(); if (!groups.has(key)) groups.set(key, { purpose: label, count: 0, pennies: 0 }); const g = groups.get(key); g.count++; g.pennies += net(d); }
+  const by_purpose = [...groups.values()].map(g => ({ purpose: g.purpose, count: g.count, total: g.pennies / 100 })).sort((a, b) => b.total - a.total);
   return {
     org: { name: org.name, slug: org.slug || '', page_path: org.slug ? `/donate/${org.slug}` : null, timezone: org.timezone },
-    settings: { enabled: !!settings.enabled, intro_text: settings.intro_text || '' },
+    settings: { enabled: !!settings.enabled, purposes: donationPurposes(settings), intro_text: settings.intro_text || '', door_position: Number(settings.door_position) || 1 },
+    links: ((await supabase.from('gateway_links').select('position, label').eq('org_id', org.id).order('position')).data || []).map(l => l.label),   // the other big buttons, so the office can choose where this one goes among them
+    by_purpose,
     totals: { this_month: inMonth.reduce((s, d) => s + net(d), 0) / 100, this_month_count: inMonth.length, shown: paid.reduce((s, d) => s + net(d), 0) / 100, shown_count: paid.length },
     donations,
   };
@@ -5739,6 +5747,17 @@ async function donationsSetSettings(session, b) {
   const org = await donationsOrg(session), patch = { updated_at: new Date().toISOString() };
   await donationSettings(org.id, { create: true });
   if (b.intro_text !== undefined) patch.intro_text = gwText(b.intro_text, 300, 'The welcome line') || null;
+  if (b.purposes !== undefined) {
+    if (!Array.isArray(b.purposes) || b.purposes.length > DONATION_MAX_PURPOSES) throw httpError(400, `Give up to ${DONATION_MAX_PURPOSES} suggested purposes.`);
+    const seen = new Set(), list = [];
+    for (const raw of b.purposes) { const p = gwText(raw, DONATION_PURPOSE_LABEL_MAX, 'A purpose'); if (!p || seen.has(p.toLowerCase())) continue; seen.add(p.toLowerCase()); list.push(p); }
+    patch.purposes = list;
+  }
+  if (b.door_position !== undefined) {
+    const n = Number(b.door_position);
+    if (!Number.isInteger(n) || n < 1 || n > 10) throw httpError(400, 'Choose where the Make a Donation button goes.');
+    patch.door_position = n;
+  }
   if (b.enabled !== undefined) {
     if (b.enabled && !org.slug) throw httpError(400, 'Give the parish page an address first (Admin → Parish page).');
     patch.enabled = !!b.enabled;

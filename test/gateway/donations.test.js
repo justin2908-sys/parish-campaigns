@@ -133,10 +133,53 @@ test('Make a Donation', async (t) => {
     T('organizations')[0].slug = null;
     assert.equal((await call('donations_set_settings', { enabled: true }, { session: S.sa })).status, 400);
   });
+  await t.test('where the button goes among the big buttons is chosen by the office, defaults to first, and reaches the parish page', async () => {
+    reset();
+    T('gateway_links').push({ id: 'l1', org_id: 'org-A', position: 1, label: 'Book the Parish Hall', sub: '', url: 'https://example.org/hall' }, { id: 'l2', org_id: 'org-A', position: 2, label: 'Mass times', sub: '', url: 'https://example.org/mass' });
+    let g = await call('donations_get', {}, { session: S.sa });
+    assert.equal(g.body.settings.door_position, 1); assert.deepEqual(g.body.links, ['Book the Parish Hall', 'Mass times']);
+    let r = await call('donations_set_settings', { door_position: 2 }, { session: S.fi });
+    assert.equal(r.status, 200, r.raw);
+    assert.equal((await call('donations_get', {}, { session: S.sa })).body.settings.door_position, 2);
+    assert.equal((await call('public_gateway', { slug: 'svp-osterley' })).body.donate.position, 2);
+    for (const bad of [0, 11, 1.5, 'x', -1]) assert.equal((await call('donations_set_settings', { door_position: bad }, { session: S.sa })).status, 400, String(bad));
+    assert.equal(T('donation_settings')[0].door_position, 2);   // a refused value changes nothing
+    assert.equal((await call('donations_set_settings', { door_position: 3 }, { session: S.vo })).status, 403);
+  });
+  await t.test('an optional purpose: suggested ones are set by the office, the giver can pick or write their own, and this month is totalled by purpose', async () => {
+    reset();
+    assert.deepEqual((await call('public_donation_info', { slug: 'svp-osterley' })).body.purposes, []);   // none suggested until the office adds some
+    let r = await call('donations_set_settings', { purposes: ['Altar Flowers', ' Church Building Fund ', 'altar flowers', '', 'St Vincent de Paul Society'] }, { session: S.fi });
+    assert.equal(r.status, 200, r.raw);
+    assert.deepEqual((await call('public_donation_info', { slug: 'svp-osterley' })).body.purposes, ['Altar Flowers', 'Church Building Fund', 'St Vincent de Paul Society']);   // trimmed, blanks and repeats dropped
+    assert.equal((await call('donations_set_settings', { purposes: Array.from({ length: 9 }, (_, i) => 'P' + i) }, { session: S.sa })).status, 400);
+    assert.equal((await call('donations_set_settings', { purposes: ['x'.repeat(41)] }, { session: S.sa })).status, 400);
+    assert.equal((await call('donations_set_settings', { purposes: ['Rent'] }, { session: S.vo })).status, 403);
+    const a = await give({ amount: 20, purpose: 'Altar Flowers' }), b = await give({ amount: 30, purpose: '  altar   flowers ' }), c = await give({ amount: 15 }), d = await give({ amount: 5, purpose: 'Roof fund' });
+    for (const x of [a, b, c, d]) assert.equal(x.status, 200, x.raw);
+    assert.equal(T('donations')[1].purpose, 'altar flowers');
+    assert.equal(T('donations')[2].purpose, null);
+    assert.match(sumup[0].description, /Altar Flowers/);
+    assert.equal((await give({ purpose: 'y'.repeat(101) })).status, 400);   // too long: refused, nothing created
+    sumupStatus = 'PAID';
+    for (const x of [a, b, c]) await call('public_donation_status', { donation_id: x.body.donation_id });
+    assert.equal((await call('public_donation_status', { donation_id: a.body.donation_id })).body.purpose, 'Altar Flowers');
+    T('payments')[0].refund_amount = 5;
+    const g = await call('donations_get', {}, { session: S.fi });
+    assert.deepEqual(g.body.by_purpose.map(x => [x.purpose.toLowerCase(), x.count, x.total]), [['altar flowers', 2, 45], ['', 1, 15]]);   // same words in any capitals count together; the unpaid one is left out; the refund is taken off
+    assert.equal(g.body.donations.find(x => x.ref === 'DON-004').purpose, 'Roof fund');
+    assert.deepEqual(g.body.settings.purposes, ['Altar Flowers', 'Church Building Fund', 'St Vincent de Paul Society']);
+  });
+  await t.test('the page is told the church\'s privacy link and name, for the note shown before anyone gives their details', async () => {
+    reset();
+    T('organizations')[0].privacy_url = 'https://example.org/privacy';
+    const r = await call('public_donation_info', { slug: 'svp-osterley' });
+    assert.equal(r.body.org.privacy_url, 'https://example.org/privacy'); assert.equal(r.body.org.contact_email, 'a@example.org');
+  });
   await t.test('the parish page shows the donate door only while donations are open', async () => {
     reset();
     let r = await call('public_gateway', { slug: 'svp-osterley' });
-    assert.equal(r.status, 200, r.raw); assert.deepEqual(r.body.donate, { path: '/donate/svp-osterley' });
+    assert.equal(r.status, 200, r.raw); assert.deepEqual(r.body.donate, { path: '/donate/svp-osterley', position: 1 });
     T('donation_settings')[0].enabled = false;
     r = await call('public_gateway', { slug: 'svp-osterley' });
     assert.equal(r.body.donate, null);

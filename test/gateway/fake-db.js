@@ -12,7 +12,7 @@ function createFakeDb(clock) {
   const defaults = { campaigns: () => ({ binned: false }), gateway_items: () => ({ listed: true }), gateway_announcements: () => ({ urgent: false }), gateway_links: () => ({ sub: '' }),
     repository_items: () => ({ available: true, stock: null, sort: 0, featured: false, hearts: 0 }),
     listings: () => ({ views: 0, contacts: 0, reports: 0, hearts: 0, featured: false, images: [], description: '' }),
-    donation_settings: () => ({ enabled: false, intro_text: null, next_ref: 1 }),
+    donation_settings: () => ({ enabled: false, intro_text: null, next_ref: 1, door_position: 1 }),
     candle_settings: () => ({ enabled: false, altars: [{ id: 'mary', name: 'Altar of Our Lady', active: true }, { id: 'anthony', name: 'Altar of St Anthony of Padua', active: true }], intro_text: null, cutoff_weekday: 3, cutoff_time: '23:59', next_ref: 1 }),
     weekly_digest: () => ({ enabled: false, to_email: null, last_week_start: null, last_sent_at: null, last_status: null, last_note: null, last_attempt_at: null }),
     listings_settings: () => ({ enabled: false, intro_text: null, price_base: 3, price_per_extra_week: 1.5, price_per_image: 0.5 }),
@@ -64,6 +64,8 @@ function createFakeDb(clock) {
       for (const n of names) if (n !== '*') out[n] = clone(row[n]);
       const em = /campaigns!inner\(([^)]*)\)/.exec(st.cols);   // the embedded join the payment code uses: campaigns!inner(org_id, name, ...)
       if (em) { const c = T('campaigns').find(x => x.id === row.campaign_id); out.campaigns = c ? Object.fromEntries(em[1].split(',').map(s => s.trim()).filter(Boolean).map(k => [k, c[k]])) : null; }
+      const eo = /organizations\(([^)]*)\)/.exec(st.cols);   // the church's details riding along with a campaign row (public pages): organizations(name, address, ...)
+      if (eo && table === 'campaigns') { const o = T('organizations').find(x => x.id === row.org_id); out.organizations = o ? Object.fromEntries(eo[1].split(',').map(k => k.trim()).filter(Boolean).map(k => [k, o[k] === undefined ? null : o[k]])) : null; }
       if (st.cols.includes('ticket_blocks!inner(type)')) { const b = T('ticket_blocks').find(x => x.id === row.block_id); out.ticket_blocks = b ? { type: b.type } : null; }
       return out;
     };

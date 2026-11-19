@@ -306,13 +306,15 @@ main { padding-bottom:32px; }
         : '<button class="notices gutter" type="button" id="notices" aria-haspopup="dialog" aria-label="' + esc(W.notice + ': ' + n.message + '. Tap to read.') + '"><span class="txt"><span class="lab">' + esc(W.notices) + '</span><span class="sub">' + esc(n.message) + '</span></span><span class="go">' + esc(W.read) + '</span></button>';
     }
     html += '<main class="gutter"><div class="wrap">' + (saved ? '<p class="offline" role="status">' + esc(W.offline) + '</p>' : '') + iconRow(o, data.shop, data.listings, data.candles, !!day);
-    var doors = (data.links || []).map(function (l, i) {
+    var doorList = (data.links || []).map(function (l, i) {
       var h = safeHref(l.url); if (!h) return '';
       return '<a class="door" href="' + esc(h) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[W.icons[i] || 'link'] + '</svg></span><span><h2>' + esc(l.label) + '</h2>' + (l.sub ? '<p>' + esc(l.sub) + '</p>' : '') + '</span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>';
-    }).join('');
+    }).filter(Boolean);
     var give = data.donate && /^\/donate\/[a-z0-9-]+$/.test(String(data.donate.path || ''))
       ? '<a class="door" href="' + esc(data.donate.path) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS.heart + '</svg></span><span><h2>' + esc(W.donate) + '</h2><p>' + esc(W.donateSub) + '</p></span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>' : '';
-    if (give || doors) html += '<nav class="doors" aria-label="Services">' + give + doors + '</nav>';
+    if (give) doorList.splice(Math.max(0, Math.min(doorList.length, (Number(data.donate.position) || 1) - 1)), 0, give);   // first by default; the office can move it down among the other buttons
+    var doors = doorList.join('');
+    if (doors) html += '<nav class="doors" aria-label="Services">' + doors + '</nav>';
     var s1 = section('involved', today), s2 = section('registration', today);
     html += s1 + s2;
     if (!s1 && !s2) html += '<div class="empty sect">' + esc(W.nothing) + '</div>';
