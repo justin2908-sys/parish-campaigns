@@ -59,6 +59,9 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .mast { background:var(--brand); color:#fff; padding-top:max(12px, env(safe-area-inset-top, 0px)); padding-bottom:10px; }
 .mast .id { display:flex; align-items:center; gap:10px; }
 .crest { width:28px; height:28px; flex:none; color:#fff; opacity:.95; }
+.mast .mailbtn { flex:none; width:44px; height:44px; border-radius:50%; border:2px solid rgba(255,255,255,.6); background:transparent; color:#fff; display:grid; place-items:center; padding:0; }
+.mast .mailbtn:active { background:rgba(255,255,255,.18); }
+.mast .mailbtn svg { width:22px; height:22px; }
 .mast h1 { flex:1; min-width:0; font-family:var(--font-display); font-weight:600; font-size:1.6rem; line-height:1.1; margin:0; text-wrap:balance; }
 
 /* notices bar */
@@ -78,8 +81,8 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .ic:active { filter:brightness(.88); }
 .ic svg { width:52%; height:52%; }
 @media (max-width:340px) { .iconrow { grid-template-columns:repeat(3, minmax(0, 60px)); } }
-/* the WhatsApp channel is a plain line of words, not a picture: "Follow us on WhatsApp" */
-.follow { display:flex; align-items:center; justify-content:center; gap:8px; min-height:44px; margin:8px 0 0; padding:6px 10px; font-size:1.0625rem; font-weight:600; color:var(--brand-text); text-decoration:underline; text-underline-offset:3px; text-wrap:balance; text-align:center; }
+/* the WhatsApp channel stays a plain line of words, "Follow us on WhatsApp", but sits with the parish details at the foot so it takes no line of its own at the top */
+.follow { display:inline-flex; align-items:center; gap:8px; min-height:44px; font-weight:600; color:var(--brand-text); text-decoration:underline; text-underline-offset:3px; }
 .follow svg { flex:none; width:22px; height:22px; }
 .follow:active { filter:brightness(.85); }
 .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
@@ -187,7 +190,7 @@ main { padding-bottom:32px; }
       loading: 'Loading…', copied: 'Copied ', copiedLink: 'Link copied', seeAll: 'See all', showFewer: 'Show fewer',
       full: 'Full', waiting: 'Join waiting list', isNew: 'New',
       // the shortcut buttons show pictures only; these words are for screen readers and for the tooltip
-      waFollow: 'Follow us on WhatsApp', newTab: '(opens in a new tab)', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services', candleAria: 'Light a candle',
+      donate: 'Make a Donation', donateSub: 'Give any amount, by card', waFollow: 'Follow us on WhatsApp', newTab: '(opens in a new tab)', emailAria: 'Copy the parish email address', shopAria: 'Order from the parish repository', listAria: 'Parish listings: things for sale, given away, and services', candleAria: 'Light a candle',
       today: 'Today', readings: 'Today’s Mass readings', about: 'About today’s saint or feast', readingsTitle: 'Mass readings for today',
       bellAria: 'Notifications: today’s readings and today in the Church', dayReadings: 'Readings for the day', dayReadingsSub: 'The Mass readings', dayChurch: 'Today in the Church', dayClose: 'Close',
       todaySource: 'Readings: Universalis (England & Wales). Day: General Roman Calendar.',
@@ -203,6 +206,7 @@ main { padding-bottom:32px; }
     link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
     // the permanent shortcuts: a chat bubble with a handset, an envelope, an open book, a figure with a halo, a calendar
     whatsapp: '<path d="M4 20l1.3-4.2A8 8 0 1 1 8.4 18.8L4 20Z"/><path d="M9.2 8.4c-.3 1.6.9 3.6 2.6 4.8 1 .7 2.2 1.2 3.3 1l.9-1.2-1.8-1-.8.6c-.7-.3-1.4-1-1.8-1.7l.6-.8-1-1.8-1.2.1Z"/>',
+    heart: '<path d="M12 20.5C5 15.6 3 12.2 3 9a4.6 4.6 0 0 1 9-1.3A4.6 4.6 0 0 1 21 9c0 3.2-2 6.6-9 11.5Z"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
     book: '<path d="M12 6.5C10.5 5 8 4.4 4 4.4V18c4 0 6.5.6 8 2.2 1.5-1.6 4-2.2 8-2.2V4.4c-4 0-6.5.6-8 2.1ZM12 6.5v13.7"/>',
     saint: '<ellipse cx="12" cy="4.6" rx="4.2" ry="1.7"/><circle cx="12" cy="11.6" r="3.2"/><path d="M5.5 21c0-3.6 2.9-5.6 6.5-5.6s6.5 2 6.5 5.6"/>',
@@ -264,18 +268,14 @@ main { padding-bottom:32px; }
   function noticeKey(n) { return n ? n.message + '|' + n.urgent + '|' + n.ends_at : ''; }
   // The WhatsApp channel bar, at the very top of the page. Only a WhatsApp channel address is ever drawn.
   function icon(name, size) { return '<svg width="' + (size || 30) + '" height="' + (size || 30) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>'; }
-  // The permanent shortcuts are pictures only (each still has its words for screen readers and as a tooltip): WhatsApp, email.
-  // Only a WhatsApp channel address is ever drawn.
-  function iconRow(o, shop, listings, candles, hasDay) {
-    var u = String(o.whatsapp || '').trim(), parts = [];
+  // The permanent shortcuts are pictures only (each still has its words for screen readers and as a tooltip). The email picture lives in the banner.
+    function iconRow(o, shop, listings, candles, hasDay) {
+    var parts = [];
     if (hasDay) parts.push('<button class="ic" type="button" id="dayBtn" aria-haspopup="dialog" aria-label="' + esc(W.bellAria) + '" title="' + esc(W.bellAria) + '">' + icon('bell') + '</button>');
     if (candles && /^\/candles\/[a-z0-9-]+$/.test(String(candles.path || ''))) parts.push('<a class="ic" href="' + esc(candles.path) + '" aria-label="' + esc(W.candleAria) + '" title="' + esc(W.candleAria) + '">' + icon('candle') + '</a>');
     if (listings && /^\/listings\/[a-z0-9-]+$/.test(String(listings.path || ''))) parts.push('<a class="ic" href="' + esc(listings.path) + '" aria-label="' + esc(W.listAria) + '" title="' + esc(W.listAria) + '">' + icon('tag') + '</a>');
     if (shop && /^\/shop\/[a-z0-9-]+$/.test(String(shop.path || ''))) parts.push('<a class="ic" href="' + esc(shop.path) + '" aria-label="' + esc(W.shopAria) + '" title="' + esc(W.shopAria) + '">' + icon('bag') + '</a>');
-    var follow = /^https:\/\/(www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+\/?$/i.test(u)
-      ? '<a class="follow" href="' + esc(u) + '" target="_blank" rel="noopener">' + icon('whatsapp', 22) + '<span>' + esc(W.waFollow) + '</span><span class="sr"> ' + esc(W.newTab) + '</span></a>' : '';
-    if (o.contact_email) parts.push('<button class="ic" type="button" data-copy="' + esc(o.contact_email) + '" aria-label="' + esc(W.emailAria + ': ' + o.contact_email) + '" title="' + esc(W.emailAria) + '">' + icon('mail') + '</button>');
-    return (parts.length ? '<nav class="iconrow" style="--n:' + parts.length + '" aria-label="Shortcuts">' + parts.join('') + '</nav>' : '') + follow;
+    return parts.length ? '<nav class="iconrow" style="--n:' + parts.length + '" aria-label="Shortcuts">' + parts.join('') + '</nav>' : '';
   }
   // The bell: today's readings and "Today in the Church" (the day's feast), in a small panel instead of a card taking up the page. It only
   // shows for the day it was made for, so a page saved on a phone overnight never offers yesterday's feast.
@@ -298,6 +298,7 @@ main { padding-bottom:32px; }
     lastNoticeKey = noticeKey(n);
     document.title = o.name;
     var html = '<header class="mast gutter"><div class="wrap"><div class="id">' + crest() + '<h1>' + esc(o.name) + '</h1>' +
+      (o.contact_email ? '<button class="mailbtn" type="button" data-copy="' + esc(o.contact_email) + '" aria-label="' + esc(W.emailAria + ': ' + o.contact_email) + '" title="' + esc(W.emailAria) + '">' + icon('mail') + '</button>' : '') +
       '</div></div></header>';
     if (n) {
       html += n.urgent
@@ -309,7 +310,9 @@ main { padding-bottom:32px; }
       var h = safeHref(l.url); if (!h) return '';
       return '<a class="door" href="' + esc(h) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[W.icons[i] || 'link'] + '</svg></span><span><h2>' + esc(l.label) + '</h2>' + (l.sub ? '<p>' + esc(l.sub) + '</p>' : '') + '</span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>';
     }).join('');
-    if (doors) html += '<nav class="doors" aria-label="Services">' + doors + '</nav>';
+    var give = data.donate && /^\/donate\/[a-z0-9-]+$/.test(String(data.donate.path || ''))
+      ? '<a class="door" href="' + esc(data.donate.path) + '"><span class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS.heart + '</svg></span><span><h2>' + esc(W.donate) + '</h2><p>' + esc(W.donateSub) + '</p></span><svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>' : '';
+    if (give || doors) html += '<nav class="doors" aria-label="Services">' + give + doors + '</nav>';
     var s1 = section('involved', today), s2 = section('registration', today);
     html += s1 + s2;
     if (!s1 && !s2) html += '<div class="empty sect">' + esc(W.nothing) + '</div>';
@@ -318,7 +321,8 @@ main { padding-bottom:32px; }
     html += '<section class="info" aria-label="' + esc(W.office) + '"><div>' + info + '</div>' +
       (o.hours ? '<div><strong>' + esc(W.office) + '</strong> · ' + esc(o.hours) + '</div>' : '') +
       (o.phone ? '<div>' + esc(W.phone) + ' <span style="user-select:all">' + esc(o.phone) + '</span></div>' : '') +
-      (o.contact_email ? '<div>' + esc(W.email) + ' <span style="user-select:all">' + esc(o.contact_email) + '</span></div>' : '') + '</section></div></main>';
+      (o.contact_email ? '<div>' + esc(W.email) + ' <span style="user-select:all">' + esc(o.contact_email) + '</span></div>' : '') +
+      (/^https:\/\/(www\.)?whatsapp\.com\/channel\/[A-Za-z0-9_-]+\/?$/i.test(String(o.whatsapp || '').trim()) ? '<div><a class="follow" href="' + esc(String(o.whatsapp).trim()) + '" target="_blank" rel="noopener">' + icon('whatsapp', 22) + '<span>' + esc(W.waFollow) + '</span><span class="sr"> ' + esc(W.newTab) + '</span></a></div>' : '') + '</section></div></main>';
     html += '<div class="sheet" id="sheet" hidden><div class="sheet-card" id="sheetCard" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1"><div class="sheet-head"><h2 id="sheetTitle">' + esc(n && n.urgent ? W.urgentNotice : W.notices) + '</h2><button class="btn" type="button" id="sheetClose">Close</button></div><div id="sheetBody" style="display:grid;gap:18px">' + (n ? noticeHtml(n, tz) : '') + '</div></div></div>';
     if (day) html += daySheetHtml(day, today);
     var openSheet = !$('sheet') ? false : !$('sheet').hidden, openDay = !$('daySheet') ? false : !$('daySheet').hidden;   // a refresh must not close a notice somebody is reading
