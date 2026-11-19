@@ -1701,3 +1701,16 @@ Tests: `volunteer.test.js` (19: what they can do, what is refused with 403, list
   - The nightly job (`retention-daily`, 03:30) and the "still waiting to be removed" count use each campaign's own number. Moving "keep until" so the removal day has already passed still asks for confirmation, using that campaign's days.
   - Migration `20261118000000_retention_days` (applied live): `campaigns.retention_days integer not null default 90 check (30..90)`; `retention_run` and `retention_pending` replaced (same names and results; `p_days` kept but ignored).
   - Tests: `retention-days.test.js` (7), browser check `ui-retention.js`.
+
+## 77. Make a Donation; parish page banner and WhatsApp line — 2026-11-19 (on dev; preview only)
+
+**Make a Donation.** A new page `/donate/<address>` where a parishioner gives any amount from £1.00 to £5,000.00 by card (SumUp). £10 is filled in and suggested; quick buttons for £10, £20, £50 and £100; any other amount can be typed. A name and an email or mobile number are both optional (nothing is needed to give). The page opens on a "Thank you" page with a reference (DON-001, DON-002…) once paid, and says plainly if it was not completed. Amounts outside the range, an empty amount and a bad contact are refused in words, and nothing is created.
+- **On the parish page:** "Make a Donation / Give any amount, by card" is the first of the big buttons, with a heart picture, shown only while donations are open.
+- **Admin:** Money → Donations (SuperAdmin, Admin, Finance, Priest; not Volunteers). The Open switch, a welcome line (optional), this month's total after refunds, and the latest 200 gifts with status, name and contact if given.
+- **Money and privacy:** each gift is an ordinary card payment held in one hidden "Donations, <month>" campaign (so the books check, refunds and the nightly clearing of names and contacts all work as for everything else). The new `donations` table holds only reference, amount and status. The hidden month is never listed publicly. A second tap with the same reference gives once; a hidden spam-trap box and a per-connection limit guard the page.
+- **Database (applied live 2026-11-19, nothing uses it until published):** migration `20261119000000_donations.sql`: `donation_settings`, `donations`, `donation_months`, `donation_next_ref()`.
+- **Not built (decide later):** Gift Aid (needs name and home address and a declaration), emailed receipts, regular/monthly giving, a larger-gift limit setting.
+
+**Parish page layout.** The email envelope moved up into the top banner (right of the parish name, 44 px, still copies the address). "Follow us on WhatsApp" is still words, but now sits with the parish details at the foot instead of taking a line under the shortcut row.
+
+Tests: `test/gateway/donations.test.js` (12 server tests) and `test/gateway/ui-donate.js` (browser); `ui-check.js` and `ui-admin-nav.js` updated for the new layout and the Money tab row.

@@ -129,7 +129,7 @@ Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', n
     let nm = await ev(NAV);
     check(`${w}px: no sideways scroll, every button 44px or larger, the tabs fit without scrolling`, !nm.hscroll && !nm.small.length && nm.subFits && nm.secOneLine, JSON.stringify(nm));
     await shot(`nav-${w}-campaigns`);
-    for (const [group, want, tab] of [['money', ['Cash Recon*', 'Needs Attention'], 'cash'], ['page', ['Page*', 'Repository', 'Listings', 'Candles'], 'parishpage'], ['manage', ['Users*', 'Recycle Bin', 'Data & privacy'], 'users']]) {
+    for (const [group, want, tab] of [['money', ['Cash Recon*', 'Needs Attention', 'Donations'], 'cash'], ['page', ['Page*', 'Repository', 'Listings', 'Candles'], 'parishpage'], ['manage', ['Users*', 'Recycle Bin', 'Data & privacy'], 'users']]) {
       await click(`[data-group=${group}]`);
       check(`${w}px: ${group} opens its first tab (${tab}), with the right row of tabs`, JSON.stringify(await subs()) === JSON.stringify(want) && await waitFor(`!/^Loading/.test(document.getElementById('adminContent').innerText)`, 6000), JSON.stringify(await subs()));
       nm = await ev(NAV);
@@ -143,7 +143,7 @@ Object.assign(T('users').find(u => u.id === 'uA-pr'), { mobile: '07000000003', n
       // the section remembers where you were
       await click('[data-group=money]'); await click('[data-tab=attention]'); await waitFor(`document.querySelector('[data-tab=attention].active')`);
       await click('[data-group=campaigns]'); await click('[data-group=money]');
-      check('going back to a section returns to the tab you were on (Needs Attention)', JSON.stringify(await subs()) === JSON.stringify(['Cash Recon', 'Needs Attention*']), JSON.stringify(await subs()));
+      check('going back to a section returns to the tab you were on (Needs Attention)', JSON.stringify(await subs()) === JSON.stringify(['Cash Recon', 'Needs Attention*', 'Donations']), JSON.stringify(await subs()));
       // one service header: name, open/closed switch, one line, two link buttons, the long text folded away
       await click('[data-group=page]'); await click('[data-tab=candles]'); await waitFor(`document.querySelector('#adminContent .fh')`);
       const fh = await ev(`(() => { const f = document.querySelector('#adminContent .fh'), d = f.querySelector('.fh-how'); const r = f.getBoundingClientRect(); return { title: f.querySelector('h3').textContent, sw: !!f.querySelector('.gw-switch input'), blurb: f.querySelector('.fh-blurb').textContent.length, tools: [...f.querySelectorAll('.fh-tools button')].map(b => b.textContent.trim()), howOpen: !d.hidden, h: Math.round(r.height), seg: [...document.querySelectorAll('#adminContent .seg')[0].children].map(b => b.textContent) }; })()`);

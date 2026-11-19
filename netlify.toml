@@ -61,3 +61,9 @@
   from = "/candles/*"
   to = "/candles.html"
   status = 200
+
+# Make a Donation, at /donate/<address>. A donation's own page is /donate.html?donation=<id>.
+[[redirects]]
+  from = "/donate/*"
+  to = "/donate.html"
+  status = 200
