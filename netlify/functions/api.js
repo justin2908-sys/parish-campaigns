@@ -3628,22 +3628,25 @@ async function publicGateway({ slug }) {
   const live = (annsRes.data || []).find(a => !a.ends_at || new Date(a.ends_at) > now);   // newest one that has started and not ended
   // Only a campaign with a working public page is listed: a registration form, or tickets sold online.
   const open = (campsRes.data || []).filter(c => c.public_page_enabled && gwOpenState(c, today) === 'open');
-  const online = await gwOnlineCampaignIds(open.filter(c => c.kind !== 'registration').map(c => c.id));
-  const campaigns = [];
-  for (const c of open) {
-    if (c.kind !== 'registration' && !online.has(c.id)) continue;
-    let left = null, total = null, full = false;
-    if (c.kind === 'registration') { left = await registrationPlacesLeft(c); total = c.places == null ? null : c.places; }
-    else if (c.kind !== 'raffle') { left = await onlinePlacesLeft(c.id); total = await gwOnlinePlacesTotal(c.id); }   // a raffle never shows how many are left, or sold
-    if (left !== null) full = left === 0;
-    if (c.waiting_list && c.kind !== 'raffle' && !full && await waitingCount(c.id) > 0) full = true;   // somebody is queuing: nobody jumps the queue
-    campaigns.push({
+  // Every campaign, and every question about it, is asked of the database at the same moment (one wait, not one after another).
+  const built = await Promise.all(open.map(async (c) => {
+    const isReg = c.kind === 'registration', isRaffle = c.kind === 'raffle';
+    const [onlineIds, left, total, waiting] = await Promise.all([
+      isReg ? null : gwOnlineCampaignIds([c.id]),
+      isReg ? registrationPlacesLeft(c) : isRaffle ? null : onlinePlacesLeft(c.id),   // a raffle never shows how many are left, or sold
+      isReg ? (c.places == null ? null : c.places) : isRaffle ? null : gwOnlinePlacesTotal(c.id),
+      c.waiting_list && !isRaffle ? waitingCount(c.id) : 0,
+    ]);
+    if (!isReg && !onlineIds.has(c.id)) return null;   // tickets must be sold online for it to be listed
+    const full = (left !== null && left === 0) || waiting > 0;   // somebody queuing means nobody jumps the queue
+    return {
       section: gwSectionOf(c.kind),
-      item: { id: c.id, source: 'campaign', name: c.name, closes_on: c.closes_on, opens_on: c.opens_on, places_left: left, places_total: total, full, waiting_list: !!c.waiting_list && c.kind !== 'raffle',
+      item: { id: c.id, source: 'campaign', name: c.name, closes_on: c.closes_on, opens_on: c.opens_on, places_left: left, places_total: total, full, waiting_list: !!c.waiting_list && !isRaffle,
         cta: c.gateway_cta || wording.cta[c.kind] || wording.cta.event,
         href: `${c.kind === 'registration' ? '/register.html' : '/buy.html'}?campaign_id=${c.id}` },
-    });
-  }
+    };
+  }));
+  const campaigns = built.filter(Boolean);
   const manual = (itemsRes.data || []).filter(i => i.starts_on <= today && today <= i.ends_on).map(i => ({
     section: i.section,
     item: { id: i.id, source: 'manual', name: i.label, closes_on: i.ends_on, opens_on: i.starts_on, places_left: null, places_total: null, full: false, waiting_list: false, cta: i.cta || wording.cta[i.section === 'registration' ? 'registration' : 'event'] || 'Find out more', href: i.url },
