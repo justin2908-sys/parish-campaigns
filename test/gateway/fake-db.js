@@ -80,6 +80,7 @@ function createFakeDb(clock) {
           if (!row.id && table !== 'gateway_order') row.id = crypto.randomUUID();
           if (!row.created_at) row.created_at = new Date(clock.now() + (++seq)).toISOString();
           if (uniqueClash(table, rows, row, null)) return dup(table);
+          if (table === 'payments' && row.status === 'paid' && !row.paid_at) row.paid_at = new Date(clock.now()).toISOString();   // the database trigger: the moment a payment first becomes paid
           rows.push(row); made.push(row);
         }
         return finish(made);
@@ -99,7 +100,9 @@ function createFakeDb(clock) {
         for (const row of hit) {
           const next = { ...row, ...clone(st.patch) };
           if (uniqueClash(table, rows, next, row)) return dup(table);
+          const becomesPaid = table === 'payments' && next.status === 'paid' && row.status !== 'paid' && !next.paid_at;
           Object.assign(row, clone(st.patch));
+          if (becomesPaid) row.paid_at = new Date(clock.now()).toISOString();
         }
         return finish(hit);
       }
