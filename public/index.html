@@ -1232,12 +1232,12 @@ function shareMenuHtml(a) {
 // ================= ADMIN / SUPERADMIN =================
 let adminTab = 'campaigns', campaignFilter = '';
 // Which tabs each role sees. The server enforces the same rules; hiding a tab is only the courtesy.
-const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', listings: 'Listings', candles: 'Candles', donations: 'Donations', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
+const ADMIN_TAB_LABELS = { campaigns: 'Campaigns', overview: 'Overview', sales: 'Sales', cash: 'Cash Recon', attention: 'Needs Attention', registrations: 'Registrations', parishpage: 'Parish page', repository: 'Repository', listings: 'Listings', candles: 'Candles', donations: 'Donations', statement: 'Statement', users: 'Users', bin: 'Recycle Bin', privacy: 'Data &amp; privacy' };
 const ADMIN_TABS_BY_ROLE = {
-  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations', 'users', 'bin', 'privacy'],
-  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations'],
-  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations'],
-  priest: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations', 'users', 'bin', 'privacy'],   // everything a SuperAdmin sees
+  superadmin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations', 'statement', 'users', 'bin', 'privacy'],
+  admin: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations', 'statement'],
+  finance: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations', 'statement'],
+  priest: ['campaigns', 'overview', 'sales', 'cash', 'attention', 'registrations', 'parishpage', 'repository', 'listings', 'candles', 'donations', 'statement', 'users', 'bin', 'privacy'],   // everything a SuperAdmin sees
   volunteer: ['campaigns', 'parishpage', 'repository', 'listings', 'candles'],   // looks at campaigns; helps with the page, orders, listings and candles; no money, no records
 };
 const isVolunteer = () => !!state.user && state.user.role === 'volunteer';
@@ -1246,11 +1246,11 @@ const isVolunteer = () => !!state.user && state.user.role === 'volunteer';
 // name and has no second row.
 const ADMIN_GROUPS = [
   { id: 'campaigns', label: 'Campaigns', icon: '<path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8Z"/><path d="M14 7v10" stroke-dasharray="2 2.2"/>', tabs: ['campaigns', 'registrations', 'overview', 'sales'] },
-  { id: 'money', label: 'Money', icon: '<circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.6-.9-1.6-1.3-2.8-1.3-1.6 0-2.7.8-2.7 2 0 3 5.6 1.5 5.6 4.5 0 1.2-1.1 2-2.9 2-1.3 0-2.4-.5-3-1.4M12 6.5v1.4M12 16.1v1.4"/>', tabs: ['cash', 'attention', 'donations'] },
+  { id: 'money', label: 'Money', icon: '<circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.6-.9-1.6-1.3-2.8-1.3-1.6 0-2.7.8-2.7 2 0 3 5.6 1.5 5.6 4.5 0 1.2-1.1 2-2.9 2-1.3 0-2.4-.5-3-1.4M12 6.5v1.4M12 16.1v1.4"/>', tabs: ['cash', 'attention', 'donations', 'statement'] },
   { id: 'page', label: 'Parish page', icon: '<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M3.5 9h17M8 14h8M8 17h5"/>', tabs: ['parishpage', 'repository', 'listings', 'candles'] },
   { id: 'manage', label: 'Manage', icon: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>', tabs: ['users', 'bin', 'privacy'] },
 ];
-const ADMIN_SUB_LABELS = { parishpage: 'Page' };
+const ADMIN_SUB_LABELS = { parishpage: 'Page', cash: 'Cash', attention: 'Attention' };   // short, so the four Money tabs fit one row on a phone
 const adminLastTab = {};   // the tab last used in each section, so going back to a section returns to where you were
 function isSuperLike() { return !!state.user && (state.user.role === 'superadmin' || state.user.role === 'priest'); }
 function adminAllowedTabs() { return ADMIN_TABS_BY_ROLE[state.user.role] || ADMIN_TABS_BY_ROLE.admin; }
@@ -1293,7 +1293,7 @@ function dispatchAdminTab() {
   const nav = document.getElementById('adminNav'); if (nav) nav.innerHTML = adminNavHtml();
   const box = document.getElementById('adminContent');
   if (box) box.innerHTML = '<div class="card"><p class="muted" style="margin:0">Loading…</p></div>';
-  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, listings: renderListingsTab, candles: renderCandlesTab, donations: renderDonationsTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
+  ({ campaigns: renderCampaignsTab, overview: renderOverviewTab, sales: renderSalesTab, cash: renderCashTab, attention: renderAttentionTab, registrations: renderRegistrationsTab, parishpage: renderParishPageTab, repository: renderRepositoryTab, listings: renderListingsTab, candles: renderCandlesTab, donations: renderDonationsTab, statement: renderStatementTab, users: renderUsersTab, bin: renderRecycleBinTab, privacy: renderPrivacyTab })[adminTab]();
 }
 
 async function renderRetentionBanner() {
@@ -4575,6 +4575,209 @@ async function cndPreview() {
 // The page /donate/<address>: any amount from £1 to £5,000 by card, name and contact optional. Here: open/close, the welcome line, and the list of gifts.
 // Money is handled like every other card payment (refunds are recorded on the payment, and the nightly job clears names after the keep-until date).
 let don = null;
+// ---- Money > Statement: every payment received and every refund, across all campaigns, for any dates. Read it here, download it, or print it.
+let stmt = null;
+const STMT_PRESETS = [['today', 'Today'], ['yesterday', 'Yesterday'], ['this_week', 'This week'], ['last_week', 'Last week'], ['this_month', 'This month'], ['last_month', 'Last month'], ['last_30', 'Last 30 days'], ['this_year', 'This year'], ['last_year', 'Last year'], ['all', 'All dates']];
+const STMT_METHOD = { cash: 'Cash', machine: 'Card machine', link: 'Online / pay link' };
+const STMT_SHOW_MAX = 400;
+function stmtStyle() {
+  if (document.getElementById('stmtStyle')) return;
+  const st = document.createElement('style'); st.id = 'stmtStyle';
+  st.textContent = `
+  .stmt-chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+  .stmt-chips button { min-height:44px; padding:0 14px; font-size:15px; border-radius:22px; border:1.5px solid var(--line, #d9d4c0); background:#fff; color:var(--ink, #222); font-weight:600; cursor:pointer; }
+  .stmt-chips button[aria-pressed=true] { background:var(--pine); color:#F3F1E7; border-color:var(--pine); }
+  .stmt-dates { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
+  .stmt-dates input { width:100%; min-width:0; box-sizing:border-box; }
+  .stmt-dates label, .stmt-filters label { font-size:15px; }
+  .stmt-tiles { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; margin:0 0 4px; }
+  .stmt-tile { border:1px solid var(--line, #d9d4c0); border-radius:12px; padding:10px; min-width:0; }
+  .stmt-tile small { display:block; color:var(--slate); font-size:15px; }
+  .stmt-tile b { display:block; font-size:1.2rem; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .stmt-tile .sub { color:var(--slate); font-size:15px; }
+  .stmt-day { margin:16px 0 6px; font-size:15px; font-weight:700; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .stmt-day span { font-weight:500; color:var(--slate); font-variant-numeric:tabular-nums; }
+  .stmt-line { border:1px solid var(--line, #d9d4c0); border-radius:12px; padding:10px 12px; margin:0 0 8px; }
+  .stmt-top { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+  .stmt-amt { font-size:1.1rem; font-variant-numeric:tabular-nums; }
+  .stmt-amt.in { color:var(--pine); } .stmt-amt.out { color:#9b1c1c; }
+  .stmt-what { font-weight:600; min-width:0; overflow-wrap:anywhere; }
+  .stmt-time { margin-left:auto; color:var(--slate); font-size:15px; }
+  .stmt-meta { margin-top:4px; font-size:15px; line-height:1.45; overflow-wrap:anywhere; }
+  .stmt-meta span { color:var(--slate); }
+  .stmt-by { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:4px 12px; font-size:15px; align-items:baseline; }
+  .stmt-by > b, .stmt-by > div { font-variant-numeric:tabular-nums; text-align:right; }
+  .stmt-by > .nm { text-align:left; font-weight:600; overflow-wrap:anywhere; }
+  .stmt-by > .hd { color:var(--slate); font-size:15px; font-weight:500; }
+  .stmt-filters { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; margin:12px 0; }
+  .stmt-filters select { width:100%; min-height:44px; box-sizing:border-box; }
+  @media (max-width: 339px) { .stmt-tiles { grid-template-columns:minmax(0,1fr); } }
+  @media (max-width: 480px) { .stmt-tile b { font-size:1.05rem; } .stmt-tile { padding:8px; } }`;
+  document.head.appendChild(st);
+}
+async function renderStatementTab() {
+  const seq = adminSeq;
+  if (!stmt) stmt = { preset: 'this_month', from: '', to: '', campaign: '', show: 'all', q: '', d: null };
+  gwStyle(); stmtStyle();
+  try { await stmtLoad(stmt.preset ? { preset: stmt.preset } : { from: stmt.from, to: stmt.to }, seq); }
+  catch (e) { const el = adminEl(seq); if (el) el.innerHTML = `<div class="card"><div class="error">${esc(e.message)}</div></div>`; }
+}
+async function stmtLoad(body, seq) {
+  const d = await call('statement_get', body, 60000);
+  if (seq !== undefined && adminSeq !== seq) return;
+  stmt.d = d; stmt.preset = d.preset; stmt.from = d.from; stmt.to = d.to;
+  if (stmt.campaign && !d.lines.some(l => l.campaign === stmt.campaign)) stmt.campaign = '';
+  stmtPaint();
+}
+function stmtPaint() {
+  const el = document.getElementById('adminContent');
+  if (!el || adminTab !== 'statement' || !stmt || !stmt.d) return;
+  const y = window.scrollY;
+  el.innerHTML = stmtHeadHtml() + stmtSearchHtml() + '<div id="stmtBody">' + stmtResultsHtml() + '</div>';
+  window.scrollTo(0, y);
+}
+// Typing in the search box repaints only the results, so the box keeps its place and focus.
+function stmtPaintBody() {
+  const el = document.getElementById('stmtBody');
+  if (!el || adminTab !== 'statement' || !stmt || !stmt.d) return;
+  const y = window.scrollY;
+  el.innerHTML = stmtResultsHtml();
+  window.scrollTo(0, y);
+}
+function stmtSearch(v) { stmt.q = String(v || ''); stmtPaintBody(); }
+// Search finds any word on any line: the SumUp code, a booking reference, a campaign, a name, an amount, a date, a note. Every word typed must be found. Dashes and spaces do not matter (DON012 finds DON-012).
+function stmtHay(l) {
+  if (l._hay) return l._hay;
+  const parts = [l.booking_ref, l.payment_ref, l.campaign, l.type, l.detail, l.taken_by, l.confirmed_by, l.refunded_by, l.note, STMT_METHOD[l.method], l.method, l.payment_id, l.kind === 'in' ? 'money in received' : 'refund refunded', l.date, stmtDayLabel(l.date), Number(l.amount).toFixed(2), String(l.amount)];
+  const hay = parts.filter(x => x !== undefined && x !== null && x !== '').join(' ').toLowerCase();
+  return (l._hay = { hay, compact: hay.replace(/[^a-z0-9]/g, '') });
+}
+function stmtWords() { return stmt.q.toLowerCase().replace(/£/g, ' ').split(/\s+/).filter(Boolean); }
+function stmtMatches(l, words) {
+  if (!words.length) return true;
+  const h = stmtHay(l);
+  return words.every(w => { const c = w.replace(/[^a-z0-9]/g, ''); return h.hay.includes(w) || (c && h.compact.includes(c)); });
+}
+function stmtSearchHtml() {
+  return `<div class="card"><label for="stSearch" style="font-size:15px">Search</label>
+    <input type="search" id="stSearch" value="${esc(stmt.q)}" placeholder="SumUp code, booking reference, campaign, name, amount…" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="stmtSearch(this.value)" style="width:100%;box-sizing:border-box">
+    <p class="muted" style="margin:6px 0 0;font-size:15px">Finds any word on any line, for the dates chosen above. To search everything ever recorded, choose <b>All dates</b>.</p></div>`;
+}
+function stmtFoundHtml(v) {
+  const q = stmt.q.trim(); if (!q) return '';
+  return `<p class="muted" style="margin:10px 0 0;font-size:15px">${v.lines.length} line${v.lines.length === 1 ? '' : 's'} match “${esc(q)}”. The totals above are for these lines only.</p>`;
+}
+function stmtNothingHtml() {
+  const q = stmt.q.trim();
+  if (!q) return '<p class="muted" style="margin:12px 0 0">Nothing matches these choices.</p>';
+  return `<p class="muted" style="margin:12px 0 0">Nothing matches “${esc(q)}” on these dates.</p>${stmt.preset === 'all' ? '' : '<div class="gw-btns"><button class="small" onclick="stmtPick(\'all\')">Search all dates</button></div>'}`;
+}
+const stmtMoney = (n) => '£' + (Math.round(Math.abs(Number(n)) * 100) / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const stmtSigned = (n) => (Number(n) < 0 ? '−' : '') + stmtMoney(n);
+function stmtDayLabel(iso) { return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }); }
+function stmtRangeLabel() {
+  const f = (iso) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  if (stmt.d.lines.length === 0 && stmt.d.preset === 'all') return 'All dates';
+  const span = stmt.d.from === stmt.d.to ? f(stmt.d.from) : f(stmt.d.from) + ' to ' + f(stmt.d.to);
+  return stmt.d.preset === 'all' ? 'All dates: ' + span : span;
+}
+function stmtHeadHtml() {
+  const chips = STMT_PRESETS.map(([id, label]) => `<button type="button" aria-pressed="${stmt.preset === id}" onclick="stmtPick('${id}')">${label}</button>`).join('');
+  return `<div class="card"><h3 style="margin-top:0">Money statement</h3>
+    <p class="gw-lede">Every payment received and every refund, across all campaigns, for the dates you choose. Cash still held by sellers is not counted until it has been handed in and reconciled.</p>
+    <div class="stmt-chips" role="group" aria-label="Quick dates">${chips}</div>
+    <div class="stmt-dates"><div><label for="stFrom">From</label><input type="date" id="stFrom" value="${esc(stmt.from)}"></div><div><label for="stTo">To</label><input type="date" id="stTo" value="${esc(stmt.to)}"></div></div>
+    <div class="gw-btns"><button class="small primary-ish" style="background:var(--pine);color:#F3F1E7;border-color:var(--pine)" onclick="stmtShowDates()">Show these dates</button></div></div>`;
+}
+// The lines on screen: the 'show' choice (all, money in, refunds) and the campaign choice, with totals worked out from exactly those lines.
+function stmtView() {
+  const all = stmt.d.lines;
+  const byKind = all.filter(l => stmt.show === 'all' || (stmt.show === 'in' ? l.kind === 'in' : l.kind === 'refund'));
+  const words = stmtWords(), bySearch = words.length ? byKind.filter(l => stmtMatches(l, words)) : byKind;
+  const lines = stmt.campaign ? bySearch.filter(l => l.campaign === stmt.campaign) : bySearch;
+  const cents = (arr) => arr.reduce((t, l) => t + Math.round(l.amount * 100), 0) / 100;
+  const ins = lines.filter(l => l.kind === 'in'), outs = lines.filter(l => l.kind === 'refund');
+  const groups = new Map();
+  for (const l of bySearch) {
+    const g = groups.get(l.campaign) || { campaign: l.campaign, in: 0, refunds: 0, n: 0 };
+    if (l.kind === 'in') g.in += Math.round(l.amount * 100); else g.refunds += Math.round(l.amount * 100);
+    g.n++; groups.set(l.campaign, g);
+  }
+  return { lines, ins: cents(ins), outs: cents(outs), insN: ins.length, outsN: outs.length, net: Math.round((cents(ins) - cents(outs)) * 100) / 100,
+    campaigns: [...new Set(all.map(l => l.campaign))].sort((a, b) => a.localeCompare(b)),
+    groups: [...groups.values()].map(g => ({ campaign: g.campaign, in: g.in / 100, refunds: g.refunds / 100, net: (g.in - g.refunds) / 100 })).sort((a, b) => b.in - a.in || a.campaign.localeCompare(b.campaign)) };
+}
+function stmtWhen(iso) { return new Date(iso).toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: stmt.d.org.timezone }); }
+function stmtLineHtml(l) {
+  const refund = l.kind === 'refund', what = [l.campaign, l.type].filter(Boolean).join(' · ');
+  const meta = [`<span>Booking ref</span> <b>${esc(l.booking_ref || '—')}</b>`, `<span>Payment ref</span> <b>${esc(l.payment_ref || '—')}</b>`, esc(STMT_METHOD[l.method] || l.method || '')];
+  if (refund) meta.push(`<span>Refunded by</span> <b>${esc(l.refunded_by || 'Unknown')}</b>`);
+  else { meta.push(`<span>${l.method === 'cash' ? 'Sold by' : 'Taken by'}</span> ${esc(l.taken_by || '')}`); if (l.confirmed_by) meta.push(`<span>Cash confirmed by</span> ${esc(l.confirmed_by)}`); }
+  return `<div class="stmt-line"><div class="stmt-top"><b class="stmt-amt ${refund ? 'out' : 'in'}">${refund ? '−' : '+'}${stmtMoney(l.amount)}</b><span class="stmt-what">${refund ? 'Refund · ' : ''}${esc(what)}${l.detail ? ' · for ' + esc(l.detail) : ''}</span><span class="stmt-time">${esc(stmtWhen(l.at))}</span></div>
+    <div class="stmt-meta">${meta.join(' · ')}</div>${refund && l.note ? `<div class="stmt-meta"><span>Note</span> ${esc(l.note)}${l.of_amount > l.amount ? ` <span>(of £${l.of_amount.toFixed(2)} paid)</span>` : ''}</div>` : ''}</div>`;
+}
+function stmtResultsHtml() {
+  const v = stmtView(), d = stmt.d;
+  const opt = (val, label, cur) => `<option value="${esc(val)}"${val === cur ? ' selected' : ''}>${esc(label)}</option>`;
+  const shown = v.lines.slice(0, STMT_SHOW_MAX);
+  const days = [];
+  for (const l of shown) { let g = days[days.length - 1]; if (!g || g.date !== l.date) { g = { date: l.date, lines: [] }; days.push(g); } g.lines.push(l); }
+  const dayHtml = days.map(g => { const net = g.lines.reduce((t, l) => t + (l.kind === 'in' ? 1 : -1) * Math.round(l.amount * 100), 0) / 100; return `<div class="stmt-day"><div>${esc(stmtDayLabel(g.date))}</div><span>${g.lines.length} line${g.lines.length === 1 ? '' : 's'} · net ${stmtSigned(net)}</span></div>${g.lines.map(stmtLineHtml).join('')}`; }).join('');
+  const none = !d.lines.length ? '<p class="muted" style="margin:12px 0 0">No money came in and no refunds were recorded on these dates.</p>' : (!v.lines.length ? stmtNothingHtml() : '');
+  const by = v.groups.length > 1 ? `<h4 style="margin:16px 0 6px;font-size:16px">By campaign</h4><div class="stmt-by"><div class="hd nm">Campaign</div><div class="hd">In</div><div class="hd">Refunds</div><div class="hd">Net</div>${v.groups.map(g => `<div class="nm">${esc(g.campaign)}</div><b>${stmtMoney(g.in)}</b><b>${g.refunds ? '−' + stmtMoney(g.refunds) : '£0.00'}</b><b>${stmtSigned(g.net)}</b>`).join('')}</div>` : '';
+  return `<div class="card" id="stmtResults"><h3 style="margin-top:0">${esc(stmtRangeLabel())}</h3>
+    <div class="stmt-tiles"><div class="stmt-tile"><small>Money in</small><b>${stmtMoney(v.ins)}</b><div class="sub">${v.insN} payment${v.insN === 1 ? '' : 's'}</div></div><div class="stmt-tile"><small>Refunds</small><b>${v.outs ? '−' : ''}${stmtMoney(v.outs)}</b><div class="sub">${v.outsN} refund${v.outsN === 1 ? '' : 's'}</div></div><div class="stmt-tile"><small>Net</small><b>${stmtSigned(v.net)}</b><div class="sub">in minus refunds</div></div></div>
+    <div class="stmt-filters"><div><label for="stCamp">Campaign</label><select id="stCamp" onchange="stmtSetCampaign(this.value)">${opt('', 'All campaigns', stmt.campaign)}${v.campaigns.map(c => opt(c, c, stmt.campaign)).join('')}</select></div>
+    <div class="seg" role="group" aria-label="Show">${[['all', 'Everything'], ['in', 'Money in'], ['refund', 'Refunds']].map(([id, label]) => `<button type="button" aria-pressed="${stmt.show === id}" onclick="stmtSetShow('${id}')">${label}</button>`).join('')}</div></div>
+    <div class="gw-btns"><button class="small" onclick="stmtDownload()"${v.lines.length ? '' : ' disabled'}>⬇ Download (CSV for Excel)</button><button class="small" onclick="stmtPrint()"${v.lines.length ? '' : ' disabled'}>🖨 Print</button></div>
+    ${d.truncated ? '<div class="error" style="margin-top:8px">There are more than 5,000 lines on these dates, so only the latest 5,000 are included. Choose a shorter period.</div>' : ''}
+    ${stmtFoundHtml(v)}${by}${none}${dayHtml}
+    ${v.lines.length > STMT_SHOW_MAX ? `<p class="muted" style="margin:10px 0 0">Showing the first ${STMT_SHOW_MAX} of ${v.lines.length} lines. The download has every line.</p>` : ''}</div>`;
+}
+async function stmtPick(preset) {
+  try { await stmtLoad({ preset }); toast('✓ Showing ' + (STMT_PRESETS.find(p => p[0] === preset) || [0, preset])[1].toLowerCase()); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function stmtShowDates() {
+  const from = document.getElementById('stFrom').value, to = document.getElementById('stTo').value;
+  if (!from || !to) { toast('Choose both a From date and a To date.', 'error'); return; }
+  if (from > to) { toast('The From date must be on or before the To date.', 'error'); return; }
+  try { await stmtLoad({ from, to }); toast('✓ Statement updated'); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function stmtSetCampaign(v) { stmt.campaign = v; stmtPaint(); toast(v ? '✓ Showing ' + v + ' only' : '✓ Showing all campaigns'); }
+function stmtSetShow(id) { stmt.show = id; stmtPaint(); toast(id === 'in' ? '✓ Showing money in only' : id === 'refund' ? '✓ Showing refunds only' : '✓ Showing everything'); }
+// A spreadsheet runs any cell that starts with = + - or @ as a formula, so text like that is given a leading apostrophe.
+function stmtCell(v) {
+  let s = v == null ? '' : String(v);
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function stmtCsv() {
+  const v = stmtView(), tz = stmt.d.org.timezone;
+  const date = (iso) => new Date(iso).toLocaleDateString('en-CA', { timeZone: tz });
+  const head = ['Date', 'Time', 'Money in / Refund', 'Amount (£)', 'Campaign', 'What for', 'Booking reference', 'Payment reference', 'Payment method', 'Taken / sold by', 'Cash confirmed by', 'Refunded by', 'Refund note', 'Purpose of gift', 'Payment ID'];
+  const rows = v.lines.map(l => [date(l.at), new Date(l.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz }), l.kind === 'in' ? 'Money in' : 'Refund',
+    Number(((l.kind === 'in' ? 1 : -1) * l.amount).toFixed(2)), l.campaign, l.type, l.booking_ref, l.payment_ref, STMT_METHOD[l.method] || l.method, l.taken_by || '', l.confirmed_by || '', l.refunded_by || '', l.note || '', l.detail || '', l.payment_id]);
+  const tail = [[], ['Total money in', '', '', Number(v.ins.toFixed(2))], ['Total refunds', '', '', Number((-v.outs).toFixed(2))], ['Net', '', '', Number(v.net.toFixed(2))]];
+  return [head, ...rows, ...tail].map(r => r.map(stmtCell).join(',')).join('\r\n');
+}
+function stmtDownload() {
+  const v = stmtView(); if (!v.lines.length) { toast('There is nothing to download for these choices.', 'error'); return; }
+  const blob = new Blob(['﻿' + stmtCsv()], { type: 'text/csv;charset=utf-8;' }), url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `money-statement-${stmt.d.from}-to-${stmt.d.to}.csv`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  toast(`✓ Downloaded ${v.lines.length} line${v.lines.length === 1 ? '' : 's'}`);
+}
+function stmtPrint() {
+  const v = stmtView(); if (!v.lines.length) { toast('There is nothing to print for these choices.', 'error'); return; }
+  const w = window.open('', '_blank');
+  if (!w) { toast('Your browser blocked the print window. Allow pop-ups for this page, or use Download.', 'error'); return; }
+  const rows = v.lines.map(l => `<tr><td>${esc(l.date)}<br>${esc(stmtWhen(l.at))}</td><td>${l.kind === 'in' ? 'Money in' : 'Refund'}</td><td>${esc(l.campaign)}${l.type ? '<br>' + esc(l.type) : ''}${l.detail ? '<br>for ' + esc(l.detail) : ''}</td><td>${esc(l.booking_ref || '')}</td><td>${esc(l.payment_ref || '')}<br>${esc(STMT_METHOD[l.method] || '')}</td><td>${l.kind === 'refund' ? 'Refunded by ' + esc(l.refunded_by || '') + (l.note ? '<br>' + esc(l.note) : '') : esc(l.taken_by || '') + (l.confirmed_by ? '<br>Cash confirmed by ' + esc(l.confirmed_by) : '')}</td><td class="n">${l.kind === 'in' ? '' : '−'}${stmtMoney(l.amount)}</td></tr>`).join('');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Money statement ${esc(stmt.d.from)} to ${esc(stmt.d.to)}</title><style>@page{size:landscape;margin:12mm}body{font:12px/1.35 Arial,sans-serif;color:#000}h1{font-size:18px;margin:0 0 2px}p{margin:0 0 8px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eee}td.n,th.n{text-align:right;white-space:nowrap}tr{break-inside:avoid}.tot td{font-weight:700;border-top:2px solid #000}</style></head><body><h1>${esc(stmt.d.org.name)}: money statement</h1><p>${esc(stmtRangeLabel())}${stmt.campaign ? ' · ' + esc(stmt.campaign) : ''}${stmt.q.trim() ? ' · matching “' + esc(stmt.q.trim()) + '”' : ''}${stmt.show === 'in' ? ' · money in only' : stmt.show === 'refund' ? ' · refunds only' : ''}</p>
+  <table><thead><tr><th>Date / time</th><th>Type</th><th>Campaign</th><th>Booking ref</th><th>Payment ref / method</th><th>By</th><th class="n">Amount</th></tr></thead><tbody>${rows}</tbody><tfoot><tr class="tot"><td colspan="6">Money in (${v.insN})</td><td class="n">${stmtMoney(v.ins)}</td></tr><tr class="tot"><td colspan="6">Refunds (${v.outsN})</td><td class="n">${v.outs ? '−' : ''}${stmtMoney(v.outs)}</td></tr><tr class="tot"><td colspan="6">Net</td><td class="n">${stmtSigned(v.net)}</td></tr></tfoot></table></body></html>`);
+  w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch { /* the person can print from the window */ } }, 300);
+  toast('✓ Print window opened. Choose a printer, or “Save as PDF”');
+}
 async function renderDonationsTab() {
   const seq = adminSeq;
   let d;

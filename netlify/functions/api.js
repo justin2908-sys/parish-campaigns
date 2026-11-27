@@ -3628,22 +3628,25 @@ async function publicGateway({ slug }) {
   const live = (annsRes.data || []).find(a => !a.ends_at || new Date(a.ends_at) > now);   // newest one that has started and not ended
   // Only a campaign with a working public page is listed: a registration form, or tickets sold online.
   const open = (campsRes.data || []).filter(c => c.public_page_enabled && gwOpenState(c, today) === 'open');
-  const online = await gwOnlineCampaignIds(open.filter(c => c.kind !== 'registration').map(c => c.id));
-  const campaigns = [];
-  for (const c of open) {
-    if (c.kind !== 'registration' && !online.has(c.id)) continue;
-    let left = null, total = null, full = false;
-    if (c.kind === 'registration') { left = await registrationPlacesLeft(c); total = c.places == null ? null : c.places; }
-    else if (c.kind !== 'raffle') { left = await onlinePlacesLeft(c.id); total = await gwOnlinePlacesTotal(c.id); }   // a raffle never shows how many are left, or sold
-    if (left !== null) full = left === 0;
-    if (c.waiting_list && c.kind !== 'raffle' && !full && await waitingCount(c.id) > 0) full = true;   // somebody is queuing: nobody jumps the queue
-    campaigns.push({
+  // Every campaign, and every question about it, is asked of the database at the same moment (one wait, not one after another).
+  const built = await Promise.all(open.map(async (c) => {
+    const isReg = c.kind === 'registration', isRaffle = c.kind === 'raffle';
+    const [onlineIds, left, total, waiting] = await Promise.all([
+      isReg ? null : gwOnlineCampaignIds([c.id]),
+      isReg ? registrationPlacesLeft(c) : isRaffle ? null : onlinePlacesLeft(c.id),   // a raffle never shows how many are left, or sold
+      isReg ? (c.places == null ? null : c.places) : isRaffle ? null : gwOnlinePlacesTotal(c.id),
+      c.waiting_list && !isRaffle ? waitingCount(c.id) : 0,
+    ]);
+    if (!isReg && !onlineIds.has(c.id)) return null;   // tickets must be sold online for it to be listed
+    const full = (left !== null && left === 0) || waiting > 0;   // somebody queuing means nobody jumps the queue
+    return {
       section: gwSectionOf(c.kind),
-      item: { id: c.id, source: 'campaign', name: c.name, closes_on: c.closes_on, opens_on: c.opens_on, places_left: left, places_total: total, full, waiting_list: !!c.waiting_list && c.kind !== 'raffle',
+      item: { id: c.id, source: 'campaign', name: c.name, closes_on: c.closes_on, opens_on: c.opens_on, places_left: left, places_total: total, full, waiting_list: !!c.waiting_list && !isRaffle,
         cta: c.gateway_cta || wording.cta[c.kind] || wording.cta.event,
         href: `${c.kind === 'registration' ? '/register.html' : '/buy.html'}?campaign_id=${c.id}` },
-    });
-  }
+    };
+  }));
+  const campaigns = built.filter(Boolean);
   const manual = (itemsRes.data || []).filter(i => i.starts_on <= today && today <= i.ends_on).map(i => ({
     section: i.section,
     item: { id: i.id, source: 'manual', name: i.label, closes_on: i.ends_on, opens_on: i.starts_on, places_left: null, places_total: null, full: false, waiting_list: false, cta: i.cta || wording.cta[i.section === 'registration' ? 'registration' : 'event'] || 'Find out more', href: i.url },
@@ -5774,3 +5777,140 @@ Object.assign(actions, {
   donations_set_settings: (s, b) => donationsSetSettings(s, b),
 });
 READ_ONLY_PUBLIC.add('public_donation_info');
+
+// ---- Money statement: every pound that came in, and every refund that went out, across all campaigns, for any dates.
+// One line per movement. "Money in" is a payment that has been received (a card or online payment confirmed, or cash handed over and
+// reconciled), dated when it was received. "Refund" is a refund the office recorded, dated when it was recorded, with who recorded it.
+// Cash that sellers are still holding is not money received yet, so it is not here until it has been handed in.
+// No buyer names or contact details appear: a statement is for the books. Only staff names (who took, confirmed or refunded it).
+const STATEMENT_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
+const STATEMENT_MAX_DAYS = 400, STATEMENT_MAX_LINES = 5000, STATEMENT_BULK_AT = 200;   // past 200 payments, what each was for is read in bulk rather than a few at a time
+const STATEMENT_PRESETS = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'last_30', 'this_year', 'last_year', 'all'];
+const stmtIso = (y, m0, d) => new Date(Date.UTC(y, m0, d)).toISOString().slice(0, 10);
+const stmtValidDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
+function statementRange(preset, from, to, today) {
+  if (preset) {
+    if (!STATEMENT_PRESETS.includes(preset)) throw httpError(400, 'Choose one of the quick dates, or type your own From and To.');
+    const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)) - 1, monday = shopAddDays(today, -((shopWeekdayOf(today) + 6) % 7));
+    switch (preset) {
+      case 'today': return [today, today];
+      case 'yesterday': return [shopAddDays(today, -1), shopAddDays(today, -1)];
+      case 'this_week': return [monday, shopAddDays(monday, 6)];
+      case 'last_week': return [shopAddDays(monday, -7), shopAddDays(monday, -1)];
+      case 'this_month': return [stmtIso(y, m, 1), stmtIso(y, m + 1, 0)];
+      case 'last_month': return [stmtIso(y, m - 1, 1), stmtIso(y, m, 0)];
+      case 'last_30': return [shopAddDays(today, -29), today];
+      case 'all': return ['2000-01-01', '2099-12-31'];   // everything ever received or refunded (the screen is told the real first and last dates)
+      case 'this_year': return [`${y}-01-01`, `${y}-12-31`];
+      default: return [`${y - 1}-01-01`, `${y - 1}-12-31`];   // last_year
+    }
+  }
+  if (!stmtValidDate(from) || !stmtValidDate(to)) throw httpError(400, 'Choose a From date and a To date.');
+  if (from > to) throw httpError(400, 'The From date must be on or before the To date.');
+  if ((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000 > STATEMENT_MAX_DAYS) throw httpError(400, 'Choose a period of up to 13 months at a time.');
+  return [from, to];
+}
+// A run of ticket numbers is written short: A5–A12, A15.
+function stmtTicketText(list) {
+  const by = new Map();
+  for (const t of list) { const k = t.prefix; if (!by.has(k)) by.set(k, []); by.get(k).push(Number(t.n)); }
+  const out = [];
+  for (const [prefix, nums] of [...by.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    nums.sort((a, b) => a - b);
+    let i = 0;
+    while (i < nums.length) { let j = i; while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++; out.push(j > i ? `${prefix}${nums[i]}–${prefix}${nums[j]}` : `${prefix}${nums[i]}`); i = j + 1; }
+  }
+  return out.length > 12 ? `${out.slice(0, 12).join(', ')} … (${list.length} tickets)` : out.join(', ');
+}
+async function statementGet(session, { preset, from, to } = {}) {
+  requireOrgRole(session, STATEMENT_ROLES);
+  const { data: org } = await supabase.from('organizations').select('id, name, display_name, timezone').eq('id', session.org_id).maybeSingle();
+  if (!org) throw httpError(404, 'Organisation not found');
+  const tz = gwValidTimezone(org.timezone) ? org.timezone : 'Europe/London', today = gwToday(tz, new Date());
+  const [fromD, toD] = statementRange(preset, from, to, today);
+  const base = { org: { name: org.display_name || org.name, timezone: tz }, preset: preset || null, from: fromD, to: toD, today };
+  const camps = await fetchAll(() => supabase.from('campaigns').select('id, name, kind, form_def').eq('org_id', org.id).order('id'));
+  if (!camps.length) return { ...base, lines: [], totals: { in: 0, in_count: 0, refunds: 0, refund_count: 0, net: 0 }, by_campaign: [], truncated: false };
+  const campOf = new Map(camps.map(c => [c.id, c]));
+  const campLabel = (c) => { const f = (c && c.form_def) || {}; return f.shop ? 'Repository' : f.listings ? 'Listings' : f.candles ? 'Light a Candle' : f.donations ? 'Donations' : (c ? c.name : ''); };
+  // A one-day margin each side is read, then each line is placed on its own local date, so the day boundaries are the parish's, not UTC's.
+  const lo = new Date(`${shopAddDays(fromD, -1)}T00:00:00Z`).toISOString(), hi = new Date(`${shopAddDays(toD, 2)}T00:00:00Z`).toISOString();
+  const cols = 'id, campaign_id, method, amount, status, seller_id, sumup_checkout_ref, sumup_transaction_code, cash_confirmed_by, paid_at, refund_amount, refund_note, refunded_at, refunded_by, ticket_snapshot';
+  const ids = camps.map(c => c.id);
+  const [paidRows, refundRows] = await Promise.all([
+    fetchAll(() => supabase.from('payments').select(cols).in('campaign_id', ids).eq('status', 'paid').gte('paid_at', lo).lt('paid_at', hi).order('id')),
+    fetchAll(() => supabase.from('payments').select(cols).in('campaign_id', ids).not('refund_amount', 'is', null).gte('refunded_at', lo).lt('refunded_at', hi).order('id')),
+  ]);
+  const local = (iso) => gwToday(tz, new Date(iso));
+  const events = [];
+  for (const p of paidRows) if (p.paid_at && local(p.paid_at) >= fromD && local(p.paid_at) <= toD) events.push({ kind: 'in', at: p.paid_at, p });
+  for (const p of refundRows) if (p.refunded_at && local(p.refunded_at) >= fromD && local(p.refunded_at) <= toD) events.push({ kind: 'refund', at: p.refunded_at, p });
+  events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0) || (a.p.id < b.p.id ? -1 : 1));
+  const truncated = events.length > STATEMENT_MAX_LINES;
+  const shown = truncated ? events.slice(-STATEMENT_MAX_LINES) : events;   // too many: the latest are kept
+  if (preset === 'all') { base.from = shown.length ? local(shown[0].at) : today; base.to = shown.length ? local(shown[shown.length - 1].at) : today; }
+
+  // What each payment was for: the booking reference the office and the buyer know it by.
+  const payIds = [...new Set(shown.map(e => e.p.id))];
+  const chunks = []; for (let i = 0; i < payIds.length; i += 40) chunks.push(payIds.slice(i, i + 40));
+  const bulk = payIds.length > STATEMENT_BULK_AT, wanted = new Set(payIds);
+  // a few payments: ask for exactly those; a great many: read each table's payment links whole and keep the ones wanted
+  const per = async (table, columns, scope) => bulk
+    ? (await fetchAll(() => scope(supabase.from(table).select(columns).not('payment_id', 'is', null)).order('id'))).filter(r => wanted.has(r.payment_id))
+    : (await Promise.all(chunks.map(ch => fetchAll(() => supabase.from(table).select(columns).in('payment_id', ch).order('id'))))).flat();
+  const byOrg = (q) => q.eq('org_id', org.id), byCamp = (q) => q.in('campaign_id', payCamps);
+  const payCamps = [...new Set(shown.map(e => e.p.campaign_id))];
+  const staffIds = [...new Set(shown.flatMap(e => [e.p.seller_id, e.p.cash_confirmed_by, e.p.refunded_by]).filter(Boolean))];
+  const [regs, orders, candles, gifts, lists, tix, blocks, staff] = payIds.length ? await Promise.all([
+    per('registrations', 'id, payment_id, reg_number', byCamp),
+    per('repository_orders', 'id, payment_id, ref_no', byOrg),
+    per('candle_requests', 'id, payment_id, ref_no', byOrg),
+    per('donations', 'id, payment_id, ref_no, purpose', byOrg),
+    per('listings', 'id, payment_id, title', byOrg),
+    bulk ? [] : ticketsForPayments(payIds, 'id, payment_id, ticket_number, block_id'),   // a great many: the ticket numbers kept on each payment are used instead
+    fetchAll(() => supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', payCamps).order('id')),
+    staffIds.length ? supabase.from('users').select('id, name').in('id', staffIds).then(r => r.data || []) : [],
+  ]) : [[], [], [], [], [], [], [], []];
+  const prefixOf = new Map(blocks.map(b => [b.id, b.number_prefix || '']));
+  const what = new Map();   // payment_id -> { type, ref, detail }
+  for (const r of regs) what.set(r.payment_id, { type: 'Registration', ref: `R${r.reg_number}` });
+  for (const r of orders) what.set(r.payment_id, { type: 'Repository order', ref: shopRef(r.ref_no) });
+  for (const r of candles) what.set(r.payment_id, { type: 'Light a Candle', ref: candleRef(r.ref_no) });
+  for (const r of gifts) what.set(r.payment_id, { type: 'Donation', ref: donationRef(r.ref_no), detail: r.purpose || '' });
+  for (const r of lists) what.set(r.payment_id, { type: 'Listing fee', ref: `Listing: ${r.title}` });
+  const liveTix = new Map();
+  for (const t of tix) { if (!liveTix.has(t.payment_id)) liveTix.set(t.payment_id, []); liveTix.get(t.payment_id).push({ prefix: prefixOf.get(t.block_id) || '', n: t.ticket_number }); }
+  const nameOf = new Map(staff.map(u => [u.id, u.name]));
+  const who = (id) => (id ? nameOf.get(id) || 'Former user' : '');
+  const lines = shown.map(({ kind, at, p }) => {
+    const c = campOf.get(p.campaign_id), w = what.get(p.id);
+    let type = w ? w.type : '', ref = w ? w.ref : '';
+    if (!w) {
+      const snap = Array.isArray(p.ticket_snapshot) ? p.ticket_snapshot : [];
+      const list = liveTix.get(p.id) || snap.map(s => ({ prefix: prefixOf.get(s.block_id) || '', n: s.ticket_number }));
+      if (list.length) { type = 'Tickets'; ref = stmtTicketText(list); }
+    }
+    const paymentRef = p.sumup_transaction_code || p.sumup_checkout_ref || (p.method === 'cash' ? 'Cash' : '');
+    const line = {
+      kind, at, date: local(at), amount: Math.round((kind === 'in' ? Number(p.amount) : Number(p.refund_amount)) * 100) / 100,
+      campaign_id: p.campaign_id, campaign: campLabel(c), type, booking_ref: ref, detail: (w && w.detail) || '',
+      payment_ref: paymentRef, payment_id: p.id, method: p.method,
+    };
+    if (kind === 'in') { line.taken_by = p.seller_id ? who(p.seller_id) : 'Online'; line.confirmed_by = p.method === 'cash' ? who(p.cash_confirmed_by) : ''; }
+    else { line.refunded_by = who(p.refunded_by); line.note = p.refund_note || ''; line.of_amount = Math.round(Number(p.amount) * 100) / 100; }
+    return line;
+  });
+  const sum = (arr) => Math.round(arr.reduce((t, l) => t + Math.round(l.amount * 100), 0)) / 100;
+  const ins = lines.filter(l => l.kind === 'in'), outs = lines.filter(l => l.kind === 'refund');
+  const groups = new Map();
+  for (const l of lines) {
+    const g = groups.get(l.campaign) || { campaign: l.campaign, in: 0, in_count: 0, refunds: 0, refund_count: 0 };
+    if (l.kind === 'in') { g.in = Math.round((g.in + l.amount) * 100) / 100; g.in_count++; } else { g.refunds = Math.round((g.refunds + l.amount) * 100) / 100; g.refund_count++; }
+    groups.set(l.campaign, g);
+  }
+  const by_campaign = [...groups.values()].map(g => ({ ...g, net: Math.round((g.in - g.refunds) * 100) / 100 })).sort((a, b) => b.in - a.in || a.campaign.localeCompare(b.campaign));
+  return { ...base, lines, truncated, by_campaign, totals: { in: sum(ins), in_count: ins.length, refunds: sum(outs), refund_count: outs.length, net: Math.round((sum(ins) - sum(outs)) * 100) / 100 } };
+}
+Object.assign(actions, {
+  statement_get: (s, b) => statementGet(s, b),
+});
