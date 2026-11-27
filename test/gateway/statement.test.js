@@ -146,4 +146,39 @@ test('Money statement', async (t) => {
     const { data } = await db.client.from('payments').update({ status: 'paid' }).eq('id', 'later').select().single();
     assert.equal(data.paid_at, '2026-11-27T09:00:00.000Z');
   });
+  await t.test('"All dates" returns everything ever received or refunded, and says the real first and last dates', async () => {
+    reset();
+    pay('y1', { amount: 5, paid_at: '2024-03-02T10:00:00Z' });
+    pay('y2', { amount: 7, paid_at: '2025-08-20T10:00:00Z', refund_amount: 2, refunded_at: '2026-11-20T10:00:00Z', refunded_by: 'u-ad', refund_note: 'Part' });
+    pay('y3', { amount: 9, paid_at: '2026-11-26T10:00:00Z' });
+    pay('held', { method: 'cash', status: 'pending', amount: 99 });
+    const r = await get({ preset: 'all' });
+    assert.equal(r.status, 200, r.raw);
+    assert.deepEqual(r.body.lines.map(l => l.payment_id), ['y1', 'y2', 'y2', 'y3']);   // three received, one refund, oldest first
+    assert.equal(r.body.from, '2024-03-02'); assert.equal(r.body.to, '2026-11-26'); assert.equal(r.body.preset, 'all');
+    assert.deepEqual(r.body.totals, { in: 21, in_count: 3, refunds: 2, refund_count: 1, net: 19 });
+    reset();
+    const none = await get({ preset: 'all' });
+    assert.equal(none.status, 200); assert.deepEqual(none.body.lines, []); assert.equal(none.body.from, '2026-11-27');
+  });
+
+  await t.test('a great many payments (read in bulk) still get their booking references, from the same tables', async () => {
+    reset();
+    for (let i = 1; i <= 205; i++) {
+      pay('bp' + i, { campaign_id: 'c-don', amount: 10, paid_at: '2026-11-2' + (i % 7) + 'T10:00:00Z', sumup_transaction_code: 'TBULK' + String(i).padStart(3, '0') });
+      T('donations').push({ id: 'bd' + i, org_id: 'org-A', ref_no: i, payment_id: 'bp' + i, amount: 10, status: 'paid', purpose: i === 7 ? 'Roof' : null });
+    }
+    pay('bt', { amount: 20, paid_at: '2026-11-25T10:00:00Z', sumup_transaction_code: 'TBULKTIX', ticket_snapshot: [{ ticket_number: 11, block_id: 'b1' }, { ticket_number: 12, block_id: 'b1' }] });
+    pay('br', { campaign_id: 'c-reg', amount: 15, paid_at: '2026-11-25T11:00:00Z' });
+    T('registrations').push({ id: 'br1', campaign_id: 'c-reg', reg_number: 42, payment_id: 'br', status: 'accepted' });
+    T('registrations').push({ id: 'other', campaign_id: 'c-reg', reg_number: 99, payment_id: 'not-in-range', status: 'accepted' });
+    const r = await get({ from: '2026-11-01', to: '2026-11-30' });
+    assert.equal(r.status, 200, r.raw);
+    assert.equal(r.body.lines.length, 207);
+    const L = (id) => r.body.lines.find(l => l.payment_id === id);
+    assert.equal(L('bp7').booking_ref, 'DON-007'); assert.equal(L('bp7').detail, 'Roof'); assert.equal(L('bp205').booking_ref, 'DON-205');
+    assert.equal(L('br').booking_ref, 'R42'); assert.equal(L('bt').booking_ref, 'A11–A12', 'ticket numbers come from the payment\'s own record');
+    assert.equal(L('bp1').payment_ref, 'TBULK001');
+  });
+
 });

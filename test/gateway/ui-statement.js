@@ -145,6 +145,42 @@ const MEASURE = `(() => {
   check('Money in only drops the refund', await waitFor(`/money in only/.test(document.getElementById('toast').textContent)`) && (await lines()).length === 3 && JSON.stringify(await tiles()) === JSON.stringify(['£60.00', '£0.00', '£60.00']));
   await click('.seg button', 'Everything');
 
+  // search: any word on any line, including the SumUp code
+  const typeSearch = (v) => ev(`(() => { const e = document.getElementById('stSearch'); e.focus(); e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()`);
+  const count = (n) => waitFor(`document.querySelectorAll('.stmt-line').length === ${n}`);
+  check('there is a Search box and an All dates button', await ev(`!!document.getElementById('stSearch') && [...document.querySelectorAll('.stmt-chips button')].some(b => b.textContent === 'All dates')`));
+  await typeSearch('taaa111');
+  check('a SumUp code (any capitals) finds that one payment; the totals are for just that line; the cursor stays in the box', await count(1) && JSON.stringify(await tiles()) === JSON.stringify(['£20.00', '£0.00', '£20.00']) && await ev(`document.activeElement.id === 'stSearch'`) && /1 line match/.test(await ev(`document.getElementById('stmtBody').innerText`)), JSON.stringify(await tiles()));
+  await typeSearch('TAAA333');
+  check('the same code finds the payment and its refund', await count(2) && JSON.stringify(await tiles()) === JSON.stringify(['£25.00', '−£5.00', '£20.00']));
+  await typeSearch('chk-77');
+  check('a checkout reference is found too', await count(1) && (await lines())[0].includes('R7'));
+  await typeSearch('don012');
+  check('a booking reference is found even without its dash (DON012 finds DON-012)', await count(2));
+  await typeSearch('a5');
+  check('a ticket number is found', await count(1) && (await lines())[0].includes('A5–A7'));
+  await typeSearch('altar');
+  check('the purpose of a gift is searched', await count(2));
+  await typeSearch('sam seller');
+  check('every word must match: a staff name finds their sale', await count(1));
+  await typeSearch('refund frances');
+  check('two words from different parts of a line: "refund frances" finds the refund Frances recorded', await count(1) && /^−£5\.00 Refund/.test((await lines())[0]));
+  await typeSearch('gave twice');
+  check('a refund note is searched', await count(1));
+  await typeSearch('£15');
+  check('an amount is searched, with or without the pound sign', await count(1) && (await lines())[0].includes('First Communion'));
+  await typeSearch('machine');
+  check('the payment method is searched', await count(1));
+  await typeSearch('TOLD444');
+  check('a code that is not in these dates says so plainly and offers to search all dates', await waitFor(`/Nothing matches “TOLD444” on these dates/.test(document.getElementById('stmtBody').innerText)`) && await ev(`[...document.querySelectorAll('#stmtBody .gw-btns button')].some(b => /Search all dates/.test(b.textContent))`));
+  await click('#stmtBody .gw-btns button', 'Search all dates');
+  check('pressing it searches every date, keeps the words typed, and finds the older payment (and says so)', await waitFor(`/Showing all dates/.test(document.getElementById('toast').textContent)`) && await count(1) && (await lines())[0].includes('TOLD444') && await ev(`document.getElementById('stSearch').value === 'TOLD444' && /^All dates/.test(document.querySelector('#stmtResults h3').textContent) && document.querySelector('.stmt-chips [aria-pressed=true]').textContent === 'All dates'`), JSON.stringify(await lines()));
+  await typeSearch('');
+  check('clearing the search under All dates shows every payment and refund ever, with all the totals', await count(5) && JSON.stringify(await tiles()) === JSON.stringify(['£68.00', '−£5.00', '£63.00']), JSON.stringify(await tiles()));
+  await click('.stmt-chips button', 'This month');
+  await waitFor(`/Showing this month/.test(document.getElementById('toast').textContent)`);
+  check('going back to a month keeps the search box empty and shows the month\'s totals', await ev(`document.getElementById('stSearch').value === ''`) && JSON.stringify(await tiles()) === JSON.stringify(['£60.00', '−£5.00', '£55.00']));
+
   // own dates
   const fromOld = new Date(Date.now() - 42 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Europe/London' }), toOld = new Date(Date.now() - 38 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
   await setVal('#stFrom', fromOld, 'change'); await setVal('#stTo', toOld, 'change');
@@ -172,6 +208,12 @@ const MEASURE = `(() => {
   await click('button', '⬇ Download');
   const csv2 = await ev(`window.__blobs[1] ? window.__blobs[1].text() : ''`);
   check('Download and Print follow the filters on screen (only the raffle lines)', csv2.split('\r\n').filter(r => /Christmas Raffle/.test(r)).length === 1 && !/First Communion/.test(csv2));
+
+  await typeSearch('TAAA111');
+  await click('button', '⬇ Download');
+  const csv3 = await ev(`window.__blobs[2] ? window.__blobs[2].text() : ''`);
+  check('Download and Print follow the search too (only the line with that SumUp code)', csv3.split('\r\n').filter(r => /,TAAA111,/.test(r)).length === 1 && !/TAAA333|CHK-77/.test(csv3));
+  await typeSearch('');
 
   // narrow phone
   await view(320, 700);

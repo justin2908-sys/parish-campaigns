@@ -5784,8 +5784,8 @@ READ_ONLY_PUBLIC.add('public_donation_info');
 // Cash that sellers are still holding is not money received yet, so it is not here until it has been handed in.
 // No buyer names or contact details appear: a statement is for the books. Only staff names (who took, confirmed or refunded it).
 const STATEMENT_ROLES = ['superadmin', 'admin', 'finance', 'priest'];
-const STATEMENT_MAX_DAYS = 400, STATEMENT_MAX_LINES = 5000;
-const STATEMENT_PRESETS = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'last_30', 'this_year', 'last_year'];
+const STATEMENT_MAX_DAYS = 400, STATEMENT_MAX_LINES = 5000, STATEMENT_BULK_AT = 200;   // past 200 payments, what each was for is read in bulk rather than a few at a time
+const STATEMENT_PRESETS = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'last_30', 'this_year', 'last_year', 'all'];
 const stmtIso = (y, m0, d) => new Date(Date.UTC(y, m0, d)).toISOString().slice(0, 10);
 const stmtValidDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
 function statementRange(preset, from, to, today) {
@@ -5800,6 +5800,7 @@ function statementRange(preset, from, to, today) {
       case 'this_month': return [stmtIso(y, m, 1), stmtIso(y, m + 1, 0)];
       case 'last_month': return [stmtIso(y, m - 1, 1), stmtIso(y, m, 0)];
       case 'last_30': return [shopAddDays(today, -29), today];
+      case 'all': return ['2000-01-01', '2099-12-31'];   // everything ever received or refunded (the screen is told the real first and last dates)
       case 'this_year': return [`${y}-01-01`, `${y}-12-31`];
       default: return [`${y - 1}-01-01`, `${y - 1}-12-31`];   // last_year
     }
@@ -5846,21 +5847,27 @@ async function statementGet(session, { preset, from, to } = {}) {
   for (const p of refundRows) if (p.refunded_at && local(p.refunded_at) >= fromD && local(p.refunded_at) <= toD) events.push({ kind: 'refund', at: p.refunded_at, p });
   events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0) || (a.p.id < b.p.id ? -1 : 1));
   const truncated = events.length > STATEMENT_MAX_LINES;
-  const shown = truncated ? events.slice(0, STATEMENT_MAX_LINES) : events;
+  const shown = truncated ? events.slice(-STATEMENT_MAX_LINES) : events;   // too many: the latest are kept
+  if (preset === 'all') { base.from = shown.length ? local(shown[0].at) : today; base.to = shown.length ? local(shown[shown.length - 1].at) : today; }
 
   // What each payment was for: the booking reference the office and the buyer know it by.
   const payIds = [...new Set(shown.map(e => e.p.id))];
   const chunks = []; for (let i = 0; i < payIds.length; i += 40) chunks.push(payIds.slice(i, i + 40));
-  const per = async (table, columns) => (await Promise.all(chunks.map(ch => fetchAll(() => supabase.from(table).select(columns).in('payment_id', ch).order('id'))))).flat();
+  const bulk = payIds.length > STATEMENT_BULK_AT, wanted = new Set(payIds);
+  // a few payments: ask for exactly those; a great many: read each table's payment links whole and keep the ones wanted
+  const per = async (table, columns, scope) => bulk
+    ? (await fetchAll(() => scope(supabase.from(table).select(columns).not('payment_id', 'is', null)).order('id'))).filter(r => wanted.has(r.payment_id))
+    : (await Promise.all(chunks.map(ch => fetchAll(() => supabase.from(table).select(columns).in('payment_id', ch).order('id'))))).flat();
+  const byOrg = (q) => q.eq('org_id', org.id), byCamp = (q) => q.in('campaign_id', payCamps);
   const payCamps = [...new Set(shown.map(e => e.p.campaign_id))];
   const staffIds = [...new Set(shown.flatMap(e => [e.p.seller_id, e.p.cash_confirmed_by, e.p.refunded_by]).filter(Boolean))];
   const [regs, orders, candles, gifts, lists, tix, blocks, staff] = payIds.length ? await Promise.all([
-    per('registrations', 'id, payment_id, reg_number'),
-    per('repository_orders', 'id, payment_id, ref_no'),
-    per('candle_requests', 'id, payment_id, ref_no'),
-    per('donations', 'id, payment_id, ref_no, purpose'),
-    per('listings', 'id, payment_id, title'),
-    ticketsForPayments(payIds, 'id, payment_id, ticket_number, block_id'),
+    per('registrations', 'id, payment_id, reg_number', byCamp),
+    per('repository_orders', 'id, payment_id, ref_no', byOrg),
+    per('candle_requests', 'id, payment_id, ref_no', byOrg),
+    per('donations', 'id, payment_id, ref_no, purpose', byOrg),
+    per('listings', 'id, payment_id, title', byOrg),
+    bulk ? [] : ticketsForPayments(payIds, 'id, payment_id, ticket_number, block_id'),   // a great many: the ticket numbers kept on each payment are used instead
     fetchAll(() => supabase.from('ticket_blocks').select('id, number_prefix').in('campaign_id', payCamps).order('id')),
     staffIds.length ? supabase.from('users').select('id, name').in('id', staffIds).then(r => r.data || []) : [],
   ]) : [[], [], [], [], [], [], [], []];
