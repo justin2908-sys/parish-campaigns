@@ -3442,6 +3442,7 @@ exports.handler = async (event) => {
       if (isPublic && (await rateHit(`pub:req:${clientIp}`, PUBLIC_REQ_WINDOW_SECONDS)) > PUBLIC_REQ_MAX) throw limited();
       result = await fn(session, body);
     }
+    if (!(isPublic && READ_ONLY_PUBLIC.has(action))) gwCache.clear();   // something may have changed: the parish page is built fresh next time
     return json(200, result);
   } catch (e) {
     return json(e.status || 500, e.code ? { error: e.message || 'Server error', code: e.code } : { error: e.message || 'Server error' });
@@ -3570,7 +3571,7 @@ async function gwLiturgicalDay(date, fetchImpl) {
   let value = null;
   try {
     const [y, m, d] = date.split('-').map(Number);
-    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 4000);
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 2000);
     let r; try { r = await (fetchImpl || fetch)(`${GW_LITURGY_URL}${y}/${m}/${d}`, { signal: ctl.signal, headers: { Accept: 'application/json' } }); } finally { clearTimeout(timer); }
     if (r && r.ok) {
       const j = await r.json(), c = Array.isArray(j.celebrations) ? j.celebrations[0] : null;
@@ -3601,7 +3602,19 @@ async function gwDaily(org, today) {
 
 // ---- the public page's data
 const GATEWAY_PUBLIC_MAX = 240, GATEWAY_PUBLIC_WINDOW_SECONDS = 300;
-async function publicGateway({ slug }) {
+// The parish page is looked at far more often than it changes, so its answer is kept for a short while (GATEWAY_CACHE_SECONDS, 30 by default; 0 switches this off).
+// Any change made through the app empties it at once; another running copy of the server can be up to that many seconds behind.
+const gwCache = new Map();   // slug -> { at, value }
+async function publicGateway(b) {
+  const s = String((b && b.slug) == null ? '' : b.slug).trim().toLowerCase();
+  const ttl = Number(process.env.GATEWAY_CACHE_SECONDS === undefined ? 30 : process.env.GATEWAY_CACHE_SECONDS) * 1000;
+  const hit = ttl > 0 ? gwCache.get(s) : null;
+  if (hit && Date.now() - hit.at < ttl) return hit.value;
+  const value = await publicGatewayBuild(b);
+  if (ttl > 0) { if (gwCache.size > 50) gwCache.clear(); gwCache.set(s, { at: Date.now(), value }); }
+  return value;
+}
+async function publicGatewayBuild({ slug }) {
   const s = String(slug == null ? '' : slug).trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(s)) throw httpError(404, 'This page is not available.');
   const [org, hits] = await Promise.all([

@@ -7,6 +7,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'fake-service-key';
 process.env.SESSION_SECRET = 'test-secret-for-the-gateway-tests';
 process.env.SUMUP_API_KEY = 'test-sumup-key';
 process.env.SUMUP_MERCHANT_CODE = 'TESTMERCHANT';
+process.env.GATEWAY_CACHE_SECONDS = '0';   // the parish page's short memory is off, so a test sees what it just changed (gateway-cache.test.js turns it on)
 
 // ---- a clock: new Date() and Date.now() return the moment the test chose
 const RealDate = Date;
